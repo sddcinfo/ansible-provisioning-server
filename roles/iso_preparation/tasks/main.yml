@@ -1,0 +1,92 @@
+---
+- name: Define sentinel file path
+  set_fact:
+    extraction_sentinel_file: "{{ ubuntu_provisioning_dir }}/.extraction_complete"
+
+- name: Check if ISO extraction is already complete
+  stat:
+    path: "{{ extraction_sentinel_file }}"
+  register: sentinel_file_stat
+
+- name: Ensure provisioning directory exists
+  ansible.builtin.file:
+    path: "{{ ubuntu_provisioning_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Download Ubuntu ISO
+  ansible.builtin.get_url:
+    url: "{{ ubuntu_iso_url }}"
+    dest: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+    mode: '0644'
+  register: download_iso
+  args:
+    creates: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+
+- name: Ensure ISO mount point exists
+  ansible.builtin.file:
+    path: "{{ ubuntu_iso_mount_point }}"
+    state: directory
+    mode: '0755'
+  when: not sentinel_file_stat.stat.exists
+
+- name: Mount Ubuntu ISO
+  ansible.posix.mount:
+    src: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+    path: "{{ ubuntu_iso_mount_point }}"
+    fstype: iso9660
+    opts: loop
+    state: mounted
+  when: not sentinel_file_stat.stat.exists
+
+- name: Copy necessary files from ISO to provisioning directory
+  ansible.builtin.copy:
+    src: "{{ ubuntu_iso_mount_point }}/{{ item }}"
+    dest: "{{ ubuntu_provisioning_dir }}/{{ item }}"
+    remote_src: yes
+    mode: preserve
+  loop:
+    - casper
+    - .disk
+    - dists
+    - EFI
+    - install
+    - pool
+    - boot
+    - md5sum.txt
+    - boot.catalog
+  when: not sentinel_file_stat.stat.exists
+  ignore_errors: yes # Some files might not exist on all ISOs, e.g., boot.catalog
+
+- name: Copy ISO itself to provisioning directory
+  ansible.builtin.copy:
+    src: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+    dest: "{{ ubuntu_provisioning_dir }}/{{ ubuntu_iso_name }}"
+    remote_src: yes
+    mode: '0644'
+  when: not sentinel_file_stat.stat.exists
+
+- name: Create sentinel file to mark extraction as complete
+  ansible.builtin.file:
+    path: "{{ extraction_sentinel_file }}"
+    state: touch
+    mode: '0644'
+  when: not sentinel_file_stat.stat.exists
+
+- name: Unmount Ubuntu ISO
+  ansible.posix.mount:
+    path: "{{ ubuntu_iso_mount_point }}"
+    state: unmounted
+  when: not sentinel_file_stat.stat.exists
+
+- name: Clean up ISO mount point directory
+  ansible.builtin.file:
+    path: "{{ ubuntu_iso_mount_point }}"
+    state: absent
+  when: not sentinel_file_stat.stat.exists
+
+- name: Clean up downloaded ISO (optional)
+  ansible.builtin.file:
+    path: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+    state: absent
+  # when: delete_iso_after_copy | default(false)

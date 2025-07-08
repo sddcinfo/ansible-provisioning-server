@@ -1,0 +1,8 @@
+---
+- hosts: provisioner
+  become: yes
+  roles:
+    - common
+    - netboot
+    - web
+    - iso_preparation

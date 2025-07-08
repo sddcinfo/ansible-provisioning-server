@@ -1,0 +1,41 @@
+---
+dnsmasq_interface: ens34
+dnsmasq_listen_address: "127.0.0.1,10.10.1.1"
+dnsmasq_domain: lay.jp
+dnsmasq_upstream_servers:
+  - 1.1.1.1
+  - 1.0.0.1
+
+# Single source of truth for node network configurations
+provisioning_nodes:
+  - { mac: "ac:1f:6b:6c:5a:76", ip: "10.10.1.21", hostname: "node1" }
+  - { mac: "ac:1f:6b:6c:5a:6c", ip: "10.10.1.22", hostname: "node2" }
+  - { mac: "ac:1f:6b:6c:5a:20", ip: "10.10.1.23", hostname: "node3" }
+  - { mac: "ac:1f:6b:6c:5a:28", ip: "10.10.1.24", hostname: "node4" }
+
+console_nodes:
+  - { mac: "ac:1f:6b:6c:58:31", ip: "10.10.1.11", hostname: "console-node1" }
+  - { mac: "ac:1f:6b:6c:58:06", ip: "10.10.1.12", hostname: "console-node2" }
+  - { mac: "ac:1f:6b:6c:58:2c", ip: "10.10.1.13", hostname: "console-node3" }
+  - { mac: "ac:1f:6b:6c:58:0a", ip: "10.10.1.14", hostname: "console-node4" }
+
+# Dynamically generate the DHCP reservations from the node lists above
+dnsmasq_dhcp_reservations: "{{ provisioning_nodes + console_nodes }}"
+
+# Dynamically generate static host entries
+dnsmasq_static_hosts:
+  - { name: "gateway.lay.jp", ip: "10.10.1.1" }
+  - { name: "switch1g.lay.jp", ip: "10.10.1.2" }
+  - { name: "switch10gb.lay.jp", ip: "10.10.1.3" }
+  - { name: "node1-10g.lay.jp", ip: "10.10.2.21" }
+  - { name: "node2-10g.lay.jp", ip: "10.10.2.22" }
+  - { name: "node3-10g.lay.jp", ip: "10.10.2.23" }
+  - { name: "node4-10g.lay.jp", ip: "10.10.2.24" }
+  - "{{ console_nodes | map('community.general.dict_kv', 'name', 'hostname') | map('regex_replace', '^(.*)$', '\\1.lay.jp') | list }}"
+  - "{{ provisioning_nodes | map('community.general.dict_kv', 'name', 'hostname') | map('regex_replace', '^(.*)$', '\\1.lay.jp') | list }}"
+
+dnsmasq_dhcp_range: "10.10.1.100,10.10.1.200,255.255.255.0,12h"
+dnsmasq_dhcp_router: "10.10.1.1"
+dnsmasq_dhcp_dns_server: "10.10.1.1"
+tftp_root: /srv/tftp
+ipxe_boot_url: "http://10.10.1.1/index.php?mac=${net0/mac}"

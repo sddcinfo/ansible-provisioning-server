@@ -1,0 +1,51 @@
+# /etc/dnsmasq.d/provisioning.conf
+
+# === General Configuration ===
+interface={{ dnsmasq_interface }}
+listen-address=::1,{{ dnsmasq_listen_address }}
+bind-interfaces
+
+no-resolv
+
+domain={{ dnsmasq_domain }}
+
+# === DNS Configuration ===
+{% for server in dnsmasq_upstream_servers %}
+server={{ server }}
+{% endfor %}
+domain-needed
+bogus-priv
+local=/{{ dnsmasq_domain }}/
+
+{% for host in dnsmasq_static_hosts %}
+address=/{{ host.name }}/{{ host.ip }}
+{% endfor %}
+
+{% for host in dnsmasq_dhcp_reservations %}
+dhcp-host={{ host.mac }},{{ host.ip }},{{ host.name }}
+{% endfor %}
+
+# === DHCP Configuration ===
+dhcp-range={{ dnsmasq_dhcp_range }}
+dhcp-option=option:router,{{ dnsmasq_dhcp_router }}
+dhcp-option=option:dns-server,{{ dnsmasq_dhcp_dns_server }}
+dhcp-authoritative
+log-dhcp
+
+enable-tftp
+tftp-root = {{ tftp_root }}
+
+# === PXE/iPXE Chainloading Logic ===
+# 1. Tag requests from iPXE firmware (DHCP option 175) or iPXE user class.
+dhcp-match=set:ipxe,175
+dhcp-userclass=set:ipxe,iPXE
+
+# 2. Tag requests from UEFI clients.
+dhcp-match=set:efi-x86_64,option:client-arch,7 # EFI x86-64
+dhcp-match=set:efi-x86_64,option:client-arch,9 # EFI x86-64
+
+# 3. Serve the iPXE bootloader to non-iPXE UEFI clients.
+dhcp-boot=tag:!ipxe,tag:efi-x86_64,ipxe.efi
+
+# 4. Chainload to the main iPXE script for clients that are now running iPXE.
+dhcp-boot=tag:ipxe,{{ ipxe_boot_url }}

@@ -1,0 +1,114 @@
+---
+- name: Install nginx and php-fpm
+  apt:
+    name:
+      - nginx
+      - php-fpm
+      - php-json
+    state: present
+
+- name: Ensure php-fpm is running
+  service:
+    name: php8.3-fpm # This may need adjustment based on the exact package version
+    state: started
+    enabled: yes
+
+- name: Configure nginx
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/default
+  notify: restart nginx
+
+- name: Copy web root
+  template:
+    src: index.php.j2
+    dest: /var/www/html/index.php
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  notify: restart nginx
+
+- name: Ensure sessions directory exists and has correct permissions
+  file:
+    path: /var/www/html/sessions
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0775"
+
+- name: Ensure state file exists and has correct permissions
+  file:
+    path: /var/www/html/state.json
+    state: touch
+    owner: www-data
+    group: www-data
+    mode: "0664"
+
+- name: Create autoinstall templates base directory
+  file:
+    path: "{{ nginx_web_root }}/autoinstall_templates"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: Create node-specific autoinstall directories
+  file:
+    path: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop: "{{ provisioning_nodes }}"
+
+- name: Create default autoinstall directory
+  file:
+    path: "{{ nginx_web_root }}/autoinstall_templates/default"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+
+- name: Template out user-data for each node
+  template:
+    src: autoinstall-user-data.j2
+    dest: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}/user-data"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop: "{{ provisioning_nodes }}"
+  vars:
+    hostname: "{{ item.hostname }}"
+    mac: "{{ item.mac }}"
+
+- name: Template out meta-data for each node
+  template:
+    src: autoinstall-meta-data.j2
+    dest: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}/meta-data"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop: "{{ provisioning_nodes }}"
+  vars:
+    hostname: "{{ item.hostname }}"
+
+- name: Template out user-data for default
+  template:
+    src: autoinstall-user-data.j2
+    dest: "{{ nginx_web_root }}/autoinstall_templates/default/user-data"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  vars:
+    hostname: "{{ default_autoinstall_node.hostname }}"
+    mac: "{{ default_autoinstall_node.mac }}"
+
+- name: Template out meta-data for default
+  template:
+    src: autoinstall-meta-data.j2
+    dest: "{{ nginx_web_root }}/autoinstall_templates/default/meta-data"
+    owner: www-data
+    group: www.data
+    mode: "0644"
+  vars:
+    hostname: "{{ default_autoinstall_node.hostname }}"

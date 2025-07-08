@@ -1,0 +1,10 @@
+---
+nginx_web_root: /var/www/html
+nginx_server_name: _
+php_socket: /var/run/php/php8.3-fpm.sock
+server_ip: 10.10.1.1
+iso_base_url: http://10.10.1.1/provisioning/ubuntu24.04
+
+default_autoinstall_node:
+  mac: "default"
+  hostname: "default-host"

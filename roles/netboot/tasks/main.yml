@@ -1,0 +1,46 @@
+---
+- name: Install dnsmasq and tftp server
+  apt:
+    name:
+      - dnsmasq
+      - tftpd-hpa
+    state: present
+
+- name: Configure tftpd-hpa
+  copy:
+    content: |
+      TFTP_USERNAME="tftp"
+      TFTP_DIRECTORY="/var/lib/tftpboot"
+      TFTP_ADDRESS=":69"
+      TFTP_OPTIONS="--secure"
+    dest: /etc/default/tftpd-hpa
+  notify: restart tftpd-hpa
+
+- name: Create tftpboot directory
+  file:
+    path: /var/lib/tftpboot
+    state: directory
+    owner: tftp
+    group: tftp
+    mode: "0755"
+
+- name: Download iPXE bootloaders
+  get_url:
+    url: "{{ item.url }}"
+    dest: "{{ item.dest }}"
+    mode: '0644'
+  loop:
+    - { url: "http://boot.ipxe.org/undionly.kpxe", dest: "/var/lib/tftpboot/undionly.kpxe" }
+    - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
+  register: ipxe_download
+  until: ipxe_download is succeeded
+  retries: 5
+  delay: 2
+  args:
+    creates: "{{ item.dest }}"
+
+- name: Copy dnsmasq config
+  template:
+    src: provisioning.conf.j2
+    dest: /etc/dnsmasq.d/provisioning.conf
+  notify: restart dnsmasq

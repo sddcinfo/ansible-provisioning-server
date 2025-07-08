@@ -1,0 +1,96 @@
+#cloud-config
+# This file contains the user configuration for the Ubuntu Autoinstall process.
+# It MUST be used with the "modprobe.blacklist=nvme" kernel parameter
+# in your PXE boot configuration.
+
+autoinstall:
+  version: 1
+  # Set the locale and keyboard layout for the system.
+  locale: en_US.UTF-8
+  keyboard:
+    layout: us
+    variant: ""
+  
+  # Define the initial user account.
+  identity:
+    hostname: "{{ hostname }}"
+    realname: "sysadmin"
+    username: sysadmin
+    password: "$6$yqcsPMJm0INTojsR$qse1k8nDWBUwiU3QM1hHZ.hkHRRW2Ap.iwHEj70rsA.tE0YX/JhSe1OFhy5oZozsV//DxEahYnTfsEUDnFZqX."
+
+  # Configure SSH, install the server, and add an authorized key for passwordless access.
+  ssh:
+    install-server: true
+    authorized-keys:
+      - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCiSMhIlqWZHAOsnTQKuudWmxQjPU2dQuxf2F8+a0YwKBGMyIrac/EJVhN+E99u6jjxihZox59cUyH75CiGT+AKn3F3KATGnTsENqCpgAAhNx3axDqJ5X4FJ/kHIpekFrxhaZI1Nq6dxanqzD/s8os29jd6jOEqmExyu8PAlQrpjnSFZ6LtjVo3VtXVjZmp/mFqRUe5qEtqDedbXOuroVfEGgpbcJ8sjytOJKbOoL7T98UUV68GATAyUK0CWQVsNHBFZrJ+7aT3hnam3H8wDPPDcs5zPU2frteZKn2e3yoKNZOoVau1dET7irqvWaYx8RJ0r0fJ6pjvGQiosq4yIlWlzR+5EPEr18jRWIbsekJu3z+7QaQO8O75kOGQqHuq3o34o0+fQZnmJX8/gFbkMD7lKeXyGFazHQBCIXQfcG7CNVzpgVqaDgd8KLkUdDUdBXqf7sf8vfEzOemb9vSQIm1awd7d7fYq4d9bxqO8V2L1MauHnsvyxGqkpMpdwdhC0a5WpYuCWPlWDcr78WfTcm4SIK0V1mG2evXL78p3h6YHV3nFxeYIwtIKJElmmEbN49Oi5n7juCTiOG/a1F+a+e6QiIHoBZ+lZrIX4akPCOPo5RtifkTDyS/Cjrzo0w0cZozDxTcEbH3U6qkSrOIsak73SyLLLojdumAfuxbW1vXi4Q== sysadmin@lay.jp"
+    allow-pw: false
+
+  # Explicitly define where to install the bootloader (GRUB) for robustness.
+  grub:
+    device: disk-target
+
+  # With NVMe drives blacklisted at the kernel level, this simple LVM
+  # configuration targeting /dev/sda is now safe and reliable.
+  storage:
+    layout:
+      name: lvm
+    config:
+      # 1. Select the disk. /dev/sda is guaranteed to be the correct disk
+      #    because the NVMe drives have been hidden from the kernel.
+      - type: disk
+        id: disk-target
+        ptable: gpt
+        path: /dev/sda
+        wipe: superblock-recursive
+        preserve: false
+      # 2. Create a boot partition (EFI System Partition)
+      - type: partition
+        id: partition-esp
+        device: disk-target
+        size: 1G
+        flag: boot
+      # 3. Create a partition to hold the LVM data, using the rest of the disk
+      - type: partition
+        id: partition-lvm
+        device: disk-target
+        size: -1 # Use remaining space
+      # 4. Create the LVM Volume Group
+      - type: lvm_volgroup
+        id: vg-ubuntu
+        name: ubuntu-vg
+        devices:
+          - partition-lvm
+      # 5. Create a single Logical Volume for the root filesystem
+      - type: lvm_partition
+        id: lv-root
+        volgroup: vg-ubuntu
+        name: ubuntu-lv
+        size: 100% # Use all available space in the volume group
+      # 6. Format the filesystems
+      - type: format
+        id: format-esp
+        fstype: fat32
+        volume: partition-esp
+      - type: format
+        id: format-root
+        fstype: ext4
+        volume: lv-root
+      # 7. Mount the filesystems
+      - type: mount
+        id: mount-esp
+        path: /boot/efi
+        device: format-esp
+      - type: mount
+        id: mount-root
+        path: /
+        device: lv-root
+
+  packages:
+    - curl
+    - vim
+    - net-tools
+
+  late-commands:
+    - 'curl -s "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={{ mac }}"'
+    
+  shutdown: reboot

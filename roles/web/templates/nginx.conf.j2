@@ -1,0 +1,29 @@
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+
+    root {{ nginx_web_root }};
+
+    index index.php index.html index.htm;
+
+    server_name {{ nginx_server_name }};
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:{{ php_socket }};
+    }
+
+    location /autoinstall_configs {
+        alias {{ nginx_web_root }}/autoinstall_configs;
+        try_files $uri $uri/ =404;
+    }
+
+    location /provisioning {
+        alias {{ nginx_web_root }}/provisioning;
+        try_files $uri $uri/ =404;
+    }
+}
