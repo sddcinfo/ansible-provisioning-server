@@ -1,0 +1,132 @@
+---
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600 # Cache is valid for 1 hour
+
+- name: Install common packages
+  apt:
+    name:
+      - vim
+      - git
+      - curl
+      - wget
+      - unzip
+    state: present
+
+- name: Generate SSH key pair for sysadmin user
+  community.crypto.openssh_keypair:
+    path: /home/sysadmin/.ssh/sysadmin_automation_key
+    type: ed25519
+    owner: sysadmin
+    group: sysadmin
+  register: sysadmin_keypair
+
+- name: Generate SSH key pair for root user
+  community.crypto.openssh_keypair:
+    path: /root/.ssh/root_automation_key
+    type: ed25519
+    owner: root
+    group: root
+  become: yes
+  register: root_keypair
+
+- name: Read sysadmin public key
+  ansible.builtin.slurp:
+    src: /home/sysadmin/.ssh/sysadmin_automation_key.pub
+  register: sysadmin_pub_key_file
+
+- name: Read root public key
+  ansible.builtin.slurp:
+    src: /root/.ssh/root_automation_key.pub
+  become: yes
+  register: root_pub_key_file
+
+- name: Set public keys as facts
+  ansible.builtin.set_fact:
+    sysadmin_pub_key: "{{ sysadmin_pub_key_file.content | b64decode }}"
+    root_pub_key: "{{ root_pub_key_file.content | b64decode }}"
+
+- name: Authorize new sysadmin key for local sysadmin user
+  ansible.posix.authorized_key:
+    user: sysadmin
+    key: "{{ sysadmin_pub_key }}"
+    state: present
+
+- name: Authorize new root key for local root user
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ root_pub_key }}"
+    state: present
+  become: yes
+
+- name: Securely configure SSH daemon
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: '^#?PermitRootLogin'
+    line: 'PermitRootLogin prohibit-password'
+    state: present
+  notify: restart sshd
+
+- name: Update all packages to the latest version
+  apt:
+    upgrade: dist
+    autoremove: yes
+    autoclean: yes
+
+- name: Configure sysctl to disable IPv6 and enable IP forwarding
+  ansible.posix.sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: yes
+    state: present
+    reload: yes
+  with_items:
+    - { key: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
+    - { key: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
+    - { key: 'net.ipv4.ip_forward', value: '1' }
+
+- name: Find and remove existing netplan configs
+  block:
+    - name: Find existing netplan configuration files
+      ansible.builtin.find:
+        paths: /etc/netplan
+        patterns: "*.yaml"
+      register: netplan_files_to_delete
+
+    - name: Remove existing netplan configuration files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ netplan_files_to_delete.files }}"
+      when: netplan_files_to_delete.files | length > 0
+
+- name: Create definitive Netplan configuration
+  ansible.builtin.template:
+    src: 01-netcfg.yaml.j2
+    dest: /etc/netplan/01-netcfg.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Apply netplan
+
+- name: Install packages for NAT
+  apt:
+    name:
+      - iptables
+      - iptables-persistent
+    state: present
+
+- name: Set NAT rule for internal network
+  community.general.iptables:
+    table: nat
+    chain: POSTROUTING
+    source: "10.10.1.0/24"
+    out_interface: ens34
+    jump: MASQUERADE
+    comment: "NAT for internal network"
+
+- name: Persist iptables rules
+  ansible.builtin.command:
+    cmd: netfilter-persistent save
+  changed_when: false

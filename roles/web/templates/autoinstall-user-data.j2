@@ -1,0 +1,23 @@
+#cloud-config
+autoinstall:
+  version: 1
+  identity:
+    hostname: "{{ hostname }}"
+    realname: "sysadmin"
+    username: sysadmin
+    password: "$6$yqcsPMJm0INTojsR$qse1k8nDWBUwiU3QM1hHZ.hkHRRW2Ap.iwHEj70rsA.tE0YX/JhSe1OFhy5oZozsV//DxEahYnTfsEUDnFZqX."
+  ssh:
+    install-server: true
+    authorized-keys:
+      - "{{ sysadmin_pub_key }}"
+    allow-pw: false
+  storage:
+    layout:
+      name: lvm
+  packages:
+    - curl
+    - vim
+    - net-tools
+  late-commands:
+    - 'curl -s "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={{ mac }}"'
+  shutdown: reboot
