@@ -1,0 +1,7 @@
+---
+# This file contains global variables for the provisioning server.
+
+# Default password hash for the 'sysadmin' user created during autoinstall.
+# It is highly recommended to change this to a newly generated hash.
+# You can generate one with: openssl passwd -6
+sysadmin_password_hash: "$6$yqcsPMJm0INTojsR$qse1k8nDWBUwiU3QM1hHZ.hkHRRW2Ap.iwHEj70rsA.tE0YX/JhSe1OFhy5oZozsV//DxEahYnTfsEUDnFZqX."

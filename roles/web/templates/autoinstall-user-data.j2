@@ -5,7 +5,7 @@ autoinstall:
     hostname: "{{ hostname }}"
     realname: "sysadmin"
     username: sysadmin
-    password: "$6$yqcsPMJm0INTojsR$qse1k8nDWBUwiU3QM1hHZ.hkHRRW2Ap.iwHEj70rsA.tE0YX/JhSe1OFhy5oZozsV//DxEahYnTfsEUDnFZqX."
+    password: "{{ sysadmin_password_hash }}"
   ssh:
     install-server: true
     authorized-keys:
