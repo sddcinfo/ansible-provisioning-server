@@ -1,9 +1,4 @@
 ---
-- name: Apply netplan
-  ansible.builtin.command:
-    cmd: netplan apply
-  changed_when: false
-
 - name: restart sshd
   ansible.builtin.service:
     name: sshd

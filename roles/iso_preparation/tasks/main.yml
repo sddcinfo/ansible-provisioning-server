@@ -20,8 +20,7 @@
     dest: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
     mode: '0644'
   register: download_iso
-  args:
-    creates: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+  when: not sentinel_file_stat.stat.exists
 
 - name: Ensure ISO mount point exists
   ansible.builtin.file:

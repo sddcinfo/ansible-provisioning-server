@@ -22,7 +22,8 @@ address=/{{ host.name }}/{{ host.ip }}
 {% endfor %}
 
 {% for host in dnsmasq_dhcp_reservations %}
-dhcp-host={{ host.mac }},{{ host.ip }},{{ host.name }}
+address=/{{ host.hostname }}.lay.jp/{{ host.ip }}
+dhcp-host={{ host.mac }},{{ host.ip }},{{ host.hostname }}
 {% endfor %}
 
 # === DHCP Configuration ===

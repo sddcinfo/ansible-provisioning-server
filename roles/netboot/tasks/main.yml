@@ -24,20 +24,25 @@
     group: tftp
     mode: "0755"
 
-- name: Download iPXE bootloaders
-  get_url:
-    url: "{{ item.url }}"
-    dest: "{{ item.dest }}"
-    mode: '0644'
+- name: Check if iPXE bootloaders exist
+  stat:
+    path: "{{ item.dest }}"
   loop:
     - { url: "http://boot.ipxe.org/undionly.kpxe", dest: "/var/lib/tftpboot/undionly.kpxe" }
     - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
+  register: ipxe_files
+
+- name: Download iPXE bootloaders
+  get_url:
+    url: "{{ item.item.url }}"
+    dest: "{{ item.item.dest }}"
+    mode: '0644'
+  loop: "{{ ipxe_files.results }}"
+  when: not item.stat.exists
   register: ipxe_download
   until: ipxe_download is succeeded
   retries: 5
   delay: 2
-  args:
-    creates: "{{ item.dest }}"
 
 - name: Copy dnsmasq config
   template:

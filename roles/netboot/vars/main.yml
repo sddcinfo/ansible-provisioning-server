@@ -31,8 +31,6 @@ dnsmasq_static_hosts:
   - { name: "node2-10g.lay.jp", ip: "10.10.2.22" }
   - { name: "node3-10g.lay.jp", ip: "10.10.2.23" }
   - { name: "node4-10g.lay.jp", ip: "10.10.2.24" }
-  - "{{ console_nodes | map('community.general.dict_kv', 'name', 'hostname') | map('regex_replace', '^(.*)$', '\\1.lay.jp') | list }}"
-  - "{{ provisioning_nodes | map('community.general.dict_kv', 'name', 'hostname') | map('regex_replace', '^(.*)$', '\\1.lay.jp') | list }}"
 
 dnsmasq_dhcp_range: "10.10.1.100,10.10.1.200,255.255.255.0,12h"
 dnsmasq_dhcp_router: "10.10.1.1"

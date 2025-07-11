@@ -15,21 +15,15 @@
     state: present
 
 - name: Generate SSH key pair for sysadmin user
-  community.crypto.openssh_keypair:
-    path: /home/sysadmin/.ssh/sysadmin_automation_key
-    type: ed25519
-    owner: sysadmin
-    group: sysadmin
-  register: sysadmin_keypair
+  ansible.builtin.shell:
+    cmd: "ssh-keygen -t ed25519 -f /home/sysadmin/.ssh/sysadmin_automation_key -N ''"
+    creates: /home/sysadmin/.ssh/sysadmin_automation_key
 
 - name: Generate SSH key pair for root user
-  community.crypto.openssh_keypair:
-    path: /root/.ssh/root_automation_key
-    type: ed25519
-    owner: root
-    group: root
+  ansible.builtin.shell:
+    cmd: "ssh-keygen -t ed25519 -f /root/.ssh/root_automation_key -N ''"
+    creates: /root/.ssh/root_automation_key
   become: yes
-  register: root_keypair
 
 - name: Read sysadmin public key
   ansible.builtin.slurp:
@@ -86,29 +80,7 @@
     - { key: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
     - { key: 'net.ipv4.ip_forward', value: '1' }
 
-- name: Find and remove existing netplan configs
-  block:
-    - name: Find existing netplan configuration files
-      ansible.builtin.find:
-        paths: /etc/netplan
-        patterns: "*.yaml"
-      register: netplan_files_to_delete
 
-    - name: Remove existing netplan configuration files
-      ansible.builtin.file:
-        path: "{{ item.path }}"
-        state: absent
-      with_items: "{{ netplan_files_to_delete.files }}"
-      when: netplan_files_to_delete.files | length > 0
-
-- name: Create definitive Netplan configuration
-  ansible.builtin.template:
-    src: 01-netcfg.yaml.j2
-    dest: /etc/netplan/01-netcfg.yaml
-    owner: root
-    group: root
-    mode: '0600'
-  notify: Apply netplan
 
 - name: Install packages for NAT
   apt:
@@ -117,14 +89,15 @@
       - iptables-persistent
     state: present
 
+- name: Check if NAT rule exists
+  ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
+  register: nat_rule_check
+  changed_when: false
+  failed_when: false
+
 - name: Set NAT rule for internal network
-  community.general.iptables:
-    table: nat
-    chain: POSTROUTING
-    source: "10.10.1.0/24"
-    out_interface: ens34
-    jump: MASQUERADE
-    comment: "NAT for internal network"
+  ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
+  when: nat_rule_check.rc != 0
 
 - name: Persist iptables rules
   ansible.builtin.command:

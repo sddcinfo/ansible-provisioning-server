@@ -108,7 +108,7 @@
     src: autoinstall-meta-data.j2
     dest: "{{ nginx_web_root }}/autoinstall_templates/default/meta-data"
     owner: www-data
-    group: www.data
+    group: www-data
     mode: "0644"
   vars:
     hostname: "{{ default_autoinstall_node.hostname }}"

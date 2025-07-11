@@ -1,2 +1,2 @@
 [provisioner]
-your_server_ip ansible_user=sysadmin
+localhost ansible_connection=local
