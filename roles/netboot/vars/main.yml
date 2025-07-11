@@ -24,13 +24,13 @@ dnsmasq_dhcp_reservations: "{{ provisioning_nodes + console_nodes }}"
 
 # Dynamically generate static host entries
 dnsmasq_static_hosts:
-  - { name: "gateway.lay.jp", ip: "10.10.1.1" }
-  - { name: "switch1g.lay.jp", ip: "10.10.1.2" }
-  - { name: "switch10gb.lay.jp", ip: "10.10.1.3" }
-  - { name: "node1-10g.lay.jp", ip: "10.10.2.21" }
-  - { name: "node2-10g.lay.jp", ip: "10.10.2.22" }
-  - { name: "node3-10g.lay.jp", ip: "10.10.2.23" }
-  - { name: "node4-10g.lay.jp", ip: "10.10.2.24" }
+  - { name: "gateway.sddc.info", ip: "10.10.1.1" }
+  - { name: "switch1g.sddc.info", ip: "10.10.1.2" }
+  - { name: "switch10gb.sddc.info", ip: "10.10.1.3" }
+  - { name: "node1-10g.sddc.info", ip: "10.10.2.21" }
+  - { name: "node2-10g.sddc.info", ip: "10.10.2.22" }
+  - { name: "node3-10g.sddc.info", ip: "10.10.2.23" }
+  - { name: "node4-10g.sddc.info", ip: "10.10.2.24" }
 
 dnsmasq_dhcp_range: "10.10.1.100,10.10.1.200,255.255.255.0,12h"
 dnsmasq_dhcp_router: "10.10.1.1"
