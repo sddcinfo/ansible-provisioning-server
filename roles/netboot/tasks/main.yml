@@ -44,6 +44,26 @@
   retries: 5
   delay: 2
 
+- name: Stop systemd-resolved
+  service:
+    name: systemd-resolved
+    state: stopped
+
+- name: Remove /etc/resolv.conf symlink
+  file:
+    path: /etc/resolv.conf
+    state: absent
+
+- name: Create static /etc/resolv.conf
+  template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
+
+- name: Start systemd-resolved
+  service:
+    name: systemd-resolved
+    state: started
+
 - name: Copy dnsmasq config
   template:
     src: provisioning.conf.j2
