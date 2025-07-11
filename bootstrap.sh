@@ -21,6 +21,7 @@ network:
     ens34:
       dhcp4: true
 EOF'
+sudo chmod 600 /etc/netplan/01-netcfg.yaml
 sudo netplan apply
 
 echo "--- Installing required Ansible collections ---"
