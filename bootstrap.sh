@@ -14,7 +14,7 @@ network:
   ethernets:
     ens33:
       addresses:
-        - 10.10.1.1/24
+        - 10.10.1.50/24
       # gateway4: 10.10.1.1 # Uncomment if this server is the gateway
       nameservers:
         addresses: [10.10.1.1]
