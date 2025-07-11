@@ -1,7 +1,7 @@
 ---
 dnsmasq_interface: ens34
 dnsmasq_listen_address: "127.0.0.1,10.10.1.1"
-dnsmasq_domain: lay.jp
+dnsmasq_domain: sddc.info
 dnsmasq_upstream_servers:
   - 1.1.1.1
   - 1.0.0.1
