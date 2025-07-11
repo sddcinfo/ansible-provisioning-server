@@ -16,13 +16,13 @@ autoinstall:
     hostname: "{{ hostname }}"
     realname: "sysadmin"
     username: sysadmin
-    password: "$6$yqcsPMJm0INTojsR$qse1k8nDWBUwiU3QM1hHZ.hkHRRW2Ap.iwHEj70rsA.tE0YX/JhSe1OFhy5oZozsV//DxEahYnTfsEUDnFZqX."
+    password: "{{ sysadmin_password_hash }}"
 
   # Configure SSH, install the server, and add an authorized key for passwordless access.
   ssh:
     install-server: true
     authorized-keys:
-      - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCiSMhIlqWZHAOsnTQKuudWmxQjPU2dQuxf2F8+a0YwKBGMyIrac/EJVhN+E99u6jjxihZox59cUyH75CiGT+AKn3F3KATGnTsENqCpgAAhNx3axDqJ5X4FJ/kHIpekFrxhaZI1Nq6dxanqzD/s8os29jd6jOEqmExyu8PAlQrpjnSFZ6LtjVo3VtXVjZmp/mFqRUe5qEtqDedbXOuroVfEGgpbcJ8sjytOJKbOoL7T98UUV68GATAyUK0CWQVsNHBFZrJ+7aT3hnam3H8wDPPDcs5zPU2frteZKn2e3yoKNZOoVau1dET7irqvWaYx8RJ0r0fJ6pjvGQiosq4yIlWlzR+5EPEr18jRWIbsekJu3z+7QaQO8O75kOGQqHuq3o34o0+fQZnmJX8/gFbkMD7lKeXyGFazHQBCIXQfcG7CNVzpgVqaDgd8KLkUdDUdBXqf7sf8vfEzOemb9vSQIm1awd7d7fYq4d9bxqO8V2L1MauHnsvyxGqkpMpdwdhC0a5WpYuCWPlWDcr78WfTcm4SIK0V1mG2evXL78p3h6YHV3nFxeYIwtIKJElmmEbN49Oi5n7juCTiOG/a1F+a+e6QiIHoBZ+lZrIX4akPCOPo5RtifkTDyS/Cjrzo0w0cZozDxTcEbH3U6qkSrOIsak73SyLLLojdumAfuxbW1vXi4Q== sysadmin@lay.jp"
+      - "{{ sysadmin_pub_key }}"
     allow-pw: false
 
   # Explicitly define where to install the bootloader (GRUB) for robustness.
