@@ -14,11 +14,11 @@ The playbook configures the target server with the following services:
 ## Configuration
 
 - **`inventory`**: Define the provisioner server's IP or hostname.
-- **`group_vars/all.yml`**: Contains all configurable variables, including the default password hash for the `sysadmin` user, network settings, and the list of nodes to provision.
+- **`roles/*/vars/main.yml`**: These files contain all configurable variables, such as network settings, node lists, and ISO details.
 
 ## Usage
 
-1. **Configure your variables** in `group_vars/all.yml`.
+1. **Configure your variables** in the `roles/*/vars/main.yml` files.
 2. **Run the playbook:**
    ```bash
    ansible-playbook -i inventory site.yml --ask-become-pass
