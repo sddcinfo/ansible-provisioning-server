@@ -1,56 +1,83 @@
 # Ansible Provisioning Server
 
-This Ansible project configures a dedicated server to provide network services for automated bare-metal provisioning of Ubuntu servers.
+This Ansible project configures a dedicated server to provide all the necessary network services for automated, bare-metal provisioning of Ubuntu servers using iPXE and cloud-init.
 
 ## Overview
 
 The playbook configures the target server with the following services:
 
-- **DHCP & TFTP:** `dnsmasq` and `tftpd-hpa` for IP assignment and iPXE bootloaders.
-- **HTTP Server:** `Nginx` and `PHP` for dynamic iPXE scripts, autoinstall configurations, and a status page.
-- **ISO Preparation:** Downloads and extracts a specified Ubuntu ISO for HTTP serving.
+- **DHCP & TFTP:** `dnsmasq` provides DHCP services and serves the iPXE bootloader over TFTP.
+- **Web Server:** `Nginx` and `PHP` serve dynamic iPXE boot scripts and Ubuntu Autoinstall (cloud-init) configurations.
+- **ISO Preparation:** The playbook downloads a specified Ubuntu ISO, extracts the necessary kernel and initrd, and makes the full ISO contents available over HTTP for the installation process.
+- **Network Address Translation (NAT):** Configures the server to act as a gateway, providing internet access to the provisioning network.
 
-## Configuration Variables
+## Configuration
 
-All configuration is handled through variables defined in `roles/*/vars/main.yml`.
-
-### `roles/netboot/vars/main.yml`
-
-- `dnsmasq_interface`: The network interface for `dnsmasq` to listen on.
-- `dnsmasq_listen_address`: The IP addresses for `dnsmasq` to listen on.
-- `dnsmasq_domain`: The domain name for the provisioning network.
-- `dnsmasq_upstream_servers`: Upstream DNS servers.
-- `provisioning_nodes`: A list of dictionaries, each defining a node with its `mac`, `ip`, and `hostname`.
-- `console_nodes`: A list of dictionaries, each defining a console node with its `mac`, `ip`, and `hostname`.
-- `dnsmasq_static_hosts`: A list of static DNS entries.
-- `dnsmasq_dhcp_range`: The DHCP address range.
-- `dnsmasq_dhcp_router`: The default gateway for the provisioning network.
-- `dnsmasq_dhcp_dns_server`: The DNS server for the provisioning network.
-- `tftp_root`: The root directory for TFTP.
-- `ipxe_boot_url`: The URL for the iPXE boot script.
-
-### `roles/iso_preparation/vars/main.yml`
-
-- `ubuntu_iso_url`: The URL to download the Ubuntu ISO.
-- `ubuntu_iso_name`: The filename of the Ubuntu ISO.
-- `ubuntu_iso_download_dir`: The directory to download the ISO to.
-- `ubuntu_iso_mount_point`: The mount point for the ISO.
-- `ubuntu_provisioning_dir`: The directory to store the extracted ISO contents.
-
-### `roles/web/vars/main.yml`
-
-- `nginx_web_root`: The root directory for the Nginx web server.
-- `nginx_server_name`: The server name for Nginx.
-- `php_socket`: The path to the PHP-FPM socket.
-- `server_ip`: The IP address of the provisioning server.
-- `iso_base_url`: The base URL for accessing the ISO contents.
-- `autoinstall_nodes`: A list of nodes for autoinstallation, matching the `provisioning_nodes` in the `netboot` role.
-- `autoinstall_console_nodes`: A list of console nodes for autoinstallation, matching the `console_nodes` in the `netboot` role.
+All configuration is handled through variables defined in the `roles/*/vars/` directories. The most critical variables are in `roles/netboot/vars/main.yml`, where you define the nodes to be provisioned.
 
 ## Usage
 
-1. **Configure your variables** in the `roles/*/vars/main.yml` files.
+1. **Define your nodes:** Edit `roles/netboot/vars/main.yml` to define the `provisioning_nodes` and `console_nodes` with their respective MAC addresses, IP addresses, and hostnames.
 2. **Run the playbook:**
    ```bash
-   ansible-playbook site.yml --ask-become-pass
+   # From the ansible-provisioning-server directory
+   ansible-playbook -i inventory site.yml --ask-become-pass
    ```
+
+---
+
+## Post-Provisioning Scripts
+
+After the main playbook has been successfully run, two utility scripts will be available in the `/home/sysadmin` directory on the provisioning server.
+
+### 1. Redfish Management Script (`redfish.py`)
+
+This Python script is **dynamically generated** by the playbook and provides a convenient way to manage your servers' power and boot settings using the Redfish API. It is always in sync with the nodes defined in your Ansible inventory.
+
+**One-Time Setup:**
+
+Before using the script for the first time, you must create a credentials file. The script expects a file named `~/.redfish_credentials` containing your Redfish username and password.
+
+Create the file with the following command, replacing the placeholder credentials:
+```bash
+echo 'REDFISH_AUTH="your_username:your_password"' > ~/.redfish_credentials
+chmod 600 ~/.redfish_credentials
+```
+
+**Usage:**
+
+The script takes two arguments: the node name and the action to perform.
+
+```bash
+# Example: Get the power status of a console node
+./redfish.py console-node1 status
+
+# Example: Set a provisioning node to boot from PXE on the next restart
+./redfish.py node1 pxe
+```
+
+**Available Actions:**
+- `status`: Get system power state and health status.
+- `power-on`: Powers the system on.
+- `power-off`: Powers the system off gracefully.
+- `power-force-off`: Forces the system to power off immediately.
+- `reboot`: Performs a force restart of the node.
+- `bios`: Sets the node to boot into BIOS setup on the next restart.
+- `pxe`: Sets the node to boot from PXE on the next restart.
+- `disk`: Sets the node to boot from the default disk on the next restart.
+
+### 2. Verification Script (`verify_playbook.sh`)
+
+This script is an integration test for your provisioning environment. After running the main playbook, you can execute this script to get a clear, color-coded report on whether all the critical components are functioning correctly.
+
+**Usage:**
+
+```bash
+./verify_playbook.sh
+```
+
+The script will check:
+- DNS resolution for your nodes.
+- Correct generation of iPXE scripts by the web server.
+- NAT and IP forwarding rules.
+- The status of all required services (`dnsmasq`, `nginx`, etc.).
