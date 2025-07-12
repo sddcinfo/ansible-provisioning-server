@@ -19,6 +19,35 @@
     cmd: "ssh-keygen -t ed25519 -f /home/sysadmin/.ssh/sysadmin_automation_key -N ''"
     creates: /home/sysadmin/.ssh/sysadmin_automation_key
 
+- name: Set correct ownership for sysadmin SSH keys
+  ansible.builtin.file:
+    path: /home/sysadmin/.ssh/sysadmin_automation_key
+    owner: sysadmin
+    group: sysadmin
+    mode: "0600"
+
+- name: Set correct ownership for sysadmin public SSH key
+  ansible.builtin.file:
+    path: /home/sysadmin/.ssh/sysadmin_automation_key.pub
+    owner: sysadmin
+    group: sysadmin
+    mode: "0644"
+
+- name: Configure SSH client for sysadmin user
+  ansible.builtin.blockinfile:
+    path: /home/sysadmin/.ssh/config
+    create: yes
+    owner: sysadmin
+    group: sysadmin
+    mode: "0600"
+    block: |
+      Host 10.10.1.*
+        User sysadmin
+        IdentityFile /home/sysadmin/.ssh/sysadmin_automation_key
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
+
+
 - name: Generate SSH key pair for root user
   ansible.builtin.shell:
     cmd: "ssh-keygen -t ed25519 -f /root/.ssh/root_automation_key -N ''"
