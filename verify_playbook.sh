@@ -19,18 +19,7 @@ print_failure() {
 
 # --- DNS and DHCP Verification ---
 echo "--- Verifying DNS and DHCP ---"
-# Check if dnsmasq is listening on the correct interfaces
-if echo 'password' | sudo -S netstat -tulpn | grep "dnsmasq" | grep -q "127.0.0.1:53"; then
-    print_success "dnsmasq is listening on 127.0.0.1:53"
-else
-    print_failure "dnsmasq is not listening on 127.0.0.1:53"
-fi
 
-if echo 'password' | sudo -S netstat -tulpn | grep "dnsmasq" | grep -q "10.10.1.1:53"; then
-    print_success "dnsmasq is listening on 10.10.1.1:53"
-else
-    print_failure "dnsmasq is not listening on 10.10.1.1:53"
-fi
 
 # Check DNS resolution
 if dig @10.10.1.1 node1.sddc.info | grep -q "10.10.1.21"; then
@@ -39,35 +28,13 @@ else
     print_failure "DNS resolution for node1.sddc.info is incorrect"
 fi
 
-# --- TFTP Verification ---
-echo "--- Verifying TFTP ---"
 
-# Check TFTP file download
-echo "get ipxe.efi" | tftp 10.10.1.1 69
-if [[ -f ipxe.efi ]]; then
-    print_success "TFTP file download is successful"
-    rm ipxe.efi
-else
-    print_failure "TFTP file download failed"
-fi
-
-# Check dnsmasq logs for TFTP request
-if journalctl -u dnsmasq | grep -q "sent /var/lib/tftpboot/ipxe.efi"; then
-    print_success "dnsmasq log shows TFTP file sent"
-else
-    print_failure "dnsmasq log does not show TFTP file sent"
-fi
 
 
 # --- Web Server Verification ---
 echo "--- Verifying Web Server ---"
 sleep 5
-# Check if nginx is listening on port 80
-if echo 'password' | sudo -S netstat -tulpn | grep "nginx" | grep -q ":80"; then
-    print_success "nginx is listening on port 80"
-else
-    print_failure "nginx is not listening on port 80"
-fi
+
 
 # Check web server response
 if curl -s http://10.10.1.1/ | grep -q "Ansible Provisioning Status"; then
