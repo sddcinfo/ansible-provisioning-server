@@ -36,11 +36,11 @@ echo "--- Verifying Web Server ---"
 sleep 5
 
 
-# Check web server response
-if curl -s http://10.10.1.1/ | grep -q "Ansible Provisioning Status"; then
-    print_success "Web server is responding correctly"
+# Check iPXE script generation
+if curl -s "http://10.10.1.1/?mac=ac:1f:6b:6c:5a:76" | grep -q "#!ipxe"; then
+    print_success "iPXE script is generated correctly"
 else
-    print_failure "Web server is not responding correctly"
+    print_failure "iPXE script is not generated correctly"
 fi
 
 # --- NAT and IP Forwarding Verification ---
