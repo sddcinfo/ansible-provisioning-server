@@ -6,15 +6,11 @@
       - tftpd-hpa
     state: present
 
-- name: Configure tftpd-hpa
-  copy:
-    content: |
-      TFTP_USERNAME="tftp"
-      TFTP_DIRECTORY="/var/lib/tftpboot"
-      TFTP_ADDRESS=":69"
-      TFTP_OPTIONS="--secure"
-    dest: /etc/default/tftpd-hpa
-  notify: restart tftpd-hpa
+- name: Disable and stop tftpd-hpa
+  service:
+    name: tftpd-hpa
+    state: stopped
+    enabled: no
 
 - name: Create tftpboot directory
   file:
@@ -44,10 +40,11 @@
   retries: 5
   delay: 2
 
-- name: Stop systemd-resolved
+- name: Disable systemd-resolved
   service:
     name: systemd-resolved
     state: stopped
+    enabled: no
 
 - name: Remove /etc/resolv.conf symlink
   file:
@@ -58,11 +55,6 @@
   template:
     src: resolv.conf.j2
     dest: /etc/resolv.conf
-
-- name: Start systemd-resolved
-  service:
-    name: systemd-resolved
-    state: started
 
 - name: Copy dnsmasq config
   template:
