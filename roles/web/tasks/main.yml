@@ -70,7 +70,7 @@
 
 - name: Create autoinstall templates base directory
   file:
-    path: "{{ nginx_web_root }}/autoinstall_templates"
+    path: "{{ nginx_web_root }}/autoinstall_configs"
     state: directory
     owner: www-data
     group: www-data
@@ -78,7 +78,7 @@
 
 - name: Create node-specific autoinstall directories
   file:
-    path: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}"
+    path: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}"
     state: directory
     owner: www-data
     group: www-data
@@ -87,7 +87,7 @@
 
 - name: Create default autoinstall directory
   file:
-    path: "{{ nginx_web_root }}/autoinstall_templates/default"
+    path: "{{ nginx_web_root }}/autoinstall_configs/default"
     state: directory
     owner: www-data
     group: www-data
@@ -96,7 +96,7 @@
 - name: Template out user-data for each node
   template:
     src: autoinstall-user-data.j2
-    dest: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}/user-data"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}/user-data"
     owner: www-data
     group: www-data
     mode: "0644"
@@ -108,7 +108,7 @@
 - name: Template out meta-data for each node
   template:
     src: autoinstall-meta-data.j2
-    dest: "{{ nginx_web_root }}/autoinstall_templates/{{ item.mac }}/meta-data"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}/meta-data"
     owner: www-data
     group: www-data
     mode: "0644"
@@ -119,7 +119,7 @@
 - name: Template out user-data for default
   template:
     src: autoinstall-user-data.j2
-    dest: "{{ nginx_web_root }}/autoinstall_templates/default/user-data"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/default/user-data"
     owner: www-data
     group: www-data
     mode: "0644"
@@ -130,7 +130,7 @@
 - name: Template out meta-data for default
   template:
     src: autoinstall-meta-data.j2
-    dest: "{{ nginx_web_root }}/autoinstall_templates/default/meta-data"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/default/meta-data"
     owner: www-data
     group: www-data
     mode: "0644"

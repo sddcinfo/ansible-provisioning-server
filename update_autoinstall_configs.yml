@@ -1,0 +1,88 @@
+---
+- hosts: local
+  connection: local
+  become: yes
+  become_user: root
+  gather_facts: no
+  vars_files:
+    - roles/web/vars/main.yml
+    - roles/netboot/vars/main.yml
+  pre_tasks:
+    - name: Read sysadmin public key
+      ansible.builtin.slurp:
+        src: /home/sysadmin/.ssh/sysadmin_automation_key.pub
+      register: sysadmin_pub_key_file
+
+    - name: Set public key as a fact
+      ansible.builtin.set_fact:
+        sysadmin_pub_key: "{{ sysadmin_pub_key_file.content | b64decode }}"
+  vars:
+    sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
+  tasks:
+    - name: Create autoinstall templates base directory
+      file:
+        path: "{{ nginx_web_root }}/autoinstall_configs"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Create node-specific autoinstall directories
+      file:
+        path: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+      loop: "{{ provisioning_nodes }}"
+
+    - name: Create default autoinstall directory
+      file:
+        path: "{{ nginx_web_root }}/autoinstall_configs/default"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+    - name: Template out user-data for each node
+      template:
+        src: roles/web/templates/autoinstall-user-data.j2
+        dest: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}/user-data"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      loop: "{{ provisioning_nodes }}"
+      vars:
+        hostname: "{{ item.hostname }}"
+        mac: "{{ item.mac }}"
+
+    - name: Template out meta-data for each node
+      template:
+        src: roles/web/templates/autoinstall-meta-data.j2
+        dest: "{{ nginx_web_root }}/autoinstall_configs/{{ item.mac }}/meta-data"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      loop: "{{ provisioning_nodes }}"
+      vars:
+        hostname: "{{ item.hostname }}"
+
+    - name: Template out user-data for default
+      template:
+        src: roles/web/templates/autoinstall-user-data.j2
+        dest: "{{ nginx_web_root }}/autoinstall_configs/default/user-data"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      vars:
+        hostname: "{{ default_autoinstall_node.hostname }}"
+        mac: "{{ default_autoinstall_node.mac }}"
+
+    - name: Template out meta-data for default
+      template:
+        src: roles/web/templates/autoinstall-meta-data.j2
+        dest: "{{ nginx_web_root }}/autoinstall_configs/default/meta-data"
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      vars:
+        hostname: "{{ default_autoinstall_node.hostname }}"

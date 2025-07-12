@@ -11,11 +11,12 @@ autoinstall:
     layout: us
     variant: ""
   
-  # Define the initial user account.
+  # Define the initial user account with a hashed password.
   identity:
     hostname: "{{ hostname }}"
     realname: "sysadmin"
     username: sysadmin
+    password: "{{ sysadmin_password }}"
 
   # Configure SSH, install the server, and add an authorized key for passwordless access.
   ssh:
@@ -23,10 +24,6 @@ autoinstall:
     authorized-keys:
       - "{{ sysadmin_pub_key }}"
     allow-pw: false
-
-  # Explicitly define where to install the bootloader (GRUB) for robustness.
-  grub:
-    device: disk-target
 
   # With NVMe drives blacklisted at the kernel level, this simple LVM
   # configuration targeting /dev/sda is now safe and reliable.
@@ -48,37 +45,38 @@ autoinstall:
         device: disk-target
         size: 1G
         flag: boot
-      # 3. Create a partition to hold the LVM data, using the rest of the disk
+      # 3. Format the EFI partition
+      - type: format
+        id: format-esp
+        fstype: fat32
+        volume: partition-esp
+      # 4. Create a partition to hold the LVM data, using the rest of the disk
       - type: partition
         id: partition-lvm
         device: disk-target
         size: -1 # Use remaining space
-      # 4. Create the LVM Volume Group
+      # 5. Create the LVM Volume Group
       - type: lvm_volgroup
         id: vg-ubuntu
         name: ubuntu-vg
         devices:
           - partition-lvm
-      # 5. Create a single Logical Volume for the root filesystem
-      - type: lvm_partition
+      # 6. Create a single Logical Volume for the root filesystem
+      - type: logical_volume
         id: lv-root
         volgroup: vg-ubuntu
         name: ubuntu-lv
         size: 100% # Use all available space in the volume group
-      # 6. Format the filesystems
-      - type: format
-        id: format-esp
-        fstype: fat32
-        volume: partition-esp
+      # 7. Format the root filesystem
       - type: format
         id: format-root
         fstype: ext4
         volume: lv-root
-      # 7. Mount the filesystems
+      # 8. Mount the filesystems
       - type: mount
         id: mount-esp
         path: /boot/efi
-        device: format-esp
+        device: partition-esp
       - type: mount
         id: mount-root
         path: /
