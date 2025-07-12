@@ -136,3 +136,11 @@
     mode: "0644"
   vars:
     hostname: "{{ default_autoinstall_node.hostname }}"
+
+- name: Generate redfish script
+  template:
+    src: redfish.py.j2
+    dest: /home/sysadmin/redfish.py
+    owner: sysadmin
+    group: sysadmin
+    mode: "0755"

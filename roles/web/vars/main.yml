@@ -8,3 +8,5 @@ iso_base_url: http://10.10.1.1/provisioning/ubuntu24.04
 default_autoinstall_node:
   mac: "default"
   hostname: "default-host"
+
+sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
