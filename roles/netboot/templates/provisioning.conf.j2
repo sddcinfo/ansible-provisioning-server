@@ -37,16 +37,21 @@ enable-tftp
 tftp-root = {{ tftp_root }}
 
 # === PXE/iPXE Chainloading Logic ===
-# 1. Tag requests from iPXE firmware (DHCP option 175) or iPXE user class.
+# Tag requests coming from iPXE firmware (DHCP option 175)
 dhcp-match=set:ipxe,175
+
+# Tag requests coming from iPXE itself. iPXE identifies itself with user-class="iPXE".
 dhcp-userclass=set:ipxe,iPXE
 
-# 2. Tag requests from UEFI clients.
-dhcp-match=set:efi-x86_64,option:client-arch,7 # EFI x86-64
-dhcp-match=set:efi-x86_64,option:client-arch,9 # EFI x86-64
+# Tag requests from UEFI clients (DHCP option 93)
+# Arch 7 = EFI x86-64
+# Arch 9 = EFI x86-64
+dhcp-match=set:efi-x86_64,option:client-arch,7
+dhcp-match=set:efi-x86_64,option:client-arch,9
 
-# 3. Serve the iPXE bootloader to non-iPXE UEFI clients.
+# Stage 1: Client is a UEFI machine. Serve the iPXE EFI binary.
+# Matches if 'ipxe' is NOT set but 'efi-x86_64' IS set.
 dhcp-boot=tag:!ipxe,tag:efi-x86_64,ipxe.efi
 
-# 4. Chainload to the main iPXE script for clients that are now running iPXE.
+# Stage 2: Client is now running iPXE. Chainload to the main iPXE script.
 dhcp-boot=tag:ipxe,{{ ipxe_boot_url }}

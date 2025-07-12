@@ -38,6 +38,24 @@
     state: mounted
   when: not sentinel_file_stat.stat.exists
 
+- name: Create casper directory for PXE boot files
+  ansible.builtin.file:
+    path: "{{ ubuntu_provisioning_dir }}/casper"
+    state: directory
+    mode: '0755'
+  when: not sentinel_file_stat.stat.exists
+
+- name: Copy kernel and initrd files for PXE boot
+  ansible.builtin.copy:
+    src: "{{ ubuntu_iso_mount_point }}/casper/{{ item }}"
+    dest: "{{ ubuntu_provisioning_dir }}/casper/{{ item }}"
+    remote_src: yes
+    mode: preserve
+  loop:
+    - vmlinuz
+    - initrd
+  when: not sentinel_file_stat.stat.exists
+
 - name: Copy necessary files from ISO to provisioning directory
   ansible.builtin.copy:
     src: "{{ ubuntu_iso_mount_point }}/{{ item }}"
@@ -45,7 +63,6 @@
     remote_src: yes
     mode: preserve
   loop:
-    - casper
     - .disk
     - dists
     - EFI
