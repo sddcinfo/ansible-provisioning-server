@@ -24,7 +24,6 @@
   stat:
     path: "{{ item.dest }}"
   loop:
-    - { url: "http://boot.ipxe.org/undionly.kpxe", dest: "/var/lib/tftpboot/undionly.kpxe" }
     - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
   register: ipxe_files
 
