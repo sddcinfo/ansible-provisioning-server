@@ -203,16 +203,134 @@ function handle_callback(): void {
     }
 }
 
+/**
+ * Resets a machine's status to 'NEW' to trigger reprovisioning.
+ */
+function handle_reprovision(): void {
+    $mac = strtolower($_GET['mac'] ?? '');
+    if (!is_valid_mac($mac)) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "Invalid or missing MAC address.";
+        return;
+    }
+
+    if (set_status($mac, 'NEW')) {
+        // Redirect back to the status page
+        header("Location: ?action=status");
+        exit();
+    } else {
+        header("HTTP/1.1 500 Internal Server Error");
+        echo "ERROR: Failed to update status for {$mac}.";
+    }
+}
+
+/**
+ * Displays the current provisioning status for all known systems in a web UI.
+ */
+function handle_status(): void {
+    header("Content-Type: text/html");
+    $db = read_state_db();
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Provisioning Status</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .container { margin-top: 2rem; }
+        .table-responsive { margin-top: 1.5rem; }
+        .status-badge { font-size: 0.9em; }
+        .status-DONE { background-color: #28a745 !important; }
+        .status-INSTALLING { background-color: #007bff !important; }
+        .status-FAILED { background-color: #dc3545 !important; }
+        .status-NEW { background-color: #ffc107 !important; color: #212529 !important; }
+    </style>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">Ansible Provisioning Server</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center">
+            <h1 class="h2">System Provisioning Status</h1>
+            <button class="btn btn-secondary" onclick="location.reload();">Refresh</button>
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-bordered table-striped table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>MAC Address</th>
+                        <th>Status</th>
+                        <th>Last Update</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($db)): ?>
+                        <tr>
+                            <td colspan="4" class="text-center">No systems have been provisioned yet.</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($db as $mac => $data): ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($mac); ?></td>
+                                <td>
+                                    <span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ?>">
+                                        <?php echo htmlspecialchars($data['status']); ?>
+                                    </span>
+                                </td>
+                                <td><?php echo htmlspecialchars($data['timestamp'] ?? 'N/A'); ?></td>
+                                <td>
+                                    <a href="?action=reprovision&mac=<?php echo urlencode($mac); ?>" class="btn btn-primary btn-sm" onclick="return confirm('Are you sure you want to reprovision this machine?');">
+                                        Reprovision
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
+<?php
+}
+
 
 // --- Main Router ---
-$action = $_GET['action'] ?? 'boot';
+
+// The primary purpose of this script is to serve iPXE boot instructions.
+// If a 'mac' address is provided, that always takes precedence.
+if (isset($_GET['mac'])) {
+    $action = 'boot';
+} else {
+    // For all other cases, we rely on the 'action' parameter.
+    // If no action is specified, we default to showing the status page.
+    $action = $_GET['action'] ?? 'status';
+}
 
 switch ($action) {
     case 'callback':
         handle_callback();
         break;
     case 'boot':
-    default:
         handle_boot();
+        break;
+    case 'reprovision':
+        handle_reprovision();
+        break;
+    case 'status':
+    default:
+        handle_status();
         break;
 }
