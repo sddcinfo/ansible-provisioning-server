@@ -65,12 +65,9 @@
     owner: www-data
     group: www-data
     mode: "0644"
-  notify:
-    - restart nginx
-    - restart php-fpm
+  notify: restart nginx
   tags:
-    - nginx
-    - php
+    - www_content
 
 - name: Ensure sessions directory exists and has correct permissions
   file:
@@ -80,8 +77,7 @@
     group: www-data
     mode: "0775"
   tags:
-    - nginx
-    - php
+    - www_content
 
 - name: Ensure state file exists and has correct permissions
   file:
@@ -91,8 +87,7 @@
     group: www-data
     mode: "0664"
   tags:
-    - nginx
-    - php
+    - www_content
 
 - name: Create autoinstall templates base directory
   file:

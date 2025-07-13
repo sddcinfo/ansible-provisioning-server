@@ -34,8 +34,8 @@ For more efficient development and testing, you can use tags to run specific par
 # Example: Only update the Nginx configuration
 ansible-playbook -i inventory site.yml --tags "nginx" --ask-become-pass
 
-# Example: Update the autoinstall configs and the redfish script
-ansible-playbook -i inventory site.yml --tags "autoinstall_configs,redfish_script" --ask-become-pass
+# Example: Only update the web root content (index.php, etc.)
+ansible-playbook -i inventory site.yml --tags "www_content" --ask-become-pass
 ```
 
 **Available Tags:**
@@ -45,6 +45,7 @@ ansible-playbook -i inventory site.yml --tags "autoinstall_configs,redfish_scrip
 - `netboot`: Configures `dnsmasq` and TFTP for network booting.
 - `nginx`: Configures the Nginx web server.
 - `php`: Configures PHP-FPM.
+- `www_content`: Updates the content of the web root (e.g., `index.php`).
 - `autoinstall_configs`: Manages the Ubuntu Autoinstall configuration files.
 - `redfish_script`: Generates the `redfish.py` management script.
 

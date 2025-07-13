@@ -10,6 +10,23 @@ define('ISO_BASE_URL', '{{ iso_base_url }}');
 define('ISO_NAME', 'ubuntu-24.04.2-live-server-amd64.iso');
 // --- End Configuration ---
 
+// --- Main Router ---
+
+// The 'action' parameter is the primary driver of the script's behavior.
+// If 'action' is explicitly set, we use it.
+if (isset($_GET['action'])) {
+    $action = $_GET['action'];
+}
+// If 'action' is NOT set, we check if a 'mac' address is present.
+// This is for the initial iPXE boot request, which doesn't use 'action'.
+else if (isset($_GET['mac'])) {
+    $action = 'boot';
+}
+// If neither 'action' nor 'mac' is set, we default to the status page.
+else {
+    $action = 'status';
+}
+
 
 // --- Utility & State Management ---
 
@@ -207,6 +224,10 @@ function handle_callback(): void {
  * Resets a machine's status to 'NEW' to trigger reprovisioning.
  */
 function handle_reprovision(): void {
+    // --- DEBUG ---
+    die("<h1>REPROVISION ACTION CALLED</h1><p>If you see this, the routing is correct. The script will now stop.</p><pre>GET Params: " . print_r($_GET, true) . "</pre>");
+    // --- END DEBUG ---
+
     $mac = strtolower($_GET['mac'] ?? '');
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
@@ -257,6 +278,14 @@ function handle_status(): void {
     </nav>
 
     <div class="container">
+        <!-- DEBUG INFO -->
+        <div class="alert alert-info">
+            <strong>DEBUG INFO</strong><br>
+            Determined Action: <strong><?php echo htmlspecialchars($GLOBALS['action']); ?></strong><br>
+            GET Params: <pre><?php print_r($_GET); ?></pre>
+        </div>
+        <!-- END DEBUG INFO -->
+
         <div class="d-flex justify-content-between align-items-center">
             <h1 class="h2">System Provisioning Status</h1>
             <button class="btn btn-secondary" onclick="location.reload();">Refresh</button>
@@ -282,7 +311,7 @@ function handle_status(): void {
                             <tr>
                                 <td><?php echo htmlspecialchars($mac); ?></td>
                                 <td>
-                                    <span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ?>">
+                                    <span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ">
                                         <?php echo htmlspecialchars($data['status']); ?>
                                     </span>
                                 </td>
@@ -307,18 +336,7 @@ function handle_status(): void {
 }
 
 
-// --- Main Router ---
-
-// The primary purpose of this script is to serve iPXE boot instructions.
-// If a 'mac' address is provided, that always takes precedence.
-if (isset($_GET['mac'])) {
-    $action = 'boot';
-} else {
-    // For all other cases, we rely on the 'action' parameter.
-    // If no action is specified, we default to showing the status page.
-    $action = $_GET['action'] ?? 'status';
-}
-
+// --- Call Action Handler ---
 switch ($action) {
     case 'callback':
         handle_callback();
