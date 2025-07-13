@@ -96,3 +96,13 @@ This script is an integration test for your provisioning environment. After runn
 ```bash
 ./verify_playbook.sh
 ```
+
+### Web Interface
+
+The provisioning server now includes a web interface for monitoring and managing the status of provisioning nodes. Simply navigate to the IP address of the provisioning server in your web browser.
+
+**Features:**
+- **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, `DONE`, `FAILED`) for all configured nodes.
+- **Timestamps:** See when each node's status was last updated.
+- **Reprovisioning:** A "Reprovision" button allows you to reset a node's status to `NEW`, triggering a fresh installation on its next network boot.
+- **Auto-Refresh:** The page includes a "Refresh" button for manual updates.
