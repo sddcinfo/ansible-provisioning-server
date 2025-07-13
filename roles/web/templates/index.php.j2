@@ -224,10 +224,6 @@ function handle_callback(): void {
  * Resets a machine's status to 'NEW' to trigger reprovisioning.
  */
 function handle_reprovision(): void {
-    // --- DEBUG ---
-    die("<h1>REPROVISION ACTION CALLED</h1><p>If you see this, the routing is correct. The script will now stop.</p><pre>GET Params: " . print_r($_GET, true) . "</pre>");
-    // --- END DEBUG ---
-
     $mac = strtolower($_GET['mac'] ?? '');
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
@@ -278,14 +274,6 @@ function handle_status(): void {
     </nav>
 
     <div class="container">
-        <!-- DEBUG INFO -->
-        <div class="alert alert-info">
-            <strong>DEBUG INFO</strong><br>
-            Determined Action: <strong><?php echo htmlspecialchars($GLOBALS['action']); ?></strong><br>
-            GET Params: <pre><?php print_r($_GET); ?></pre>
-        </div>
-        <!-- END DEBUG INFO -->
-
         <div class="d-flex justify-content-between align-items-center">
             <h1 class="h2">System Provisioning Status</h1>
             <button class="btn btn-secondary" onclick="location.reload();">Refresh</button>
@@ -311,7 +299,7 @@ function handle_status(): void {
                             <tr>
                                 <td><?php echo htmlspecialchars($mac); ?></td>
                                 <td>
-                                    <span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ">
+                                    <span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ?>">
                                         <?php echo htmlspecialchars($data['status']); ?>
                                     </span>
                                 </td>
