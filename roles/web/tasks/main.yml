@@ -181,3 +181,23 @@
     mode: "0755"
   tags:
     - redfish_script
+
+- name: Generate verification script
+  template:
+    src: ../../templates/verify_provisioning.py.j2
+    dest: /home/sysadmin/verify_provisioning.py
+    owner: sysadmin
+    group: sysadmin
+    mode: "0755"
+  tags:
+    - verify_script
+
+- name: Generate verification script
+  template:
+    src: ../../templates/verify_provisioning.py.j2
+    dest: /home/sysadmin/verify_provisioning.py
+    owner: sysadmin
+    group: sysadmin
+    mode: "0755"
+  tags:
+    - verify_script
