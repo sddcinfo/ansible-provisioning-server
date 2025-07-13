@@ -11,12 +11,13 @@ autoinstall:
     layout: us
     variant: ""
   
-  # Define the initial user account with a hashed password.
+  # Define the initial user account with a hashed password and passwordless sudo.
   identity:
     hostname: "{{ hostname }}"
     realname: "sysadmin"
     username: sysadmin
     password: "{{ sysadmin_password }}"
+  sudo: ALL=(ALL) NOPASSWD:ALL
 
   # Configure SSH, install the server, and add an authorized key for passwordless access.
   ssh:
