@@ -1,14 +1,27 @@
 <?php
 // /srv/http/index.php
 
-// --- Configuration ---
+// --- Configuration & Testability ---
+
+// By default, use the production state file.
+$stateFilePath = __DIR__ . '/state.json';
+
+// FOR TESTING: If a 'test_state_file' parameter is passed, use a temporary file instead.
+$test_state_file = $_GET['test_state_file'] ?? null;
+if ($test_state_file) {
+    // Security: Use basename to prevent directory traversal and ensure the file is in a safe, expected location.
+    $safe_basename = basename($test_state_file);
+    $stateFilePath = "/var/www/html/sessions/" . $safe_basename;
+}
+
+define('STATE_FILE', $stateFilePath);
 define('SERVER_IP', '{{ server_ip }}');
-define('STATE_FILE', __DIR__ . '/state.json');
 define('CONFIG_DIR', __DIR__ . '/autoinstall_configs');
 define('SESSION_DIR', __DIR__ . '/sessions'); // MUST BE WRITABLE by web server
 define('ISO_BASE_URL', '{{ iso_base_url }}');
 define('ISO_NAME', 'ubuntu-24.04.2-live-server-amd64.iso');
 // --- End Configuration ---
+
 
 // --- Main Router ---
 
@@ -233,8 +246,12 @@ function handle_reprovision(): void {
 
     if (set_status($mac, 'NEW')) {
         // Redirect back to the status page
-        header("Location: ?action=status");
-        exit();
+        $redirect_url = '?action=status';
+        if (isset($_GET['test_state_file'])) {
+            $redirect_url .= '&test_state_file=' . urlencode($_GET['test_state_file']);
+        }
+        header("Location: " . $redirect_url);
+        exit(); // Terminate script execution after redirect
     } else {
         header("HTTP/1.1 500 Internal Server Error");
         echo "ERROR: Failed to update status for {$mac}.";
@@ -305,7 +322,13 @@ function handle_status(): void {
                                 </td>
                                 <td><?php echo htmlspecialchars($data['timestamp'] ?? 'N/A'); ?></td>
                                 <td>
-                                    <a href="?action=reprovision&mac=<?php echo urlencode($mac); ?>" class="btn btn-primary btn-sm" onclick="return confirm('Are you sure you want to reprovision this machine?');">
+                                    <?php
+                                        $reprovision_url = '?action=reprovision&mac=' . urlencode($mac);
+                                        if (isset($_GET['test_state_file'])) {
+                                            $reprovision_url .= '&test_state_file=' . urlencode($_GET['test_state_file']);
+                                        }
+                                    ?>
+                                    <a href="<?php echo $reprovision_url; ?>" class="btn btn-primary btn-sm" onclick="return confirm('Are you sure you want to reprovision this machine?');">
                                         Reprovision
                                     </a>
                                 </td>
