@@ -40,34 +40,54 @@ def get_redfish_credentials():
         sys.exit(1)
     with open(CREDENTIALS_FILE, 'r') as f:
         content = f.read().strip()
-        # Expecting format: REDFISH_AUTH="username:password"
         if content.startswith('REDFISH_AUTH="') and content.endswith('"'):
             user_pass = content.split('"')[1]
-            # Base64 encode the user:pass string for the Authorization header
             return base64.b64encode(user_pass.encode('utf-8')).decode('utf-8')
     print(f"Error: Could not parse REDFISH_AUTH in {CREDENTIALS_FILE}", file=sys.stderr)
     sys.exit(1)
 
 
-def print_output(node_name, action, response_body, http_status, verbose=False):
-    """Prints a formatted output based on the verbosity level."""
+def print_output(node_name, action, response_body, http_status, verbose=False, sensor_type=None):
+    """Prints a formatted output based on the verbosity level and action."""
     if verbose:
         print("--------------------------------------------------")
         print(f"Verbose output for '{node_name}':")
         if response_body:
             print(json.dumps(json.loads(response_body), indent=4))
         print(f"Action '{action}' completed successfully (HTTP {http_status}).")
+        return
+
+    if not response_body:
+        print(f"{node_name}: Action '{action}' completed successfully.")
+        return
+
+    data = json.loads(response_body)
+    if action == 'status':
+        power = data.get('PowerState', 'Unknown')
+        health = data.get('Status', {}).get('Health', 'Unknown')
+        print(f"{node_name}: Power={power}, Health={health}")
+    elif action == 'sensors':
+        print(f"Sensor status for '{node_name}':")
+        # Print Temperatures if requested or no type is specified
+        if not sensor_type or sensor_type == 'temperature':
+            for temp in data.get('Temperatures', []):
+                name = temp.get('Name', 'N/A')
+                reading = temp.get('ReadingCelsius', 'N/A')
+                status = temp.get('Status', {}).get('Health', 'N/A')
+                print(f"  - Temp: {name}: {reading}°C (Status: {status})")
+        # Print Fans if requested or no type is specified
+        if not sensor_type or sensor_type == 'fan':
+            for fan in data.get('Fans', []):
+                name = fan.get('FanName', 'N/A')
+                reading = fan.get('Reading', 'N/A')
+                units = fan.get('ReadingUnits', '')
+                status = fan.get('Status', {}).get('Health', 'N/A')
+                print(f"  - Fan: {name}: {reading} {units} (Status: {status})")
     else:
-        if action == 'status' and response_body:
-            data = json.loads(response_body)
-            power = data.get('PowerState', 'Unknown')
-            health = data.get('Status', {}).get('Health', 'Unknown')
-            print(f"{node_name}: Power={power}, Health={health}")
-        else:
-            print(f"{node_name}: Action '{action}' completed successfully.")
+        print(f"{node_name}: Action '{action}' completed successfully.")
 
 
-def execute_redfish_command(node_name, action, verbose=False):
+def execute_redfish_command(node_name, args):
     """Executes a single Redfish command against a single node."""
     ip = get_node_ip(node_name)
     if not ip:
@@ -75,38 +95,42 @@ def execute_redfish_command(node_name, action, verbose=False):
         return
 
     auth_header = f"Basic {get_redfish_credentials()}"
+    action = args.action
 
-    base_url = f"https://{ip}/redfish/v1/Systems/1"
+    base_urls = {
+        "system": f"https://{ip}/redfish/v1/Systems/1",
+        "chassis": f"https://{ip}/redfish/v1/Chassis/1"
+    }
+    
+    base_url = base_urls["system"]
     url_path = ""
     http_method = "GET"
     payload = None
 
     actions = {
-        "status": {"method": "GET"},
-        "power-on": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
-        "power-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulShutdown"}},
-        "power-force-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceOff"}},
-        "reboot": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
-        "bios": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup", "BootSourceOverrideEnabled": "Once"}}},
-        "pxe": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Pxe", "BootSourceOverrideEnabled": "Once"}}},
-        "disk": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Hdd", "BootSourceOverrideEnabled": "Once"}}},
+        "status": {"method": "GET", "base": "system"},
+        "sensors": {"method": "GET", "base": "chassis", "path": "/Thermal"},
+        "power-on": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
+        "power-off": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulShutdown"}},
+        "power-force-off": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceOff"}},
+        "reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
+        "bios": {"base": "system", "method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup", "BootSourceOverrideEnabled": "Once"}}},
+        "pxe": {"base": "system", "method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Pxe", "BootSourceOverrideEnabled": "Once"}}},
+        "disk": {"base": "system", "method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Hdd", "BootSourceOverrideEnabled": "Once"}}},
     }
 
     action_details = actions.get(action)
     http_method = action_details.get("method", "POST")
+    base_url = base_urls.get(action_details.get("base", "system"))
     url_path = action_details.get("path", "")
     if "payload" in action_details:
         payload = json.dumps(action_details["payload"]).encode('utf-8')
 
     full_url = f"{base_url}{url_path}"
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': auth_header
-    }
-    
+    headers = {'Content-Type': 'application/json', 'Authorization': auth_header}
     req = request.Request(full_url, data=payload, headers=headers, method=http_method)
 
-    if verbose:
+    if args.verbose:
         print("--------------------------------------------------")
         print(f"Executing action '{action}' on node '{node_name}' ({ip})")
         print(f"URL: {full_url}")
@@ -120,7 +144,8 @@ def execute_redfish_command(node_name, action, verbose=False):
         with request.urlopen(req, context=ctx) as response:
             response_body = response.read().decode('utf-8')
             http_status = response.getcode()
-            print_output(node_name, action, response_body, http_status, verbose)
+            sensor_type = args.type if action == 'sensors' else None
+            print_output(node_name, action, response_body, http_status, args.verbose, sensor_type)
 
     except error.HTTPError as e:
         print("--------------------------------------------------")
@@ -139,29 +164,26 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("nodes", help="A single node name or a comma-separated list of node names.")
-    parser.add_argument(
-        "action",
-        choices=[
-            "status", "power-on", "power-off", "power-force-off",
-            "reboot", "bios", "pxe", "disk"
-        ],
-        help="""The action to perform:
-  status           : Get system power state and health status.
-  power-on         : Powers the system on.
-  power-off        : Powers the system off gracefully.
-  power-force-off  : Forces the system to power off immediately.
-  reboot           : Performs a force restart of the node.
-  bios             : Sets the node to boot into BIOS setup on next restart.
-  pxe              : Sets the node to boot from PXE on next restart.
-  disk             : Sets the node to boot from the default disk on next restart."""
-    )
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
+
+    # Using subparsers for actions to handle action-specific arguments
+    subparsers = parser.add_subparsers(dest="action", required=True, help="The action to perform")
+
+    # Parser for actions without special options
+    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "bios", "pxe", "disk"]
+    for action in actions_list:
+        subparsers.add_parser(action, help=f"{action.capitalize()} the node(s).")
+
+    # Parser for the 'sensors' action with its own options
+    parser_sensors = subparsers.add_parser("sensors", help="Get temperature and fan sensor readings.")
+    parser_sensors.add_argument("--type", choices=["temperature", "fan"], help="Filter by sensor type.")
+    
     args = parser.parse_args()
 
     node_list = [node.strip() for node in args.nodes.split(',')]
 
     for node_name in node_list:
-        execute_redfish_command(node_name, args.action, args.verbose)
+        execute_redfish_command(node_name, args)
 
 
 if __name__ == "__main__":

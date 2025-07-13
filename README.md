@@ -75,6 +75,12 @@ The script can target a single node or a comma-separated list of nodes.
 
 # Reboot multiple nodes at once
 ./redfish.py console-node1,console-node2 reboot
+
+# Get all sensor data for a node
+./redfish.py console-node1 sensors
+
+# Get only temperature sensor data
+./redfish.py console-node1 sensors --type temperature
 ```
 
 ### Verification Script (`verify_playbook.sh`)
