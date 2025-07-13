@@ -49,16 +49,80 @@ def get_redfish_credentials():
     sys.exit(1)
 
 
+def execute_redfish_command(node_name, action):
+    """Executes a single Redfish command against a single node."""
+    ip = get_node_ip(node_name)
+    if not ip:
+        print(f"Error: Node '{node_name}' not found. Skipping.", file=sys.stderr)
+        return
+
+    auth_header = f"Basic {get_redfish_credentials()}"
+
+    base_url = f"https://{ip}/redfish/v1/Systems/1"
+    url_path = ""
+    http_method = "GET"
+    payload = None
+
+    actions = {
+        "status": {"method": "GET"},
+        "power-on": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
+        "power-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulShutdown"}},
+        "power-force-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceOff"}},
+        "reboot": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
+        "bios": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup", "BootSourceOverrideEnabled": "Once"}}},
+        "pxe": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Pxe", "BootSourceOverrideEnabled": "Once"}}},
+        "disk": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Hdd", "BootSourceOverrideEnabled": "Once"}}},
+    }
+
+    action_details = actions.get(action)
+    http_method = action_details.get("method", "POST")
+    url_path = action_details.get("path", "")
+    if "payload" in action_details:
+        payload = json.dumps(action_details["payload"]).encode('utf-8')
+
+    full_url = f"{base_url}{url_path}"
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': auth_header
+    }
+    
+    req = request.Request(full_url, data=payload, headers=headers, method=http_method)
+
+    print("--------------------------------------------------")
+    print(f"Executing action '{action}' on node '{node_name}' ({ip})")
+    print(f"URL: {full_url}")
+    print(f"METHOD: {http_method}")
+    print("--------------------------------------------------")
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    try:
+        with request.urlopen(req, context=ctx) as response:
+            response_body = response.read().decode('utf-8')
+            http_status = response.getcode()
+            
+            if response_body:
+                print(json.dumps(json.loads(response_body), indent=4))
+
+            print(f"Action '{action}' completed successfully on '{node_name}' (HTTP {http_status}).")
+
+    except error.HTTPError as e:
+        print(f"Error: Command failed on '{node_name}' with HTTP status {e.code}.", file=sys.stderr)
+        if e.fp:
+            print(e.fp.read().decode('utf-8'), file=sys.stderr)
+    except Exception as e:
+        print(f"An unexpected error occurred on node '{node_name}': {e}", file=sys.stderr)
+
+
 def main():
     """Main function to parse arguments and execute Redfish command."""
-    # Dynamically generate choices for the node argument from the CONSOLE_NODES list
-    node_choices = [node['hostname'] for node in CONSOLE_NODES]
-    
     parser = argparse.ArgumentParser(
-        description="A script to send Redfish commands to server nodes.",
+        description="A script to send Redfish commands to one or more server nodes.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    parser.add_argument("node", choices=node_choices, help="The target node name.")
+    parser.add_argument("nodes", help="A single node name or a comma-separated list of node names.")
     parser.add_argument(
         "action",
         choices=[
@@ -77,77 +141,11 @@ def main():
     )
     args = parser.parse_args()
 
-    # --- Get Node IP ---
-    ip = get_node_ip(args.node)
-    if not ip:
-        # This should not happen if the script is generated correctly
-        print(f"Error: Node '{args.node}' not found. Was this script generated correctly?", file=sys.stderr)
-        sys.exit(1)
+    # Split the nodes string by comma to get a list of nodes
+    node_list = [node.strip() for node in args.nodes.split(',')]
 
-    # --- Get Credentials ---
-    auth_header = f"Basic {get_redfish_credentials()}"
-
-    # --- Define Action ---
-    base_url = f"https://{ip}/redfish/v1/Systems/1"
-    url_path = ""
-    http_method = "GET"
-    payload = None
-
-    actions = {
-        "status": {"method": "GET"},
-        "power-on": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
-        "power-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulShutdown"}},
-        "power-force-off": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceOff"}},
-        "reboot": {"path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
-        "bios": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup", "BootSourceOverrideEnabled": "Once"}}},
-        "pxe": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Pxe", "BootSourceOverrideEnabled": "Once"}}},
-        "disk": {"method": "PATCH", "payload": {"Boot": {"BootSourceOverrideTarget": "Hdd", "BootSourceOverrideEnabled": "Once"}}},
-    }
-
-    action_details = actions.get(args.action)
-    http_method = action_details.get("method", "POST")
-    url_path = action_details.get("path", "")
-    if "payload" in action_details:
-        payload = json.dumps(action_details["payload"]).encode('utf-8')
-
-    # --- Execute Command ---
-    full_url = f"{base_url}{url_path}"
-    headers = {
-        'Content-Type': 'application/json',
-        'Authorization': auth_header
-    }
-    
-    req = request.Request(full_url, data=payload, headers=headers, method=http_method)
-
-    print("--------------------------------------------------")
-    print(f"Executing action '{args.action}' on node '{args.node}' ({ip})")
-    print(f"URL: {full_url}")
-    print(f"METHOD: {http_method}")
-    print("--------------------------------------------------")
-
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-
-    try:
-        with request.urlopen(req, context=ctx) as response:
-            response_body = response.read().decode('utf-8')
-            http_status = response.getcode()
-            
-            if response_body:
-                print(json.dumps(json.loads(response_body), indent=4))
-
-            print("--------------------------------------------------")
-            print(f"Action '{args.action}' completed successfully on '{args.node}' (HTTP {http_status}).")
-
-    except error.HTTPError as e:
-        print(f"Error: Command failed on '{args.node}' with HTTP status {e.code}.", file=sys.stderr)
-        if e.fp:
-            print(e.fp.read().decode('utf-8'), file=sys.stderr)
-        sys.exit(1)
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}", file=sys.stderr)
-        sys.exit(1)
+    for node_name in node_list:
+        execute_redfish_command(node_name, args.action)
 
 
 if __name__ == "__main__":

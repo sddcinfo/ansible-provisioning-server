@@ -144,3 +144,5 @@
     owner: sysadmin
     group: sysadmin
     mode: "0755"
+  tags:
+    - redfish_script
