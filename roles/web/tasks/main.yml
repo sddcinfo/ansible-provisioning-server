@@ -6,30 +6,41 @@
       - php-fpm
       - php-json
     state: present
+  tags:
+    - nginx
+    - php
 
 - name: Ensure php-fpm is running
   service:
     name: php8.3-fpm # This may need adjustment based on the exact package version
     state: started
     enabled: yes
+  tags:
+    - php
 
 - name: Configure php-fpm
   template:
     src: www.conf.j2
     dest: /etc/php/8.3/fpm/pool.d/www.conf
   notify: restart php-fpm
+  tags:
+    - php
 
 - name: Remove default nginx site
   file:
     path: /etc/nginx/sites-enabled/default
     state: absent
   notify: restart nginx
+  tags:
+    - nginx
 
 - name: Configure nginx
   template:
     src: nginx.conf.j2
     dest: /etc/nginx/sites-available/default
   notify: restart nginx
+  tags:
+    - nginx
 
 - name: Enable new nginx site
   file:
@@ -37,11 +48,15 @@
     dest: /etc/nginx/sites-enabled/default
     state: link
   notify: restart nginx
+  tags:
+    - nginx
 
 - name: Remove default nginx page
   file:
     path: /var/www/html/index.nginx-debian.html
     state: absent
+  tags:
+    - nginx
 
 - name: Copy web root
   template:
@@ -51,6 +66,9 @@
     group: www-data
     mode: "0644"
   notify: restart nginx
+  tags:
+    - nginx
+    - php
 
 - name: Ensure sessions directory exists and has correct permissions
   file:
@@ -59,6 +77,9 @@
     owner: www-data
     group: www-data
     mode: "0775"
+  tags:
+    - nginx
+    - php
 
 - name: Ensure state file exists and has correct permissions
   file:
@@ -67,6 +88,9 @@
     owner: www-data
     group: www-data
     mode: "0664"
+  tags:
+    - nginx
+    - php
 
 - name: Create autoinstall templates base directory
   file:
@@ -75,6 +99,8 @@
     owner: www-data
     group: www-data
     mode: "0755"
+  tags:
+    - autoinstall_configs
 
 - name: Create node-specific autoinstall directories
   file:
@@ -84,6 +110,8 @@
     group: www-data
     mode: "0755"
   loop: "{{ provisioning_nodes }}"
+  tags:
+    - autoinstall_configs
 
 - name: Create default autoinstall directory
   file:
@@ -92,6 +120,8 @@
     owner: www-data
     group: www-data
     mode: "0755"
+  tags:
+    - autoinstall_configs
 
 - name: Template out user-data for each node
   template:
@@ -104,6 +134,8 @@
   vars:
     hostname: "{{ item.hostname }}"
     mac: "{{ item.mac }}"
+  tags:
+    - autoinstall_configs
 
 - name: Template out meta-data for each node
   template:
@@ -115,6 +147,8 @@
   loop: "{{ provisioning_nodes }}"
   vars:
     hostname: "{{ item.hostname }}"
+  tags:
+    - autoinstall_configs
 
 - name: Template out user-data for default
   template:
@@ -126,6 +160,8 @@
   vars:
     hostname: "{{ default_autoinstall_node.hostname }}"
     mac: "{{ default_autoinstall_node.mac }}"
+  tags:
+    - autoinstall_configs
 
 - name: Template out meta-data for default
   template:
@@ -136,10 +172,12 @@
     mode: "0644"
   vars:
     hostname: "{{ default_autoinstall_node.hostname }}"
+  tags:
+    - autoinstall_configs
 
 - name: Generate redfish script
   template:
-    src: redfish.py.j2
+    src: ../../templates/redfish.py.j2
     dest: /home/sysadmin/redfish.py
     owner: sysadmin
     group: sysadmin

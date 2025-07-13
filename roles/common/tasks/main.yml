@@ -3,6 +3,8 @@
   apt:
     update_cache: yes
     cache_valid_time: 3600 # Cache is valid for 1 hour
+  tags:
+    - packages
 
 - name: Install common packages
   apt:
@@ -13,11 +15,15 @@
       - wget
       - unzip
     state: present
+  tags:
+    - packages
 
 - name: Generate SSH key pair for sysadmin user
   ansible.builtin.shell:
     cmd: "ssh-keygen -t ed25519 -f /home/sysadmin/.ssh/sysadmin_automation_key -N ''"
     creates: /home/sysadmin/.ssh/sysadmin_automation_key
+  tags:
+    - ssh_keys
 
 - name: Set correct ownership for sysadmin SSH keys
   ansible.builtin.file:
@@ -25,6 +31,8 @@
     owner: sysadmin
     group: sysadmin
     mode: "0600"
+  tags:
+    - ssh_keys
 
 - name: Set correct ownership for sysadmin public SSH key
   ansible.builtin.file:
@@ -32,6 +40,8 @@
     owner: sysadmin
     group: sysadmin
     mode: "0644"
+  tags:
+    - ssh_keys
 
 - name: Configure SSH client for sysadmin user
   ansible.builtin.blockinfile:
@@ -46,6 +56,8 @@
         IdentityFile /home/sysadmin/.ssh/sysadmin_automation_key
         StrictHostKeyChecking no
         UserKnownHostsFile /dev/null
+  tags:
+    - ssh_keys
 
 
 - name: Generate SSH key pair for root user
@@ -53,28 +65,38 @@
     cmd: "ssh-keygen -t ed25519 -f /root/.ssh/root_automation_key -N ''"
     creates: /root/.ssh/root_automation_key
   become: yes
+  tags:
+    - ssh_keys
 
 - name: Read sysadmin public key
   ansible.builtin.slurp:
     src: /home/sysadmin/.ssh/sysadmin_automation_key.pub
   register: sysadmin_pub_key_file
+  tags:
+    - ssh_keys
 
 - name: Read root public key
   ansible.builtin.slurp:
     src: /root/.ssh/root_automation_key.pub
   become: yes
   register: root_pub_key_file
+  tags:
+    - ssh_keys
 
 - name: Set public keys as facts
   ansible.builtin.set_fact:
     sysadmin_pub_key: "{{ sysadmin_pub_key_file.content | b64decode }}"
     root_pub_key: "{{ root_pub_key_file.content | b64decode }}"
+  tags:
+    - ssh_keys
 
 - name: Authorize new sysadmin key for local sysadmin user
   ansible.posix.authorized_key:
     user: sysadmin
     key: "{{ sysadmin_pub_key }}"
     state: present
+  tags:
+    - ssh_keys
 
 - name: Authorize new root key for local root user
   ansible.posix.authorized_key:
@@ -82,6 +104,8 @@
     key: "{{ root_pub_key }}"
     state: present
   become: yes
+  tags:
+    - ssh_keys
 
 - name: Securely configure SSH daemon
   ansible.builtin.lineinfile:
@@ -90,12 +114,16 @@
     line: 'PermitRootLogin prohibit-password'
     state: present
   notify: restart sshd
+  tags:
+    - ssh_keys
 
 - name: Update all packages to the latest version
   apt:
     upgrade: dist
     autoremove: yes
     autoclean: yes
+  tags:
+    - packages
 
 - name: Configure sysctl to disable IPv6 and enable IP forwarding
   ansible.posix.sysctl:
@@ -108,8 +136,8 @@
     - { key: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
     - { key: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
     - { key: 'net.ipv4.ip_forward', value: '1' }
-
-
+  tags:
+    - network
 
 - name: Install packages for NAT
   apt:
@@ -117,18 +145,26 @@
       - iptables
       - iptables-persistent
     state: present
+  tags:
+    - network
 
 - name: Check if NAT rule exists
   ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
   register: nat_rule_check
   changed_when: false
   failed_when: false
+  tags:
+    - network
 
 - name: Set NAT rule for internal network
   ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
   when: nat_rule_check.rc != 0
+  tags:
+    - network
 
 - name: Persist iptables rules
   ansible.builtin.command:
     cmd: netfilter-persistent save
   changed_when: false
+  tags:
+    - network

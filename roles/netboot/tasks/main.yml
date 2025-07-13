@@ -5,12 +5,16 @@
       - dnsmasq
       - tftpd-hpa
     state: present
+  tags:
+    - netboot
 
 - name: Disable and stop tftpd-hpa
   service:
     name: tftpd-hpa
     state: stopped
     enabled: no
+  tags:
+    - netboot
 
 - name: Create tftpboot directory
   file:
@@ -19,6 +23,8 @@
     owner: tftp
     group: tftp
     mode: "0755"
+  tags:
+    - netboot
 
 - name: Check if iPXE bootloaders exist
   stat:
@@ -26,6 +32,8 @@
   loop:
     - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
   register: ipxe_files
+  tags:
+    - netboot
 
 - name: Download iPXE bootloaders
   get_url:
@@ -38,25 +46,35 @@
   until: ipxe_download is succeeded
   retries: 5
   delay: 2
+  tags:
+    - netboot
 
 - name: Disable systemd-resolved
   service:
     name: systemd-resolved
     state: stopped
     enabled: no
+  tags:
+    - netboot
 
 - name: Remove /etc/resolv.conf symlink
   file:
     path: /etc/resolv.conf
     state: absent
+  tags:
+    - netboot
 
 - name: Create static /etc/resolv.conf
   template:
     src: resolv.conf.j2
     dest: /etc/resolv.conf
+  tags:
+    - netboot
 
 - name: Copy dnsmasq config
   template:
     src: provisioning.conf.j2
     dest: /etc/dnsmasq.d/provisioning.conf
   notify: restart dnsmasq
+  tags:
+    - netboot
