@@ -47,38 +47,28 @@ ansible-playbook -i inventory site.yml --tags "redfish_script,verify_script" --a
 - `redfish_script`: Generates the `redfish.py` management script.
 - `verify_script`: Generates the `verify_provisioning.py` script.
 
+## Testing
+
+This project includes a native Python test suite for validating the functionality of the provisioning server. The tests are located in the `test/` directory.
+
+**Running Tests:**
+
+To run the entire test suite, execute the following command from the root of the `ansible-provisioning-server` directory:
+
+```bash
+python3 -m unittest discover test
+```
+
+The test suite will automatically handle the setup and teardown of any necessary test files.
+
 ---
 
-## Included Scripts
+## Web Interface
 
-### Redfish Management Script (`redfish.py`)
+The provisioning server now includes a web interface for monitoring and managing the status of provisioning nodes. Simply navigate to the IP address of the provisioning server in your web browser.
 
-This Python script is **dynamically generated** by the playbook and provides a convenient way to manage your servers' power and boot settings using the Redfish API. It is always in sync with the nodes defined in your Ansible inventory.
-
-**One-Time Setup:**
-
-Before using the script for the first time, you must create a credentials file.
-```bash
-# Replace with your actual credentials
-echo 'REDFISH_AUTH="your_username:your_password"' > ~/.redfish_credentials
-chmod 600 ~/.redfish_credentials
-```
-
-**Usage:**
-```bash
-# Get the power status of a single console node
-./redfish.py console-node1 status
-
-# Get a human-readable summary of system inventory
-./redfish.py console-node1 inventory --resource system
-```
-
-### Verification Script (`verify_provisioning.py`)
-
-This native Python script is an integration test for your provisioning environment. After running the main playbook, you can execute this script to get a clear, color-coded report on whether all the critical components are functioning correctly. It automatically tests all nodes defined in your inventory.
-
-**Usage:**
-```bash
-sudo ./verify_provisioning.py
-```
-The script requires `sudo` to check the system's `iptables` rules.
+**Features:**
+- **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, `DONE`, `FAILED`) for all configured nodes.
+- **Timestamps:** See when each node's status was last updated.
+- **Reprovisioning:** A "Reprovision" button allows you to reset a node's status to `NEW`, triggering a fresh installation on its next network boot.
+- **Auto-Refresh:** The page includes a "Refresh" button for manual updates.
