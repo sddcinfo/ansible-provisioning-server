@@ -51,7 +51,7 @@
     group: sysadmin
     mode: "0600"
     block: |
-      Host 10.10.1.*
+      Host 10.10.1.* node* console-node*
         User sysadmin
         IdentityFile /home/sysadmin/.ssh/sysadmin_automation_key
         StrictHostKeyChecking no
