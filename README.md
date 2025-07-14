@@ -45,6 +45,24 @@ ansible-playbook -i inventory site.yml --tags "redfish_script,verify_script" --a
 - `autoinstall_configs`: Manages the Ubuntu Autoinstall configuration files.
 - `redfish_script`: Generates the `redfish.py` management script.
 
+## Redfish Configuration
+
+The `redfish.py` script requires a credential file to authenticate with the server's Baseboard Management Controller (BMC).
+
+**Steps:**
+
+1.  **Create the credential file:**
+    ```bash
+    echo 'REDFISH_AUTH="your_bmc_user:your_bmc_password"' > ~/.redfish_credentials
+    ```
+
+2.  **Set secure permissions:**
+    ```bash
+    chmod 600 ~/.redfish_credentials
+    ```
+
+The script will automatically use these credentials when you run it.
+
 ## Testing
 
 This project includes a native Python test suite for validating the functionality of the provisioning server. The tests are located in the `test/` directory.
