@@ -28,13 +28,17 @@ ansible-playbook -i inventory site.yml --ask-become-pass
 
 ## Node Configuration (`configure_nodes.yml`)
 
-For reliable, persistent boot order changes on Supermicro motherboards, this playbook uses a dedicated `bios` role that leverages Supermicro's official `sum` utility. This is the recommended way to ensure servers boot to UEFI PXE.
+For reliable, persistent boot order changes on Supermicro motherboards, this playbook uses a dedicated `bios` role that leverages Supermicro's official `sum` utility. This is the recommended way to ensure servers boot to UEFI PXE for provisioning.
 
 The role is idempotent and will only make changes if the boot order is not already correctly set.
 
 ### Configuration
 
-The `bios` role requires IPMI credentials and the target IP address to be defined. You can pass these as extra variables.
+The `bios` role requires IPMI credentials and the target IP address to be defined. You can pass these as extra variables. The boot order itself is defined as a variable in the playbook.
+
+**Default "Provisioning" Boot Order:**
+1.  UEFI Network
+2.  UEFI Hard Disk
 
 ### Usage
 

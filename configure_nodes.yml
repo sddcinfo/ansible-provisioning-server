@@ -1,6 +1,10 @@
 ---
 - hosts: all
   gather_facts: no
+  vars:
+    bios_boot_order:
+      - "0006" # UEFI Network
+      - "0000" # UEFI Hard Disk
   roles:
     - role: bios
       tags: [bios]
