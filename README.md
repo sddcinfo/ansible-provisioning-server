@@ -4,20 +4,21 @@ This Ansible project configures a dedicated server to provide all the necessary 
 
 ## Overview
 
-The playbook configures the target server with the following services:
+This repository contains two main Ansible playbooks:
+
+1.  **`site.yml`**: Configures the local server to be a provisioning server. This includes setting up DHCP, TFTP, and a web server to host iPXE scripts and Ubuntu autoinstall configurations.
+2.  **`configure_nodes.yml`**: Configures the bare-metal servers that will be provisioned. This playbook uses the Supermicro `sum` utility to reliably set the BIOS boot order to UEFI PXE.
+
+## Provisioning Server Setup (`site.yml`)
+
+This playbook configures the target server with the following services:
 
 - **DHCP & TFTP:** `dnsmasq` provides DHCP services and serves the iPXE bootloader over TFTP.
 - **Web Server:** `Nginx` and `PHP` serve dynamic iPXE boot scripts and Ubuntu Autoinstall (cloud-init) configurations.
 - **ISO Preparation:** The playbook downloads a specified Ubuntu ISO, extracts the necessary kernel and initrd, and makes the full ISO contents available over HTTP for the installation process.
 - **Network Address Translation (NAT):** Configures the server to act as a gateway, providing internet access to the provisioning network.
 
-## Configuration
-
-All configuration is handled through variables defined in the `roles/*/vars/` directories. The most critical variables are in `roles/netboot/vars/main.yml`, where you define the nodes to be provisioned.
-
-## Usage
-
-### Full Provisioning
+### Usage
 
 To run the entire playbook and configure all services from scratch:
 ```bash
@@ -25,30 +26,28 @@ To run the entire playbook and configure all services from scratch:
 ansible-playbook -i inventory site.yml --ask-become-pass
 ```
 
-### Targeted Testing with Tags
+## Node Configuration (`configure_nodes.yml`)
 
-For more efficient development and testing, you can use tags to run specific parts of the playbook.
+For reliable, persistent boot order changes on Supermicro motherboards, this playbook uses a dedicated `bios` role that leverages Supermicro's official `sum` utility. This is the recommended way to ensure servers boot to UEFI PXE.
 
+The role is idempotent and will only make changes if the boot order is not already correctly set.
+
+### Configuration
+
+The `bios` role requires IPMI credentials and the target IP address to be defined. You can pass these as extra variables.
+
+### Usage
+
+To apply the BIOS configuration to one or more nodes, you can run the playbook and target the specific nodes from your inventory, passing the required variables.
+
+**Example for a single node:**
 ```bash
-# Example: Only regenerate the utility scripts
-ansible-playbook -i inventory site.yml --tags "redfish_script,verify_script" --ask-become-pass
+ansible-playbook -i inventory configure_nodes.yml --tags "bios" -e "ipmi_address=10.10.1.11 ipmi_user=ADMIN ipmi_pass='your_password'"
 ```
-
-**Available Tags:**
-- `packages`: Installs common packages.
-- `ssh_keys`: Configures SSH keys and the SSH daemon.
-- `network`: Configures NAT and IP forwarding.
-- `netboot`: Configures `dnsmasq` and TFTP for network booting.
-- `nginx`: Configures the Nginx web server.
-- `php`: Configures PHP-FPM.
-- `www_content`: Updates the content of the web root (e.g., `index.php`).
-- `autoinstall_configs`: Manages the Ubuntu Autoinstall configuration files.
-- `redfish_script`: Generates the `redfish.py` management script.
-- `bios`: Configures the BIOS boot order for Supermicro servers using the `sum` utility.
 
 ## Redfish Management (`redfish.py`)
 
-The `redfish.py` script provides basic server management functions like checking status, power cycling, and getting inventory. It can also be used for one-time boot device overrides.
+For basic, one-off server management tasks like checking power status or rebooting a node, you can use the `redfish.py` script.
 
 **Credential Setup:**
 
@@ -62,39 +61,6 @@ The `redfish.py` script provides basic server management functions like checking
     chmod 600 ~/.redfish_credentials
     ```
 
-**One-Time Boot Override:**
-
-To set a one-time boot device (e.g., to boot into the BIOS setup), use the `set-boot` command.
-
-```bash
-./redfish.py <node_name> set-boot --device BiosSetup
-```
-
-This setting is not persistent and will only apply to the next reboot.
-
-## BIOS Configuration (`bios` role)
-
-For reliable, persistent boot order changes on Supermicro motherboards, this playbook includes a `bios` role that uses Supermicro's official `sum` utility. This is the recommended way to ensure servers boot to UEFI PXE.
-
-**Configuration:**
-
-The `bios` role requires IPMI credentials and the target IP address to be defined. You should create a `vars/main.yml` file within the `roles/bios/` directory or pass these as extra variables.
-
-**Example `roles/bios/vars/main.yml`:**
-```yaml
-ipmi_address: "10.10.1.11"
-ipmi_user: "ADMIN"
-ipmi_pass: "VMware1!"
-```
-
-**Usage:**
-
-To apply only the BIOS configuration, you can run the playbook with the `bios` tag:
-```bash
-ansible-playbook -i inventory site.yml --tags "bios"
-```
-
-## Testing
 
 This project includes a native Python test suite for validating the functionality of the provisioning server. The tests are located in the `test/` directory.
 
