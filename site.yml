@@ -7,3 +7,5 @@
     - netboot
     - web
     - iso_preparation
+    - role: bios
+      tags: [bios]

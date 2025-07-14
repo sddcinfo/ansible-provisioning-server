@@ -44,12 +44,13 @@ ansible-playbook -i inventory site.yml --tags "redfish_script,verify_script" --a
 - `www_content`: Updates the content of the web root (e.g., `index.php`).
 - `autoinstall_configs`: Manages the Ubuntu Autoinstall configuration files.
 - `redfish_script`: Generates the `redfish.py` management script.
+- `bios`: Configures the BIOS boot order for Supermicro servers using the `sum` utility.
 
-## Redfish Configuration
+## Redfish Management (`redfish.py`)
 
-The `redfish.py` script requires a credential file to authenticate with the server's Baseboard Management Controller (BMC).
+The `redfish.py` script provides basic server management functions like checking status, power cycling, and getting inventory. It can also be used for one-time boot device overrides.
 
-**Steps:**
+**Credential Setup:**
 
 1.  **Create the credential file:**
     ```bash
@@ -61,7 +62,37 @@ The `redfish.py` script requires a credential file to authenticate with the serv
     chmod 600 ~/.redfish_credentials
     ```
 
-The script will automatically use these credentials when you run it.
+**One-Time Boot Override:**
+
+To set a one-time boot device (e.g., to boot into the BIOS setup), use the `set-boot` command.
+
+```bash
+./redfish.py <node_name> set-boot --device BiosSetup
+```
+
+This setting is not persistent and will only apply to the next reboot.
+
+## BIOS Configuration (`bios` role)
+
+For reliable, persistent boot order changes on Supermicro motherboards, this playbook includes a `bios` role that uses Supermicro's official `sum` utility. This is the recommended way to ensure servers boot to UEFI PXE.
+
+**Configuration:**
+
+The `bios` role requires IPMI credentials and the target IP address to be defined. You should create a `vars/main.yml` file within the `roles/bios/` directory or pass these as extra variables.
+
+**Example `roles/bios/vars/main.yml`:**
+```yaml
+ipmi_address: "10.10.1.11"
+ipmi_user: "ADMIN"
+ipmi_pass: "VMware1!"
+```
+
+**Usage:**
+
+To apply only the BIOS configuration, you can run the playbook with the `bios` tag:
+```bash
+ansible-playbook -i inventory site.yml --tags "bios"
+```
 
 ## Testing
 

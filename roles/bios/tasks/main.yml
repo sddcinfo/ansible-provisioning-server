@@ -1,0 +1,33 @@
+---
+- name: Check if SUM utility exists
+  stat:
+    path: "/home/sysadmin/sum_2.14.0_Linux_x86_64/sum"
+  register: sum_utility
+
+- name: Download and extract SUM utility
+  when: not sum_utility.stat.exists
+  block:
+    - name: Download SUM
+      get_url:
+        url: "https://www.supermicro.com/Bios/sw_download/698/sum_2.14.0_Linux_x86_64_20240215.tar.gz"
+        dest: "/home/sysadmin/sum_2.14.0_Linux_x86_64_20240215.tar.gz"
+
+    - name: Extract SUM
+      unarchive:
+        src: "/home/sysadmin/sum_2.14.0_Linux_x86_64_20240215.tar.gz"
+        dest: "/home/sysadmin/"
+        remote_src: yes
+
+- name: Template out BIOS boot order config
+  template:
+    src: boot_order.j2
+    dest: /home/sysadmin/modified_bios.txt
+
+- name: Apply BIOS boot order
+  command: "/home/sysadmin/sum_2.14.0_Linux_x86_64/sum -i {{ ipmi_address }} -u {{ ipmi_user }} -p '{{ ipmi_pass }}' -c ChangeBiosCfg --file /home/sysadmin/modified_bios.txt"
+  register: bios_change_result
+  changed_when: "'Status: The BIOS configuration is updated' in bios_change_result.stdout"
+
+- name: Reboot server to apply settings
+  command: "/home/sysadmin/sum_2.14.0_Linux_x86_64/sum -i {{ ipmi_address }} -u {{ ipmi_user }} -p '{{ ipmi_pass }}' -c Reset"
+  when: bios_change_result.changed and reboot_after_bios_change | default(true)

@@ -185,6 +185,18 @@ def build_request(node_name, args):
         "reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
     }
 
+    if action == "set-boot":
+        http_method = "PATCH"
+        base_url = base_urls["system"]
+        url_path = ""
+        payload = json.dumps({
+            "Boot": {
+                "BootSourceOverrideTarget": args.device,
+                "BootSourceOverrideEnabled": "Once"
+            }
+        }).encode('utf-8')
+        return request.Request(f"{base_url}{url_path}", data=payload, headers={'Content-Type': 'application/json'}, method=http_method), ip
+
     action_details = actions.get(action, {})
     http_method = action_details.get("method", "POST")
     base_url = base_urls.get(action_details.get("base", "system"))
@@ -222,6 +234,9 @@ def execute_redfish_command(node_name, args):
 
     except error.HTTPError as e:
         print(f"Error: Command failed on '{node_name}' with HTTP status {e.code}.", file=sys.stderr)
+        body = e.read().decode('utf-8')
+        if body:
+            print(f"Response body:\n{body}", file=sys.stderr)
     except Exception as e:
         print(f"An unexpected error occurred on node '{node_name}': {e}", file=sys.stderr)
 
@@ -231,22 +246,30 @@ def create_parser():
     parser = argparse.ArgumentParser(description="A script to send Redfish commands to server nodes.", formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("nodes", nargs='?', default="", help="A single node name or a comma-separated list of node names.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
-    subparsers = parser.add_subparsers(dest="action", metavar='action')
+    subparsers = parser.add_subparsers(dest="action", metavar='action', required=True)
 
-    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "bios", "pxe", "disk"]
+    # Actions that don't need extra arguments
+    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "disk"]
     for action in actions_list:
-        subparsers.add_parser(action)
+        subparsers.add_parser(action, help=f"{action.capitalize()} the server.")
 
-    parser_sensors = subparsers.add_parser("sensors")
-    parser_sensors.add_argument("--type", choices=["temperature", "fan"])
-    parser_sensors.add_argument("--name")
-    parser_sensors.add_argument("--format", choices=["json", "csv"])
+    # Set Boot
+    parser_set_boot = subparsers.add_parser("set-boot", help="Set the boot device for the next boot.")
+    parser_set_boot.add_argument("--device", choices=["Pxe", "Hdd", "Cd", "BiosSetup", "Usb"], required=True, help="The boot device to use.")
+
+    # Sensors
+    parser_sensors = subparsers.add_parser("sensors", help="Get sensor data.")
+    parser_sensors.add_argument("--type", choices=["temperature", "fan"], help="Filter by sensor type.")
+    parser_sensors.add_argument("--name", help="Filter by sensor name (case-insensitive substring).")
+    parser_sensors.add_argument("--format", choices=["json", "csv"], help="Specify the output format.")
     
-    parser_inventory = subparsers.add_parser("inventory")
-    parser_inventory.add_argument("--resource", choices=["system", "bios", "memory", "processors", "storage"], required=True)
-    parser_inventory.add_argument("--format", choices=["json", "csv"])
+    # Inventory
+    parser_inventory = subparsers.add_parser("inventory", help="Get hardware inventory.")
+    parser_inventory.add_argument("--resource", choices=["system", "bios", "memory", "processors", "storage"], required=True, help="The type of inventory to retrieve.")
+    parser_inventory.add_argument("--format", choices=["json", "csv"], help="Specify the output format.")
     
     return parser
+
 
 
 def main():
