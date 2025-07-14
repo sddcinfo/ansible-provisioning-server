@@ -4,30 +4,34 @@
 interface={{ dnsmasq_interface }}
 listen-address={{ dnsmasq_listen_address }}
 bind-interfaces
-
 no-resolv
-
 domain={{ dnsmasq_domain }}
+domain-needed
+bogus-priv
 
-# === DNS Configuration ===
+# === Upstream DNS Servers ===
 {% for server in dnsmasq_upstream_servers %}
 server={{ server }}
 {% endfor %}
-domain-needed
-bogus-priv
-local=/{{ dnsmasq_domain }}/
 
+# === Static DNS Records (A and PTR) ===
 {% for host in dnsmasq_static_hosts %}
-address=/{{ host.name }}/{{ host.ip }}
+# A record for {{ host.name }}
+host-record={{ host.name }},{{ host.ip }}
+# PTR record for {{ host.name }}
+ptr-record={{ host.ip | regex_replace('^(\d+\.\d+\.\d+\.)(\d+)$', '\2.\1') }}in-addr.arpa.,{{ host.name }}
 {% endfor %}
 
+# === DHCP Reservations and DNS Records (A and PTR) ===
 {% for host in dnsmasq_dhcp_reservations %}
-# DNS record for the short name (e.g., "console-node1")
-address=/{{ host.hostname }}/{{ host.ip }}
-# DNS record for the FQDN (e.g., "console-node1.sddc.info")
-address=/{{ host.hostname }}.sddc.info/{{ host.ip }}
-# DHCP reservation and hostname assignment
+# DHCP reservation for {{ host.hostname }}
 dhcp-host={{ host.mac }},{{ host.ip }},{{ host.hostname }}
+# A record for the FQDN (e.g., "console-node1.sddc.info")
+host-record={{ host.hostname }}.{{ dnsmasq_domain }},{{ host.ip }}
+# A record for the short name (e.g., "console-node1")
+host-record={{ host.hostname }},{{ host.ip }}
+# PTR record for {{ host.hostname }}
+ptr-record={{ host.ip | regex_replace('^(\d+\.\d+\.\d+\.)(\d+)$', '\2.\1') }}in-addr.arpa.,{{ host.hostname }}.{{ dnsmasq_domain }}
 {% endfor %}
 
 # === DHCP Configuration ===
@@ -37,25 +41,12 @@ dhcp-option=option:dns-server,{{ dnsmasq_dhcp_dns_server }}
 dhcp-authoritative
 log-dhcp
 
+# === PXE/iPXE Chainloading Logic ===
 enable-tftp
 tftp-root = {{ tftp_root }}
-
-# === PXE/iPXE Chainloading Logic ===
-# Tag requests coming from iPXE firmware (DHCP option 175)
 dhcp-match=set:ipxe,175
-
-# Tag requests coming from iPXE itself. iPXE identifies itself with user-class="iPXE".
 dhcp-userclass=set:ipxe,iPXE
-
-# Tag requests from UEFI clients (DHCP option 93)
-# Arch 7 = EFI x86-64
-# Arch 9 = EFI x86-64
 dhcp-match=set:efi-x86_64,option:client-arch,7
 dhcp-match=set:efi-x86_64,option:client-arch,9
-
-# Stage 1: Client is a UEFI machine. Serve the iPXE EFI binary.
-# Matches if 'ipxe' is NOT set but 'efi-x86_64' IS set.
 dhcp-boot=tag:!ipxe,tag:efi-x86_64,ipxe.efi
-
-# Stage 2: Client is now running iPXE. Chainload to the main iPXE script.
 dhcp-boot=tag:ipxe,{{ ipxe_boot_url }}
