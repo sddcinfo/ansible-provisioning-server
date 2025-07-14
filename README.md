@@ -34,9 +34,9 @@ For basic, one-off server management tasks like checking power status or rebooti
     chmod 600 ~/.redfish_credentials
     ```
 
-### `set_smc_boot_order.sh`
+### `set_boot_order.py`
 
-For reliable, persistent boot order changes on Supermicro motherboards, this project includes the `set_smc_boot_order.sh` script, which uses Supermicro's official `sum` utility.
+For reliable, persistent boot order changes on Supermicro motherboards, this project includes the `set_boot_order.py` script, which uses Supermicro's official `sum` utility.
 
 **Usage:**
 
@@ -44,7 +44,7 @@ To apply a specific boot order to a node, run the script with the IPMI address, 
 
 **Example:**
 ```bash
-./set_smc_boot_order.sh 10.10.1.11 ADMIN 'your_password' 0006 0000
+./set_boot_order.py 10.10.1.11 ADMIN 'your_password' 0006 0000
 ```
 This example sets the boot order to UEFI Network (`0006`) first, followed by UEFI Hard Disk (`0000`).
 
