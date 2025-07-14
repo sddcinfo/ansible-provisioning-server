@@ -25,11 +25,14 @@ class bcolors:
     BOLD = '\033[1m'
     UNDERLINE = '\033[4m'
 
+def get_all_nodes():
+    """Gets all nodes from the configuration file."""
+    with open(NODES_FILE) as f:
+        return json.load(f)["console_nodes"]
+
 def get_node_ip(node_name):
     """Finds the IP address for a given node hostname."""
-    with open(NODES_FILE) as f:
-        nodes = json.load(f)["console_nodes"]
-    for node in nodes:
+    for node in get_all_nodes():
         if node.get("hostname") == node_name:
             return node.get("ip")
     return None
@@ -101,22 +104,25 @@ def process_response(node_name, action, response_body, http_status, args):
     """Processes the response and returns formatted output string."""
     output_format = getattr(args, 'format', None)
     if not response_body:
-        return f"{node_name}: Action '{action}' completed successfully."
+        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Action '{action}' completed successfully."
     data = json.loads(response_body)
     if output_format == 'json':
         return json.dumps(data, indent=4)
     elif output_format == 'csv':
         return format_as_csv(data, action if action == 'sensors' else args.resource)
     if action == 'inventory':
-        return format_as_human_readable(data, args.resource)
+        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n{format_as_human_readable(data, args.resource)}"
     elif action == 'status':
         power = data.get('PowerState', 'Unknown')
         health = data.get('Status', {}).get('Health', 'Unknown')
-        return f"{node_name}: Power={power}, Health={health}"
+        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Power={power}, Health={health}"
+    elif action == 'get-boot-order':
+        boot_order = data.get('BootOrder', [])
+        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Boot Order: {', '.join(boot_order)}"
     elif action == 'sensors':
         sensor_type = getattr(args, 'type', None)
         sensor_name = getattr(args, 'name', None)
-        output = [f"Sensor status for '{node_name}':"]
+        output = [f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Sensor status:"]
         name_filter = sensor_name.lower() if sensor_name else None
         found_sensor = False
         if not sensor_type or sensor_type == 'temperature':
@@ -124,18 +130,18 @@ def process_response(node_name, action, response_body, http_status, args):
                 name = temp.get('Name', 'N/A')
                 if name_filter and name_filter not in name.lower(): continue
                 found_sensor = True
-                output.append(f"  - Temp: {temp.get('Name', 'N/A')}: {temp.get('ReadingCelsius', 'N/A')}°C (Status: {temp.get('Status', {}).get('Health', 'N/A')})")
+                output.append(f"    - Temp: {temp.get('Name', 'N/A')}: {temp.get('ReadingCelsius', 'N/A')}°C (Status: {temp.get('Status', {}).get('Health', 'N/A')})")
         if not sensor_type or sensor_type == 'fan':
             for fan in data.get('Fans', []):
                 name = fan.get('FanName', 'N/A')
                 if name_filter and name_filter not in name.lower(): continue
                 found_sensor = True
-                output.append(f"  - Fan: {fan.get('FanName', 'N/A')}: {fan.get('Reading', 'N/A')} {fan.get('ReadingUnits', '')} (Status: {fan.get('Status', {}).get('Health', 'N/A')})")
+                output.append(f"    - Fan: {fan.get('FanName', 'N/A')}: {fan.get('Reading', 'N/A')} {fan.get('ReadingUnits', '')} (Status: {fan.get('Status', {}).get('Health', 'N/A')})")
         if not found_sensor:
-            output.append("  - No matching sensors found.")
+            output.append("    - No matching sensors found.")
         return "\n".join(output)
     else:
-        return f"{node_name}: Action '{action}' completed successfully."
+        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Action '{action}' completed successfully."
 
 def build_request(node_name, args):
     """Builds the Redfish request object based on the provided arguments."""
@@ -151,6 +157,7 @@ def build_request(node_name, args):
         "inventory": {"method": "GET", "base": "system"},
         "power-on": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
         "reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
+        "get-boot-order": {"method": "GET", "base": "system"},
     }
     if action == "set-boot":
         http_method = "PATCH"
@@ -183,7 +190,7 @@ def execute_redfish_command(node_name, args):
         with request.urlopen(req, context=ctx) as response:
             response_body = response.read().decode('utf-8')
             http_status = response.getcode()
-            output = process_response(node_name, args.action, response_body, http_status, args)
+            output = process_response(node_name, action, response_body, http_status, args)
             print(output)
     except error.HTTPError as e:
         print(f"{bcolors.FAIL}Error: Command failed on '{node_name}' with HTTP status {e.code}.{bcolors.ENDC}", file=sys.stderr)
@@ -196,12 +203,14 @@ def execute_redfish_command(node_name, args):
 def create_parser():
     """Creates and returns the argument parser."""
     parser = argparse.ArgumentParser(description="A script to send Redfish commands to server nodes.", formatter_class=argparse.RawTextHelpFormatter)
-    parser.add_argument("nodes", nargs='+', help="One or more node hostnames (e.g., console-node1 console-node2).")
+    node_group = parser.add_mutually_exclusive_group(required=True)
+    node_group.add_argument("-n", "--nodes", nargs='+', help="One or more node hostnames (e.g., console-node1 console-node2).")
+    node_group.add_argument("-a", "--all", action="store_true", help="Run the command on all nodes defined in nodes.json.")
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
     subparsers = parser.add_subparsers(dest="action", metavar='action', required=True)
-    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "disk"]
+    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "disk", "get-boot-order"]
     for action in actions_list:
-        subparsers.add_parser(action, help=f"{action.capitalize()} the server.")
+        subparsers.add_parser(action, help=f"{action.capitalize().replace('-', ' ')} the server.")
     parser_set_boot = subparsers.add_parser("set-boot", help="Set the boot device for the next boot.")
     parser_set_boot.add_argument("--device", choices=["Pxe", "Hdd", "Cd", "BiosSetup", "Usb"], required=True, help="The boot device to use.")
     parser_sensors = subparsers.add_parser("sensors", help="Get sensor data.")
@@ -217,7 +226,14 @@ def main():
     """Main function to parse arguments and execute Redfish command."""
     parser = create_parser()
     args = parser.parse_args()
-    for node_name in args.nodes:
+    
+    nodes_to_run = []
+    if args.all:
+        nodes_to_run = [node["hostname"] for node in get_all_nodes()]
+    else:
+        nodes_to_run = args.nodes
+
+    for node_name in nodes_to_run:
         execute_redfish_command(node_name, args)
 
 if __name__ == "__main__":

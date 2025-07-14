@@ -31,9 +31,11 @@ This project includes external Python scripts for managing servers. They share a
 
 ### `redfish.py`
 
-For basic, one-off server management tasks like checking power status or rebooting a node, you can use the `redfish.py` script.
+For basic, one-off server management tasks like checking power status or rebooting a node, you can use the `redfish.py` script. It can operate on a single node, multiple nodes, or all nodes defined in `nodes.json`.
 
 **Credential Setup:**
+
+This script requires a credential file at `~/.redfish_credentials` to authenticate with the servers' Baseboard Management Controllers (BMCs).
 
 1.  **Create the credential file:**
     ```bash
@@ -43,6 +45,23 @@ For basic, one-off server management tasks like checking power status or rebooti
 2.  **Set secure permissions:**
     ```bash
     chmod 600 ~/.redfish_credentials
+    ```
+
+**Usage Examples:**
+
+*   **Get the status of a single node:**
+    ```bash
+    ./redfish.py -n console-node1 status
+    ```
+
+*   **Reboot multiple nodes:**
+    ```bash
+    ./redfish.py -n console-node1 console-node2 reboot
+    ```
+
+*   **Get the boot order for all nodes:**
+    ```bash
+    ./redfish.py -a get-boot-order
     ```
 
 ### `set_boot_order.py`
