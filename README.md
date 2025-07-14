@@ -16,7 +16,7 @@ ansible-playbook -i inventory site.yml --ask-become-pass
 
 ## External Scripts
 
-This project includes external scripts for managing servers.
+This project includes external Python scripts for managing servers. They share a common configuration file, `nodes.json`, for node information.
 
 ### `redfish.py`
 
@@ -40,13 +40,18 @@ For reliable, persistent boot order changes on Supermicro motherboards, this pro
 
 **Usage:**
 
-To apply a specific boot order to a node, run the script with the IPMI address, credentials, and a space-separated list of boot device codes.
+To apply a specific boot order to a node, run the script with the node's hostname, IPMI credentials, and a space-separated list of boot devices.
 
 **Example:**
 ```bash
-./set_boot_order.py 10.10.1.11 ADMIN 'your_password' 0006 0000
+./set_boot_order.py console-node1 ADMIN 'your_password' pxe hdd
 ```
-This example sets the boot order to UEFI Network (`0006`) first, followed by UEFI Hard Disk (`0000`).
+This example sets the boot order to UEFI Network (`pxe`) first, followed by UEFI Hard Disk (`hdd`).
+
+**Available Boot Devices:**
+*   `pxe`
+*   `hdd`
+*   `disabled`
 
 
 This project includes a native Python test suite for validating the functionality of the provisioning server. The tests are located in the `test/` directory.

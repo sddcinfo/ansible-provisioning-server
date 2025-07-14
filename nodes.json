@@ -1,0 +1,8 @@
+{
+  "console_nodes": [
+    {"mac": "ac:1f:6b:6c:58:31", "ip": "10.10.1.11", "hostname": "console-node1"},
+    {"mac": "ac:1f:6b:6c:58:06", "ip": "10.10.1.12", "hostname": "console-node2"},
+    {"mac": "ac:1f:6b:6c:58:2c", "ip": "10.10.1.13", "hostname": "console-node3"},
+    {"mac": "ac:1f:6b:6c:58:0a", "ip": "10.10.1.14", "hostname": "console-node4"}
+  ]
+}
