@@ -17,8 +17,11 @@ autoinstall:
     realname: "sysadmin"
     username: sysadmin
     password: "{{ sysadmin_password }}"
-  sudo: ALL=(ALL) NOPASSWD:ALL
-
+  user-data:
+    users:
+      - name: sysadmin
+        sudo: ALL=(ALL) NOPASSWD:ALL
+  
   # Configure SSH, install the server, and add an authorized key for passwordless access.
   ssh:
     install-server: true
