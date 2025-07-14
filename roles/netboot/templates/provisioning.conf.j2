@@ -3,16 +3,18 @@
 # === General Configuration ===
 interface={{ dnsmasq_interface }}
 listen-address={{ dnsmasq_listen_address }}
+listen-address=127.0.0.1
 bind-interfaces
 no-resolv
+no-poll
+clear-on-reload
 domain={{ dnsmasq_domain }}
 domain-needed
 bogus-priv
 
 # === Upstream DNS Servers ===
-{% for server in dnsmasq_upstream_servers %}
-server={{ server }}
-{% endfor %}
+server=8.8.8.8
+server=8.8.4.4
 
 # === Static DNS Records (A and PTR) ===
 {% for host in dnsmasq_static_hosts %}
