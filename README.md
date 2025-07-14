@@ -6,6 +6,17 @@ This Ansible project configures a dedicated server to provide all the necessary 
 
 This playbook configures the local server to be a provisioning server. This includes setting up DHCP, TFTP, and a web server to host iPXE scripts and Ubuntu autoinstall configurations.
 
+## Prerequisites
+
+This project relies on two external components that must be configured correctly:
+
+1.  **Supermicro Update Manager (`sum`)**: The `set_boot_order.py` script will automatically download this utility if it's not found.
+2.  **Redfish Credentials**: The `redfish.py` script requires a credential file at `~/.redfish_credentials`.
+
+## Configuration
+
+The single source of truth for all node information (MAC addresses, IP addresses, and hostnames) is the `nodes.json` file in the root of this repository. All scripts and playbooks read from this file.
+
 ## Usage
 
 To run the entire playbook and configure all services from scratch:
