@@ -22,7 +22,11 @@ address=/{{ host.name }}/{{ host.ip }}
 {% endfor %}
 
 {% for host in dnsmasq_dhcp_reservations %}
+# DNS record for the short name (e.g., "console-node1")
+address=/{{ host.hostname }}/{{ host.ip }}
+# DNS record for the FQDN (e.g., "console-node1.sddc.info")
 address=/{{ host.hostname }}.sddc.info/{{ host.ip }}
+# DHCP reservation and hostname assignment
 dhcp-host={{ host.mac }},{{ host.ip }},{{ host.hostname }}
 {% endfor %}
 
