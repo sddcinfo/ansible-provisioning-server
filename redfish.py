@@ -6,235 +6,186 @@ import ssl
 import sys
 from urllib import request, error
 import base64
-import csv
-import io
 
 # --- Configuration ---
 NODES_FILE = "/home/sysadmin/ansible-provisioning-server/nodes.json"
 CREDENTIALS_FILE = os.path.expanduser("~/.redfish_credentials")
 
-# --- Color Codes ---
-class bcolors:
-    HEADER = '\033[95m'
-    OKBLUE = '\033[94m'
-    OKCYAN = '\033[96m'
-    OKGREEN = '\033[92m'
-    WARNING = '\033[93m'
-    FAIL = '\033[91m'
-    ENDC = '\033[0m'
-    BOLD = '\033[1m'
-    UNDERLINE = '\033[4m'
-
-def get_all_nodes():
-    """Gets all nodes from the configuration file."""
-    with open(NODES_FILE) as f:
-        return json.load(f)["console_nodes"]
-
 def get_node_ip(node_name):
     """Finds the IP address for a given node hostname."""
-    for node in get_all_nodes():
-        if node.get("hostname") == node_name:
-            return node.get("ip")
+    try:
+        with open(NODES_FILE) as f:
+            nodes = json.load(f).get("console_nodes", [])
+        for node in nodes:
+            if node.get("hostname") == node_name:
+                return node.get("ip")
+    except FileNotFoundError:
+        print(f"Error: Nodes file not found at {NODES_FILE}", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError:
+        print(f"Error: Could not decode JSON from {NODES_FILE}", file=sys.stderr)
+        sys.exit(1)
     return None
 
 def get_redfish_credentials():
     """Reads and decodes the Basic Auth string from the credentials file."""
-    if not os.path.exists(CREDENTIALS_FILE):
-        print(f"{bcolors.FAIL}Error: Credentials file not found at {CREDENTIALS_FILE}{bcolors.ENDC}", file=sys.stderr)
-        print("\n---", file=sys.stderr)
-        print("Credential Configuration:", file=sys.stderr)
-        print("This script requires a credential file located at ~/.redfish_credentials.", file=sys.stderr)
-        print("The file must contain the username and password for the Redfish API in the following format:", file=sys.stderr)
-        print("\nREDFISH_AUTH=\"username:password\"\n", file=sys.stderr)
-        print("To create and secure this file, run the following commands:", file=sys.stderr)
-        print("  echo 'REDFISH_AUTH=\"your_user:your_password\"' > ~/.redfish_credentials", file=sys.stderr)
-        print("  chmod 600 ~/.redfish_credentials", file=sys.stderr)
-        print("---\n", file=sys.stderr)
-        sys.exit(1)
-    if os.stat(CREDENTIALS_FILE).st_mode & 0o077 != 0:
-        print(f"{bcolors.FAIL}Error: Credentials file ({CREDENTIALS_FILE}) has insecure permissions. Please set to 600.{bcolors.ENDC}", file=sys.stderr)
-        sys.exit(1)
-    with open(CREDENTIALS_FILE, 'r') as f:
-        content = f.read().strip()
+    try:
+        with open(CREDENTIALS_FILE, 'r') as f:
+            content = f.read().strip()
         if content.startswith('REDFISH_AUTH="') and content.endswith('"'):
             user_pass = content.split('"')[1]
             return base64.b64encode(user_pass.encode('utf-8')).decode('utf-8')
-    print(f"{bcolors.FAIL}Error: Could not parse REDFISH_AUTH in {CREDENTIALS_FILE}{bcolors.ENDC}", file=sys.stderr)
+    except FileNotFoundError:
+        print(f"Error: Credentials file not found at {CREDENTIALS_FILE}", file=sys.stderr)
+        sys.exit(1)
+    
+    print(f"Error: Could not parse REDFISH_AUTH in {CREDENTIALS_FILE}", file=sys.stderr)
     sys.exit(1)
 
-def format_as_csv(data, resource_type):
-    """Formats a JSON response into a flattened CSV string."""
-    output = io.StringIO()
-    writer = None
-    if resource_type == 'sensors' and ('Temperatures' in data or 'Fans' in data):
-        fieldnames = ['SensorType', 'Name', 'Reading', 'Units', 'Status']
-        writer = csv.DictWriter(output, fieldnames=fieldnames)
-        writer.writeheader()
-        for temp in data.get('Temperatures', []):
-            writer.writerow({'SensorType': 'Temperature', 'Name': temp.get('Name'), 'Reading': temp.get('ReadingCelsius'), 'Units': 'C', 'Status': temp.get('Status', {}).get('Health')})
-        for fan in data.get('Fans', []):
-            writer.writerow({'SensorType': 'Fan', 'Name': fan.get('FanName'), 'Reading': fan.get('Reading'), 'Units': fan.get('ReadingUnits'), 'Status': fan.get('Status', {}).get('Health')})
-    else:
-        flat_data = {}
-        def flatten(x, name=''):
-            if type(x) is dict:
-                for a in x: flatten(x[a], name + a + '_')
-            else: flat_data[name[:-1]] = x
-        flatten(data)
-        if flat_data:
-            writer = csv.DictWriter(output, fieldnames=flat_data.keys())
-            writer.writeheader()
-            writer.writerow(flat_data)
-    return output.getvalue()
+def format_output(data, as_json=False, name_filter=None):
+    """Formats the output as either human-readable or JSON."""
+    # If a filter is applied to sensor data, process it first.
+    if name_filter and ('Temperatures' in data or 'Fans' in data):
+        filtered_data = {}
+        name_filter_lower = name_filter.lower()
+        
+        temps = [t for t in data.get('Temperatures', []) if name_filter_lower in t.get('Name', '').lower()]
+        if temps:
+            filtered_data['Temperatures'] = temps
+            
+        fans = [f for f in data.get('Fans', []) if name_filter_lower in f.get('FanName', '').lower()]
+        if fans:
+            filtered_data['Fans'] = fans
+        
+        data = filtered_data # Replace original data with filtered data
 
-def format_as_human_readable(data, resource_type):
-    """Formats a JSON response into a human-readable summary."""
-    output = [f"Inventory for resource '{resource_type}':"]
-    if resource_type == 'system':
-        output.append(f"  - Manufacturer: {data.get('Manufacturer', 'N/A')}")
-        output.append(f"  - Model: {data.get('Model', 'N/A')}")
-        output.append(f"  - Serial Number: {data.get('SerialNumber', 'N/A')}")
-    elif resource_type in ['memory', 'processors'] and 'Members' in data:
-        output.append(f"  - {resource_type.capitalize()} Details:")
-        for member in data.get('Members', []):
-            output.append(f"    - {member.get('@odata.id')}")
-    return "\n".join(output)
-
-def process_response(node_name, action, response_body, http_status, args):
-    """Processes the response and returns formatted output string."""
-    output_format = getattr(args, 'format', None)
-    if not response_body:
-        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Action '{action}' completed successfully."
-    data = json.loads(response_body)
-    if output_format == 'json':
+    if as_json:
         return json.dumps(data, indent=4)
-    elif output_format == 'csv':
-        return format_as_csv(data, action if action == 'sensors' else args.resource)
-    if action == 'inventory':
-        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n{format_as_human_readable(data, args.resource)}"
-    elif action == 'status':
-        power = data.get('PowerState', 'Unknown')
-        health = data.get('Status', {}).get('Health', 'Unknown')
-        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Power={power}, Health={health}"
-    elif action == 'get-boot-order':
-        boot_order = data.get('BootOrder', [])
-        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Boot Order: {', '.join(boot_order)}"
-    elif action == 'sensors':
-        sensor_type = getattr(args, 'type', None)
-        sensor_name = getattr(args, 'name', None)
-        output = [f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Sensor status:"]
-        name_filter = sensor_name.lower() if sensor_name else None
-        found_sensor = False
-        if not sensor_type or sensor_type == 'temperature':
-            for temp in data.get('Temperatures', []):
-                name = temp.get('Name', 'N/A')
-                if name_filter and name_filter not in name.lower(): continue
-                found_sensor = True
-                output.append(f"    - Temp: {temp.get('Name', 'N/A')}: {temp.get('ReadingCelsius', 'N/A')}°C (Status: {temp.get('Status', {}).get('Health', 'N/A')})")
-        if not sensor_type or sensor_type == 'fan':
-            for fan in data.get('Fans', []):
-                name = fan.get('FanName', 'N/A')
-                if name_filter and name_filter not in name.lower(): continue
-                found_sensor = True
-                output.append(f"    - Fan: {fan.get('FanName', 'N/A')}: {fan.get('Reading', 'N/A')} {fan.get('ReadingUnits', '')} (Status: {fan.get('Status', {}).get('Health', 'N/A')})")
-        if not found_sensor:
-            output.append("    - No matching sensors found.")
+    
+    if not data:
+        return "No matching sensors found."
+
+    # Simple human-readable format for success messages
+    if "Success" in data:
+        return f"Success: {data['Success']['Message']}"
+    
+    # Simple human-readable format for sensor data
+    if "Temperatures" in data or "Fans" in data:
+        output = ["Sensor Status:"]
+        for temp in data.get('Temperatures', []):
+            output.append(f"  - Temp: {temp.get('Name', 'N/A')}: {temp.get('ReadingCelsius', 'N/A')} C (Status: {temp.get('Status', {}).get('Health', 'N/A')})")
+        for fan in data.get('Fans', []):
+            output.append(f"  - Fan: {fan.get('FanName', 'N/A')}: {fan.get('Reading', 'N/A')} {fan.get('ReadingUnits', '')} (Status: {fan.get('Status', {}).get('Health', 'N/A')})")
         return "\n".join(output)
-    else:
-        return f"{bcolors.OKGREEN}Node: {node_name}{bcolors.ENDC}\n  Action '{action}' completed successfully."
+        
+    # Default to pretty-printed JSON for other cases
+    return json.dumps(data, indent=4)
 
-def build_request(node_name, args):
-    """Builds the Redfish request object based on the provided arguments."""
-    ip = get_node_ip(node_name)
-    if not ip:
-        return None, None
-    action = args.action
-    base_urls = {"system": f"https://{ip}/redfish/v1/Systems/1", "chassis": f"https://{ip}/redfish/v1/Chassis/1"}
-    inventory_paths = {"system": "", "bios": "/Bios", "memory": "/Memory", "processors": "/Processors", "storage": "/Storage"}
+def main():
+    """Main function to execute a simple Redfish command."""
+    parser = argparse.ArgumentParser(description="A simplified script to send Redfish commands.")
+    parser.add_argument("node", help="The hostname of the node (e.g., console-node2).")
+    
+    subparsers = parser.add_subparsers(dest="action", required=True, metavar='action')
+
+    # Sensor parser
+    parser_sensors = subparsers.add_parser("sensors", help="Get sensor data.")
+    parser_sensors.add_argument("--filter", help="Filter sensors by name (case-insensitive substring).")
+    parser_sensors.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+    
+    # Other actions
+    parser_boot = subparsers.add_parser("set-boot-to-bios", help="Set the server to boot into BIOS setup on next restart.")
+    parser_boot.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+    
+    parser_power_on = subparsers.add_parser("power-on", help="Power on the server.")
+    parser_power_on.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    parser_power_off = subparsers.add_parser("power-off", help="Gracefully shut down the server.")
+    parser_power_off.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    parser_power_reboot = subparsers.add_parser("power-reboot", help="Gracefully restart the server.")
+    parser_power_reboot.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    parser_power_cycle = subparsers.add_parser("power-cycle", help="Force restart the server.")
+    parser_power_cycle.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    args = parser.parse_args()
+
+    node_ip = get_node_ip(args.node)
+    if not node_ip:
+        print(f"Error: IP address for node '{args.node}' not found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Define API actions
     actions = {
-        "status": {"method": "GET", "base": "system"},
-        "sensors": {"method": "GET", "base": "chassis", "path": "/Thermal"},
-        "inventory": {"method": "GET", "base": "system"},
-        "power-on": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
-        "reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
-        "get-boot-order": {"method": "GET", "base": "system"},
+        "sensors": {
+            "path": "/redfish/v1/Chassis/1/Thermal",
+            "method": "GET",
+            "payload": None
+        },
+        "set-boot-to-bios": {
+            "path": "/redfish/v1/Systems/1",
+            "method": "PATCH",
+            "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup"}}
+        },
+        "power-on": {
+            "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "method": "POST",
+            "payload": {"ResetType": "On"}
+        },
+        "power-off": {
+            "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "method": "POST",
+            "payload": {"ResetType": "GracefulShutdown"}
+        },
+        "power-reboot": {
+            "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "method": "POST",
+            "payload": {"ResetType": "GracefulRestart"}
+        },
+        "power-cycle": {
+            "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+            "method": "POST",
+            "payload": {"ResetType": "ForceRestart"}
+        }
     }
-    if action == "set-boot":
-        http_method = "PATCH"
-        base_url = base_urls["system"]
-        url_path = ""
-        payload = json.dumps({"Boot": {"BootSourceOverrideTarget": args.device, "BootSourceOverrideEnabled": "Once"}}).encode('utf-8')
-        return request.Request(f"{base_url}{url_path}", data=payload, headers={'Content-Type': 'application/json'}, method=http_method), ip
-    action_details = actions.get(action, {})
-    http_method = action_details.get("method", "POST")
-    base_url = base_urls.get(action_details.get("base", "system"))
-    if action == 'inventory':
-        url_path = inventory_paths.get(args.resource, "")
-    else:
-        url_path = action_details.get("path", "")
-    payload = json.dumps(action_details["payload"]).encode('utf-8') if "payload" in action_details else None
-    return request.Request(f"{base_url}{url_path}", data=payload, headers={'Content-Type': 'application/json'}, method=http_method), ip
-
-def execute_redfish_command(node_name, args):
-    """Executes a single Redfish command against a single node."""
-    req, ip = build_request(node_name, args)
-    if not req:
-        print(f"{bcolors.FAIL}Error: Node '{node_name}' not found. Skipping.{bcolors.ENDC}", file=sys.stderr)
-        return
+    
+    action_details = actions[args.action]
+    url = f"https://{node_ip}{action_details['path']}"
     auth_header = f"Basic {get_redfish_credentials()}"
-    req.add_header("Authorization", auth_header)
+    
+    headers = {"Authorization": auth_header}
+    payload = None
+    if action_details['payload']:
+        headers['Content-Type'] = 'application/json'
+        payload = json.dumps(action_details['payload']).encode('utf-8')
+
+    req = request.Request(url, headers=headers, method=action_details['method'], data=payload)
+    
+    # Ignore SSL certificate validation
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+
     try:
         with request.urlopen(req, context=ctx) as response:
             response_body = response.read().decode('utf-8')
-            http_status = response.getcode()
-            output = process_response(node_name, action, response_body, http_status, args)
-            print(output)
+            data = json.loads(response_body) if response_body else {"Success": {"Message": f"Action '{args.action}' completed with status {response.getcode()}."}}
+            
+            name_filter = getattr(args, 'filter', None)
+            print(format_output(data, args.json, name_filter))
+
     except error.HTTPError as e:
-        print(f"{bcolors.FAIL}Error: Command failed on '{node_name}' with HTTP status {e.code}.{bcolors.ENDC}", file=sys.stderr)
-        body = e.read().decode('utf-8')
-        if body:
+        print(f"Error: HTTP request failed for node '{args.node}' with status {e.code}.", file=sys.stderr)
+        try:
+            body = e.read().decode('utf-8')
             print(f"Response body:\n{body}", file=sys.stderr)
+        except Exception:
+            pass # Ignore if reading body fails
+        sys.exit(1)
     except Exception as e:
-        print(f"{bcolors.FAIL}An unexpected error occurred on node '{node_name}': {e}{bcolors.ENDC}", file=sys.stderr)
-
-def create_parser():
-    """Creates and returns the argument parser."""
-    parser = argparse.ArgumentParser(description="A script to send Redfish commands to server nodes.", formatter_class=argparse.RawTextHelpFormatter)
-    node_group = parser.add_mutually_exclusive_group(required=True)
-    node_group.add_argument("-n", "--nodes", nargs='+', help="One or more node hostnames (e.g., console-node1 console-node2).")
-    node_group.add_argument("-a", "--all", action="store_true", help="Run the command on all nodes defined in nodes.json.")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
-    subparsers = parser.add_subparsers(dest="action", metavar='action', required=True)
-    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "disk", "get-boot-order"]
-    for action in actions_list:
-        subparsers.add_parser(action, help=f"{action.capitalize().replace('-', ' ')} the server.")
-    parser_set_boot = subparsers.add_parser("set-boot", help="Set the boot device for the next boot.")
-    parser_set_boot.add_argument("--device", choices=["Pxe", "Hdd", "Cd", "BiosSetup", "Usb"], required=True, help="The boot device to use.")
-    parser_sensors = subparsers.add_parser("sensors", help="Get sensor data.")
-    parser_sensors.add_argument("--type", choices=["temperature", "fan"], help="Filter by sensor type.")
-    parser_sensors.add_argument("--name", help="Filter by sensor name (case-insensitive substring).")
-    parser_sensors.add_argument("--format", choices=["json", "csv"], help="Specify the output format.")
-    parser_inventory = subparsers.add_parser("inventory", help="Get hardware inventory.")
-    parser_inventory.add_argument("--resource", choices=["system", "bios", "memory", "processors", "storage"], required=True, help="The type of inventory to retrieve.")
-    parser_inventory.add_argument("--format", choices=["json", "csv"], help="Specify the output format.")
-    return parser
-
-def main():
-    """Main function to parse arguments and execute Redfish command."""
-    parser = create_parser()
-    args = parser.parse_args()
-    
-    nodes_to_run = []
-    if args.all:
-        nodes_to_run = [node["hostname"] for node in get_all_nodes()]
-    else:
-        nodes_to_run = args.nodes
-
-    for node_name in nodes_to_run:
-        execute_redfish_command(node_name, args)
+        print(f"An unexpected error occurred for node '{args.node}': {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
