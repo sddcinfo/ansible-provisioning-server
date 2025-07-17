@@ -1,10 +1,58 @@
 ---
+- name: Create temporary /etc/resolv.conf to allow for DNS lookups
+  ansible.builtin.copy:
+    dest: /etc/resolv.conf
+    content: "nameserver 1.1.1.1"
+
+- name: Disable systemd-resolved
+  service:
+    name: systemd-resolved
+    state: stopped
+    enabled: no
+  tags:
+    - netboot
+
 - name: Install dnsmasq and tftp server
   apt:
     name:
       - dnsmasq
       - tftpd-hpa
     state: present
+  tags:
+    - netboot
+
+- name: Copy dnsmasq config
+  template:
+    src: provisioning.conf.j2
+    dest: /etc/dnsmasq.d/provisioning.conf
+  notify: restart dnsmasq
+  tags:
+    - netboot
+    - dnsmasq_template
+
+- name: Flush handlers to restart dnsmasq
+  meta: flush_handlers
+
+
+- name: Start and enable dnsmasq
+  service:
+    name: dnsmasq
+    state: started
+    enabled: yes
+  tags:
+    - netboot
+
+- name: Remove /etc/resolv.conf symlink
+  file:
+    path: /etc/resolv.conf
+    state: absent
+  tags:
+    - netboot
+
+- name: Create static /etc/resolv.conf
+  template:
+    src: resolv.conf.j2
+    dest: /etc/resolv.conf
   tags:
     - netboot
 
@@ -46,40 +94,5 @@
   until: ipxe_download is succeeded
   retries: 5
   delay: 2
-  tags:
-    - netboot
-
-- name: Create temporary /etc/resolv.conf to allow for DNS lookups
-  ansible.builtin.copy:
-    dest: /etc/resolv.conf
-    content: "nameserver 1.1.1.1"
-
-- name: Disable systemd-resolved
-  service:
-    name: systemd-resolved
-    state: stopped
-    enabled: no
-  tags:
-    - netboot
-
-- name: Remove /etc/resolv.conf symlink
-  file:
-    path: /etc/resolv.conf
-    state: absent
-  tags:
-    - netboot
-
-- name: Create static /etc/resolv.conf
-  template:
-    src: resolv.conf.j2
-    dest: /etc/resolv.conf
-  tags:
-    - netboot
-
-- name: Copy dnsmasq config
-  template:
-    src: provisioning.conf.j2
-    dest: /etc/dnsmasq.d/provisioning.conf
-  notify: restart dnsmasq
   tags:
     - netboot

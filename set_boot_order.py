@@ -138,7 +138,7 @@ def main():
         print(f"\n{bcolors.BOLD}{bcolors.OKGREEN}BIOS configuration applied and {args.node_name} is powering on.{bcolors.ENDC}")
 
     run_command(
-        f"python3 /home/sysadmin/redfish.py {args.node_name} bios",
+        f"python3 /home/sysadmin/ansible-provisioning-server/redfish.py {args.node_name} set-boot-to-bios",
         f"Setting one-time boot to BIOS for {args.node_name}"
     )
 

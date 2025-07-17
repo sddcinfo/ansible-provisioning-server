@@ -1,22 +1,21 @@
 # /etc/dnsmasq.d/provisioning.conf
 
 # === General Configuration ===
-interface={{ dnsmasq_interface }}
 listen-address={{ dnsmasq_listen_address }}
-listen-address=127.0.0.1
-bind-interfaces
-no-resolv
-no-poll
-clear-on-reload
-no-negcache
+#bind-interfaces
+#no-resolv
+#no-poll
+#clear-on-reload
+#no-negcache
 domain={{ dnsmasq_domain }}
-domain-needed
-bogus-priv
+#domain-needed
+#bogus-priv
 dns-forward-max=1000
 
 # === Upstream DNS Servers ===
-server=1.1.1.1
-server=1.0.0.1
+server=8.8.8.8
+#server=1.0.0.1
+#server=1.1.1.1
 
 # === Static DNS Records (A and PTR) ===
 {% for host in dnsmasq_static_hosts %}
