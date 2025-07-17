@@ -1,2 +1,8 @@
 [local]
 localhost ansible_connection=local
+
+[console_nodes]
+console-node1
+console-node2
+console-node3
+console-node4

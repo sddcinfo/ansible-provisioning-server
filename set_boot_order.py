@@ -42,7 +42,7 @@ def get_node_ip(node_name):
             return node.get("ip")
     return None
 
-def run_command(command, description):
+def run_command(command, description, timeout=300):
     print(f"{bcolors.OKCYAN}... {description}{bcolors.ENDC}")
     try:
         process = subprocess.run(
@@ -89,7 +89,7 @@ def main():
 
     # --- Step 1: Get Current BIOS Config ---
     run_command(
-        f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' "
+        f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{ipmi_user}' -p '{ipmi_pass}' "
         f"-c GetCurrentBiosCfg --file '{current_config_file}' --overwrite",
         f"Getting current BIOS config from {args.node_name}"
     )
@@ -110,7 +110,7 @@ def main():
         print(f"{bcolors.WARNING}Boot order is incorrect. Correcting now...{bcolors.ENDC}")
         
         run_command(
-            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' -c SetPowerAction --action 1",
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{ipmi_user}' -p '{ipmi_pass}' -c SetPowerAction --action 1",
             f"Powering down {args.node_name}"
         )
         
@@ -125,20 +125,20 @@ def main():
             f.write(config_content)
 
         run_command(
-            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' "
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{ipmi_user}' -p '{ipmi_pass}' "
             f"-c ChangeBiosCfg --file '{new_config_file}'",
             f"Applying new BIOS boot order to {args.node_name}"
         )
 
         run_command(
-            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' -c SetPowerAction --action 0",
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{ipmi_user}' -p '{ipmi_pass}' -c SetPowerAction --action 0",
             f"Powering on {args.node_name}"
         )
 
         print(f"\n{bcolors.BOLD}{bcolors.OKGREEN}BIOS configuration applied and {args.node_name} is powering on.{bcolors.ENDC}")
 
     run_command(
-        f"python3 /home/sysadmin/redfish.py {args.node_name} set-boot-to-bios",
+        f"python3 /home/sysadmin/redfish.py {args.node_name} bios",
         f"Setting one-time boot to BIOS for {args.node_name}"
     )
 

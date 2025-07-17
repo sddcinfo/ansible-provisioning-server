@@ -39,7 +39,7 @@ To run playbooks that use these secrets, you must have a vault password file.
 To run the entire playbook and configure all services from scratch:
 ```bash
 # From the ansible-provisioning-server directory
-ansible-playbook -i inventory site.yml --ask-become-pass
+sudo ansible-playbook -i inventory site.yml --vault-password-file /path/to/your/.vault_pass
 ```
 
 ## External Scripts
