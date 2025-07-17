@@ -1,0 +1,21 @@
+---
+- name: Find existing netplan configuration files
+  ansible.builtin.find:
+    paths: /etc/netplan
+    patterns: "*.yaml,*.yml"
+  register: netplan_files
+
+- name: Remove existing netplan configuration files
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ netplan_files.files }}"
+
+- name: Deploy unified netplan configuration
+  ansible.builtin.template:
+    src: 00-unified-netcfg.yaml.j2
+    dest: /etc/netplan/00-unified-netcfg.yaml
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Apply netplan

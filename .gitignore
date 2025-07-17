@@ -1,5 +1,2 @@
-*.retry
-*.vault
-
-__pycache__/
-sum.log
+.redfish_credentials
+.vault_pass

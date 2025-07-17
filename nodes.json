@@ -4,29 +4,29 @@
       "hostname": "console-node1",
       "ip": "10.10.1.11",
       "mac": "ac:1f:6b:6c:58:31",
-      "ipmi_user": "admin",
-      "ipmi_pass": "VMware1!"
+      "k8s_ip": "10.10.1.21",
+      "ceph_ip": "10.10.2.21"
     },
     {
       "hostname": "console-node2",
       "ip": "10.10.1.12",
       "mac": "ac:1f:6b:6c:58:06",
-      "ipmi_user": "admin",
-      "ipmi_pass": "VMware1!"
+      "k8s_ip": "10.10.1.22",
+      "ceph_ip": "10.10.2.22"
     },
     {
       "hostname": "console-node3",
       "ip": "10.10.1.13",
       "mac": "ac:1f:6b:6c:58:2c",
-      "ipmi_user": "admin",
-      "ipmi_pass": "VMware1!"
+      "k8s_ip": "10.10.1.23",
+      "ceph_ip": "10.10.2.23"
     },
     {
       "hostname": "console-node4",
       "ip": "10.10.1.14",
       "mac": "ac:1f:6b:6c:58:0a",
-      "ipmi_user": "admin",
-      "ipmi_pass": "VMware1!"
+      "k8s_ip": "10.10.1.24",
+      "ceph_ip": "10.10.2.24"
     }
   ]
 }

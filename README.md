@@ -8,14 +8,31 @@ This playbook configures the local server to be a provisioning server. This incl
 
 ## Prerequisites
 
-This project relies on two external components that must be configured correctly:
+This project relies on one external component that must be configured correctly:
 
 1.  **Supermicro Update Manager (`sum`)**: The `set_boot_order.py` script will automatically download this utility if it's not found.
-2.  **Redfish Credentials**: The `redfish.py` script requires a credential file at `~/.redfish_credentials`.
 
 ## Configuration
 
 The single source of truth for all node information (MAC addresses, IP addresses, and hostnames) is the `nodes.json` file in the root of this repository. All scripts and playbooks read from this file.
+
+### Secrets Management
+
+This project uses **Ansible Vault** to securely manage sensitive information like IPMI credentials. The encrypted secrets are stored in `group_vars/all/secrets.yml`.
+
+To run playbooks that use these secrets, you must have a vault password file.
+
+1.  **Create the vault password file:**
+    ```bash
+    echo "your_vault_password" > .vault_pass
+    ```
+
+2.  **Set secure permissions:**
+    ```bash
+    chmod 600 .vault_pass
+    ```
+
+3.  **Add to `.gitignore`:** The `.vault_pass` file is already included in the `.gitignore` file to prevent it from being committed to the repository.
 
 ## Usage
 
@@ -32,20 +49,6 @@ This project includes external Python scripts for managing servers. They share a
 ### `redfish.py`
 
 For basic, one-off server management tasks like checking power status or rebooting a node, you can use the `redfish.py` script. It can operate on a single node, multiple nodes, or all nodes defined in `nodes.json`.
-
-**Credential Setup:**
-
-This script requires a credential file at `~/.redfish_credentials` to authenticate with the servers' Baseboard Management Controllers (BMCs).
-
-1.  **Create the credential file:**
-    ```bash
-    echo 'REDFISH_AUTH="your_bmc_user:your_bmc_password"' > ~/.redfish_credentials
-    ```
-
-2.  **Set secure permissions:**
-    ```bash
-    chmod 600 ~/.redfish_credentials
-    ```
 
 **Usage Examples:**
 
@@ -70,31 +73,13 @@ For reliable, persistent boot order changes on Supermicro motherboards, this pro
 
 **Usage:**
 
-To apply a specific boot order to a node, run the script with the node's hostname, IPMI credentials, and a space-separated list of boot devices.
+To apply a specific boot order to a node, run the `set_boot_order.yml` playbook with the vault password file.
 
 **Example:**
 ```bash
-./set_boot_order.py console-node1 ADMIN 'your_password' pxe hdd
+ansible-playbook set_boot_order.yml --vault-password-file .vault_pass
 ```
-This example sets the boot order to UEFI Network (`pxe`) first, followed by UEFI Hard Disk (`hdd`).
-
-**Available Boot Devices:**
-*   `pxe`
-*   `hdd`
-*   `disabled`
-
-
-This project includes a native Python test suite for validating the functionality of the provisioning server. The tests are located in the `test/` directory.
-
-**Running Tests:**
-
-To run the entire test suite, execute the following command from the root of the `ansible-provisioning-server` directory:
-
-```bash
-python3 -m unittest discover test
-```
-
-The test suite will automatically handle the setup and teardown of any necessary test files.
+This will set the boot order to UEFI Network (`pxe`) first, followed by UEFI Hard Disk (`hdd`).
 
 ---
 
@@ -103,7 +88,7 @@ The test suite will automatically handle the setup and teardown of any necessary
 The provisioning server now includes a web interface for monitoring and managing the status of provisioning nodes. Simply navigate to the IP address of the provisioning server in your web browser.
 
 **Features:**
-- **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, `DONE`, `FAILED`) for all configured nodes.
+- **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, 'DONE', `FAILED`) for all configured nodes.
 - **Timestamps:** See when each node's status was last updated.
 - **Reprovisioning:** A "Reprovision" button allows you to reset a node's status to `NEW`, triggering a fresh installation on its next network boot.
 - **Auto-Refresh:** The page includes a "Refresh" button for manual updates.

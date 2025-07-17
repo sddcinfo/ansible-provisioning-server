@@ -1,0 +1,10 @@
+---
+- hosts: console_nodes
+  become: yes
+  tasks:
+    - name: Set boot order
+      ansible.builtin.command: /home/sysadmin/ansible-provisioning-server/set_boot_order.py {{ inventory_hostname }} pxe hdd
+      environment:
+        IPMI_USER: "{{ ipmi_user }}"
+        IPMI_PASS: "{{ ipmi_pass }}"
+      delegate_to: localhost

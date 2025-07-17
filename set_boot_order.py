@@ -4,13 +4,16 @@ import subprocess
 import os
 import sys
 import json
+import re
+import time
 
 # --- Configuration ---
 SUM_URL = "https://www.supermicro.com/Bios/sw_download/698/sum_2.14.0_Linux_x86_64_20240215.tar.gz"
 SUM_DIR = "/home/sysadmin/sum_2.14.0_Linux_x86_64"
 SUM_EXEC = f"{SUM_DIR}/sum"
-BIOS_CONFIG_FILE = "/tmp/boot_order_config.txt"
 NODES_FILE = "/home/sysadmin/ansible-provisioning-server/nodes.json"
+CURRENT_BIOS_CONFIG_FILE_TPL = "/tmp/current_config_{node_name}.txt"
+NEW_BIOS_CONFIG_FILE_TPL = "/tmp/new_config_{node_name}.txt"
 
 # --- Mappings ---
 BOOT_DEVICE_MAP = {
@@ -32,7 +35,6 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 def get_node_ip(node_name):
-    """Finds the IP address for a given node hostname."""
     with open(NODES_FILE) as f:
         nodes = json.load(f)["console_nodes"]
     for node in nodes:
@@ -41,16 +43,10 @@ def get_node_ip(node_name):
     return None
 
 def run_command(command, description):
-    """Runs a command and handles errors."""
     print(f"{bcolors.OKCYAN}... {description}{bcolors.ENDC}")
     try:
         process = subprocess.run(
-            command,
-            shell=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         print(f"{bcolors.OKGREEN}Success.{bcolors.ENDC}")
         return process.stdout
@@ -68,13 +64,11 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("node_name", help="The hostname of the node to configure (e.g., console-node1).")
-    parser.add_argument("ipmi_user", help="The username for the IPMI interface.")
-    parser.add_argument("ipmi_pass", help="The password for the IPMI interface.")
     parser.add_argument(
         "boot_devices",
-        nargs='+',
+        nargs=2,
         choices=BOOT_DEVICE_MAP.keys(),
-        help=f"A space-separated list of boot devices. Choices: {', '.join(BOOT_DEVICE_MAP.keys())}"
+        help=f"A space-separated list of two boot devices. Choices: {', '.join(BOOT_DEVICE_MAP.keys())}"
     )
     args = parser.parse_args()
 
@@ -83,42 +77,70 @@ def main():
         print(f"{bcolors.FAIL}Error: Node '{args.node_name}' not found in {NODES_FILE}{bcolors.ENDC}")
         sys.exit(1)
 
-    # --- Download and Extract SUM if not present ---
-    if not os.path.exists(SUM_EXEC):
-        print(f"{bcolors.WARNING}SUM utility not found. Downloading...{bcolors.ENDC}")
-        run_command(
-            f"wget -q -O '{SUM_DIR}.tar.gz' '{SUM_URL}'",
-            "Downloading SUM utility"
-        )
-        run_command(
-            f"tar -xzf '{SUM_DIR}.tar.gz' -C /home/sysadmin/",
-            "Extracting SUM utility"
-        )
-        run_command(
-            f"chmod +x '{SUM_EXEC}'",
-            "Making SUM executable"
-        )
+    # --- Get IPMI credentials from environment variables ---
+    ipmi_user = os.environ.get('IPMI_USER')
+    ipmi_pass = os.environ.get('IPMI_PASS')
+    if not ipmi_user or not ipmi_pass:
+        print(f"{bcolors.FAIL}Error: IPMI_USER and IPMI_PASS environment variables must be set.{bcolors.ENDC}")
+        sys.exit(1)
 
-    # --- Create Desired BIOS Config File ---
-    print(f"{bcolors.OKCYAN}Creating BIOS configuration...{bcolors.ENDC}")
-    with open(BIOS_CONFIG_FILE, "w") as f:
-        f.write("[Boot]\n")
-        f.write("Boot Mode Select=01\n")
-        for i, device_name in enumerate(args.boot_devices):
-            device_code = BOOT_DEVICE_MAP[device_name]
-            f.write(f"UEFI Boot Order #{i+1}={device_code}\n")
-    print(f"{bcolors.OKGREEN}Success.{bcolors.ENDC}")
+    current_config_file = CURRENT_BIOS_CONFIG_FILE_TPL.format(node_name=args.node_name)
+    new_config_file = NEW_BIOS_CONFIG_FILE_TPL.format(node_name=args.node_name)
 
-    # --- Apply BIOS settings and Reboot ---
+    # --- Step 1: Get Current BIOS Config ---
     run_command(
-        (
-            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' "
-            f"-c ChangeBiosCfg --file '{BIOS_CONFIG_FILE}' --reboot"
-        ),
-        f"Applying BIOS boot order to {args.node_name} ({ipmi_address}) and rebooting"
+        f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' "
+        f"-c GetCurrentBiosCfg --file '{current_config_file}' --overwrite",
+        f"Getting current BIOS config from {args.node_name}"
     )
 
-    print(f"\n{bcolors.BOLD}{bcolors.OKGREEN}BIOS configuration applied successfully to {args.node_name}.{bcolors.ENDC}")
+    with open(current_config_file, "r") as f:
+        config_content = f.read()
+
+    # --- Step 2: Verify Boot Order ---
+    print(f"{bcolors.OKCYAN}Verifying boot order...{bcolors.ENDC}")
+    boot_order_1_match = re.search(r"UEFI Boot Order #1=(\d+)", config_content)
+    current_boot_1 = boot_order_1_match.group(1) if boot_order_1_match else None
+    desired_boot_1 = BOOT_DEVICE_MAP[args.boot_devices[0]]
+
+    if current_boot_1 == desired_boot_1:
+        print(f"{bcolors.OKGREEN}Boot order is already correct. No changes needed.{bcolors.ENDC}")
+    else:
+        # --- Step 3: Power Down, Apply, Power Up ---
+        print(f"{bcolors.WARNING}Boot order is incorrect. Correcting now...{bcolors.ENDC}")
+        
+        run_command(
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' -c SetPowerAction --action 1",
+            f"Powering down {args.node_name}"
+        )
+        
+        print("Waiting for node to power down completely...")
+        time.sleep(10)
+
+        for i, device_name in enumerate(args.boot_devices):
+            device_code = BOOT_DEVICE_MAP[device_name]
+            config_content = re.sub(r"UEFI Boot Order #"+str(i+1)+"=.*", f"UEFI Boot Order #{i+1}={device_code}", config_content)
+
+        with open(new_config_file, "w") as f:
+            f.write(config_content)
+
+        run_command(
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' "
+            f"-c ChangeBiosCfg --file '{new_config_file}'",
+            f"Applying new BIOS boot order to {args.node_name}"
+        )
+
+        run_command(
+            f"'{SUM_EXEC}' -i '{ipmi_address}' -u '{args.ipmi_user}' -p '{args.ipmi_pass}' -c SetPowerAction --action 0",
+            f"Powering on {args.node_name}"
+        )
+
+        print(f"\n{bcolors.BOLD}{bcolors.OKGREEN}BIOS configuration applied and {args.node_name} is powering on.{bcolors.ENDC}")
+
+    run_command(
+        f"python3 /home/sysadmin/redfish.py {args.node_name} set-boot-to-bios",
+        f"Setting one-time boot to BIOS for {args.node_name}"
+    )
 
 if __name__ == "__main__":
     main()
