@@ -1,2 +1,3 @@
 .redfish_credentials
 .vault_pass
+*.log
