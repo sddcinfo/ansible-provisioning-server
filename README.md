@@ -4,13 +4,17 @@ This Ansible project configures a dedicated server to provide all the necessary 
 
 ## Overview
 
-This playbook configures the local server to be a provisioning server. This includes setting up DHCP, TFTP, and a web server to host iPXE scripts and Ubuntu autoinstall configurations.
+This project automates the setup of a provisioning server. It configures:
+- **DHCP & TFTP:** `dnsmasq` provides DHCP leases and serves iPXE bootloaders.
+- **Web Server:** `nginx` hosts Ubuntu autoinstall configurations and a simple status dashboard.
+- **Network:** Configures the server for NAT to provide internet access to the provisioning network.
+- **Server Management:** Includes scripts for managing server boot order and power state via Redfish.
 
 ## Prerequisites
 
-This project relies on one external component that must be configured correctly:
-
-1.  **Supermicro Update Manager (`sum`)**: The `set_boot_order.py` script will automatically download this utility if it's not found.
+- **Ansible:** The playbook is designed to be run on the provisioning server itself.
+- **Git:** To clone this repository.
+- **Supermicro Update Manager (`sum`):** This is required for changing the BIOS boot order and is downloaded automatically by the `set_boot_order.yml` playbook if not present.
 
 ## Configuration
 
@@ -24,71 +28,68 @@ To run playbooks that use these secrets, you must have a vault password file.
 
 1.  **Create the vault password file:**
     ```bash
-    echo "your_vault_password" > .vault_pass
+    echo "your_vault_password" > ~/.vault_pass
     ```
 
 2.  **Set secure permissions:**
     ```bash
-    chmod 600 .vault_pass
+    chmod 600 ~/.vault_pass
     ```
 
 3.  **Add to `.gitignore`:** The `.vault_pass` file is already included in the `.gitignore` file to prevent it from being committed to the repository.
 
 ## Usage
 
-To run the entire playbook and configure all services from scratch:
+There are two main playbooks in this project.
+
+### 1. `site.yml`
+
+This is the main playbook for setting up the provisioning server.
+
 ```bash
 # From the ansible-provisioning-server directory
-sudo ansible-playbook -i inventory site.yml --vault-password-file /path/to/your/.vault_pass
+sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
 ```
+
+### 2. `set_boot_order.yml`
+
+This playbook is used to set the boot order on the console nodes to PXE boot and then enter the BIOS. This is a necessary step before provisioning.
+
+```bash
+# From the ansible-provisioning-server directory
+sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit <node_name>
+```
+Replace `<node_name>` with the specific node you want to configure (e.g., `console-node1`).
 
 ## External Scripts
 
-This project includes external Python scripts for managing servers. They share a common configuration file, `nodes.json`, for node information.
-
 ### `redfish.py`
 
-For basic, one-off server management tasks like checking power status or rebooting a node, you can use the `redfish.py` script. It can operate on a single node, multiple nodes, or all nodes defined in `nodes.json`.
+A simple script for interacting with the Redfish API on the console nodes.
 
 **Usage Examples:**
 
-*   **Get the status of a single node:**
+*   **Get sensor data (temperature, fans):**
     ```bash
-    ./redfish.py -n console-node1 status
+    ./redfish.py console-node1 sensors
     ```
 
-*   **Reboot multiple nodes:**
+*   **Set the server to boot into BIOS setup on the next restart:**
     ```bash
-    ./redfish.py -n console-node1 console-node2 reboot
+    ./redfish.py console-node1 set-boot-to-bios
     ```
 
-*   **Get the boot order for all nodes:**
+*   **Power cycle a node:**
     ```bash
-    ./redfish.py -a get-boot-order
+    ./redfish.py console-node1 power-cycle
     ```
-
-### `set_boot_order.py`
-
-For reliable, persistent boot order changes on Supermicro motherboards, this project includes the `set_boot_order.py` script, which uses Supermicro's official `sum` utility.
-
-**Usage:**
-
-To apply a specific boot order to a node, run the `set_boot_order.yml` playbook with the vault password file.
-
-**Example:**
-```bash
-ansible-playbook set_boot_order.yml --vault-password-file .vault_pass
-```
-This will set the boot order to UEFI Network (`pxe`) first, followed by UEFI Hard Disk (`hdd`).
-
----
 
 ## Web Interface
 
-The provisioning server now includes a web interface for monitoring and managing the status of provisioning nodes. Simply navigate to the IP address of the provisioning server in your web browser.
+The provisioning server includes a simple web interface for monitoring the status of the nodes. Navigate to the IP address of the provisioning server in your web browser.
 
 **Features:**
 - **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, 'DONE', `FAILED`) for all configured nodes.
 - **Timestamps:** See when each node's status was last updated.
 - **Reprovisioning:** A "Reprovision" button allows you to reset a node's status to `NEW`, triggering a fresh installation on its next network boot.
-- **Auto-Refresh:** The page includes a "Refresh" button for manual updates.
+- **Auto-Refresh:** The page automatically refreshes every 30 seconds.
