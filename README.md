@@ -92,4 +92,4 @@ The provisioning server includes a simple web interface for monitoring the statu
 - **Status Dashboard:** View the current provisioning status (`NEW`, `INSTALLING`, 'DONE', `FAILED`) for all configured nodes.
 - **Timestamps:** See when each node's status was last updated.
 - **Reprovisioning:** A "Reprovision" button allows you to reset a node's status to `NEW`, triggering a fresh installation on its next network boot.
-- **Auto-Refresh:** The page automatically refreshes every 30 seconds.
+- **Manual Refresh:** The page includes a "Refresh" button for manual updates.
