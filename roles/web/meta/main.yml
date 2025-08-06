@@ -1,0 +1,31 @@
+---
+galaxy_info:
+  role_name: web
+  namespace: sddcinfo
+  author: SDDC.info
+  description: Web server and dashboard for provisioning management and autoinstall serving
+  company: SDDC.info
+
+  license: MIT
+
+  min_ansible_version: "2.9"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal  # 20.04
+        - jammy  # 22.04
+        - noble  # 24.04
+
+  galaxy_tags:
+    - nginx
+    - php
+    - web
+    - dashboard
+    - autoinstall
+    - provisioning
+    - monitoring
+
+dependencies:
+  - role: common
+  - role: netboot

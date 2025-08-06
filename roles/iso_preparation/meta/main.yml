@@ -1,0 +1,28 @@
+---
+galaxy_info:
+  role_name: iso_preparation
+  namespace: sddcinfo
+  author: SDDC.info
+  description: Downloads and prepares Ubuntu ISO images for network provisioning
+  company: SDDC.info
+
+  license: MIT
+
+  min_ansible_version: "2.9"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal  # 20.04
+        - jammy  # 22.04
+        - noble  # 24.04
+
+  galaxy_tags:
+    - iso
+    - ubuntu
+    - provisioning
+    - download
+    - storage
+
+dependencies:
+  - role: common

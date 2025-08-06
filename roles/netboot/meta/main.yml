@@ -1,0 +1,30 @@
+---
+galaxy_info:
+  role_name: netboot
+  namespace: sddcinfo
+  author: SDDC.info
+  description: DHCP, DNS, and TFTP services for network booting and PXE provisioning
+  company: SDDC.info
+
+  license: MIT
+
+  min_ansible_version: "2.9"
+
+  platforms:
+    - name: Ubuntu
+      versions:
+        - focal  # 20.04
+        - jammy  # 22.04
+        - noble  # 24.04
+
+  galaxy_tags:
+    - dhcp
+    - dns
+    - tftp
+    - pxe
+    - netboot
+    - provisioning
+    - dnsmasq
+
+dependencies:
+  - role: common
