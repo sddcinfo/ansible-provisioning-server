@@ -62,12 +62,21 @@
   tags:
     - netboot
 
-- name: Wait for dnsmasq to bind to port 53
-  wait_for:
-    port: 53
-    host: "{{ dnsmasq_listen_address }}"
-    state: started
-    timeout: 30
+- name: Wait for dnsmasq to bind to ports 53 and 69
+  block:
+    - name: Wait for dnsmasq DNS service to bind to port 53
+      wait_for:
+        port: 53
+        host: "{{ dnsmasq_listen_address }}"
+        state: started
+        timeout: 30
+    
+    - name: Wait for dnsmasq TFTP service to bind to port 69
+      wait_for:
+        port: 69
+        host: "{{ dnsmasq_listen_address }}"
+        state: started
+        timeout: 30
   tags:
     - netboot
 
@@ -93,11 +102,43 @@
   tags:
     - netboot
 
-- name: Disable and stop tftpd-hpa
-  service:
-    name: tftpd-hpa
-    state: stopped
-    enabled: no
+- name: Disable and stop all TFTP services to prevent conflicts with dnsmasq
+  block:
+    - name: Disable and stop tftpd-hpa
+      service:
+        name: tftpd-hpa
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+    
+    - name: Disable and stop xinetd (which may run in.tftpd)
+      service:
+        name: xinetd
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+    
+    - name: Check for and disable tftp.socket (systemd socket activation)
+      service:
+        name: tftp.socket
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+    
+    - name: Check for and disable tftp.service (systemd service)
+      service:
+        name: tftp.service
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+      
+    - name: Verify no TFTP services are listening on port 69
+      wait_for:
+        port: 69
+        host: "{{ dnsmasq_listen_address }}"
+        state: stopped
+        timeout: 10
+      ignore_errors: yes
   tags:
     - netboot
 
