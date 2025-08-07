@@ -280,7 +280,7 @@
     path: /var/lib/tftpboot
     state: directory
     owner: dnsmasq
-    group: dnsmasq
+    group: nogroup
     mode: "0755"
     recurse: yes
   tags:
@@ -288,7 +288,7 @@
 
 - name: Ensure dnsmasq can access TFTP directory (verify ownership)
   shell: |
-    chown -R dnsmasq:dnsmasq /var/lib/tftpboot
+    chown -R dnsmasq:nogroup /var/lib/tftpboot
     chmod -R 755 /var/lib/tftpboot
     find /var/lib/tftpboot -type f -exec chmod 644 {} \;
   changed_when: false
@@ -309,7 +309,7 @@
     url: "{{ item.item.url }}"
     dest: "{{ item.item.dest }}"
     owner: dnsmasq
-    group: dnsmasq
+    group: nogroup
     mode: '0644'
   loop: "{{ ipxe_files.results }}"
   when: not item.stat.exists
@@ -322,7 +322,7 @@
 
 - name: Force correct permissions on all TFTP files after download
   shell: |
-    find /var/lib/tftpboot -type f -exec chown dnsmasq:dnsmasq {} \;
+    find /var/lib/tftpboot -type f -exec chown dnsmasq:nogroup {} \;
     find /var/lib/tftpboot -type f -exec chmod 644 {} \;
     ls -la /var/lib/tftpboot/
   register: tftp_perms_fix
