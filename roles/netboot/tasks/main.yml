@@ -4,71 +4,25 @@
     dest: /etc/resolv.conf
     content: "nameserver 8.8.8.8"
 
-- name: Disable systemd-resolved aggressively
+- name: Replace systemd-resolved with dnsmasq
   block:
-    - name: Stop systemd-resolved service
-      service:
+    - name: Mask systemd-resolved to prevent restart
+      systemd:
         name: systemd-resolved
+        masked: yes
         state: stopped
-        
-    - name: Disable systemd-resolved service
-      service:
-        name: systemd-resolved
-        enabled: no
-        
-    - name: Kill any remaining systemd-resolved processes
-      shell: |
-        # Check if any systemd-resolved processes exist
-        if pgrep -f systemd-resolved >/dev/null 2>&1; then
-          echo "Found systemd-resolved processes, terminating..."
-          # Use SIGTERM first, then SIGKILL if needed
-          pkill -TERM -f systemd-resolved 2>/dev/null || true
-          sleep 1
-          if pgrep -f systemd-resolved >/dev/null 2>&1; then
-            echo "Force killing remaining systemd-resolved processes..."
-            pkill -KILL -f systemd-resolved 2>/dev/null || true
-            sleep 1
-          fi
-        fi
-        # Always succeed
-        exit 0
-      changed_when: false
       
-    - name: Wait for port 53 to be freed
-      wait_for:
-        port: 53
-        host: 127.0.0.1
-        state: stopped
-        timeout: 10
-      ignore_errors: yes
-      register: port_53_wait
-      
-    - name: Force kill processes on port 53 if still occupied
-      shell: |
-        lsof -ti:53 | xargs -r kill -9 2>/dev/null || true
-        sleep 2
-      when: port_53_wait is failed
-      changed_when: false
-      
-    - name: Final verification that port 53 is free
-      shell: "netstat -tlnp | grep ':53 ' || ss -tlnp | grep ':53 '"
-      register: port_53_check
-      failed_when: false
-      changed_when: false
-      
-    - name: Log port 53 status
-      debug:
-        msg: "Port 53 status: {{ 'Free' if port_53_check.rc != 0 else 'Still occupied by: ' + port_53_check.stdout }}"
-        
-    - name: Verify systemd-resolved is not running
-      command: systemctl is-active systemd-resolved
-      register: resolved_status
-      failed_when: resolved_status.stdout == "active"
-      changed_when: false
-  rescue:
-    - name: Log systemd-resolved disable failure but continue
-      debug:
-        msg: "Failed to completely disable systemd-resolved, but attempting to continue with dnsmasq setup"
+    - name: Remove /etc/resolv.conf symlink
+      file:
+        path: /etc/resolv.conf
+        state: absent
+    
+    - name: Create static /etc/resolv.conf
+      copy:
+        dest: /etc/resolv.conf
+        content: |
+          nameserver 8.8.8.8
+          nameserver 8.8.4.4
   tags:
     - netboot
 
@@ -104,148 +58,38 @@
   meta: flush_handlers
 
 
-- name: Start and enable dnsmasq with debugging
+- name: Start and enable dnsmasq
   block:
-    - name: Pre-start port check for dnsmasq
-      shell: "netstat -tlnp | grep ':53 ' || ss -tlnp | grep ':53 '"
-      register: pre_start_port_check
-      failed_when: false
-      changed_when: false
-      
-    - name: Log pre-start port status
-      debug:
-        msg: "Port 53 before dnsmasq start: {{ 'Free' if pre_start_port_check.rc != 0 else 'Occupied by: ' + pre_start_port_check.stdout }}"
-        
-    - name: Test dnsmasq configuration before starting
+    - name: Test dnsmasq configuration
       command: dnsmasq --test
       register: dnsmasq_test
       changed_when: false
-      failed_when: false
-      
-    - name: Log dnsmasq configuration test result
-      debug:
-        msg: "Dnsmasq config test: {{ 'PASSED' if dnsmasq_test.rc == 0 else 'FAILED' }} - {{ dnsmasq_test.stderr if dnsmasq_test.rc != 0 else 'Configuration is valid' }}"
-        
-    - name: Fix dnsmasq configuration if test failed
-      fail:
-        msg: "Dnsmasq configuration is invalid: {{ dnsmasq_test.stderr }}"
-      when: dnsmasq_test.rc != 0
-      
-    - name: Ensure TFTP root directory is accessible by dnsmasq
-      file:
-        path: "{{ tftp_root }}"
-        owner: root
-        group: root
-        mode: "0755"
-        state: directory
+      failed_when: dnsmasq_test.rc != 0
       
     - name: Start and enable dnsmasq
-      service:
+      systemd:
         name: dnsmasq
         state: restarted
         enabled: yes
-      register: dnsmasq_start
-      
-    - name: Wait a moment for dnsmasq to fully start
-      pause:
-        seconds: 3
-      when: dnsmasq_start is not failed
-      
-    - name: Check dnsmasq service status if start failed
-      command: systemctl status dnsmasq --no-pager -l
-      register: dnsmasq_status
-      when: dnsmasq_start is failed
-      ignore_errors: true
-      changed_when: false
-      
-    - name: Check dnsmasq logs for errors
-      command: journalctl -u dnsmasq -n 30 --no-pager
-      register: dnsmasq_logs
-      when: dnsmasq_start is failed
-      changed_when: false
-      ignore_errors: true
-      
-    - name: Display comprehensive dnsmasq failure diagnostics
-      debug:
-        msg: |
-          DNSMASQ START FAILURE DIAGNOSTICS:
-          
-          Service Status:
-          {{ dnsmasq_status.stdout_lines | join('\n          ') if dnsmasq_status is defined else '          Unable to get status' }}
-          
-          Recent Logs:
-          {{ dnsmasq_logs.stdout_lines | join('\n          ') if dnsmasq_logs is defined else '          Unable to get logs' }}
-      when: dnsmasq_start is failed
   tags:
     - netboot
 
-- name: Verify dnsmasq services are running
-  block:
-    - name: Wait for dnsmasq DNS service to bind to port 53
-      wait_for:
-        port: 53
-        host: "{{ dnsmasq_listen_address }}"
-        state: started
-        timeout: 15
-    
-    - name: Check if TFTP is enabled by looking for the port
-      shell: "netstat -ulnp | grep ':69 ' || ss -ulnp | grep ':69 '"
-      register: tftp_port_check
-      changed_when: false
-      failed_when: false
-      
-    - name: Display TFTP port status
-      debug:
-        msg: "TFTP port status: {{ tftp_port_check.stdout if tftp_port_check.stdout != '' else 'Port 69 not found - TFTP may not be enabled' }}"
-        
-    - name: Test TFTP port connectivity (UDP service)
-      shell: |
-        # Test TFTP with a quick connection attempt
-        timeout 3 bash -c "echo 'quit' | nc -u 127.0.0.1 69" 2>/dev/null || \
-        timeout 3 bash -c "echo 'quit' | tftp 127.0.0.1 69" 2>/dev/null || \
-        echo "TFTP port accessible but service may require valid TFTP commands"
-        exit 0
-      when: tftp_port_check.rc == 0
-      register: tftp_connectivity_test
-      changed_when: false
-      
-    - name: Log TFTP service status
-      debug:
-        msg: "TFTP service: {{ 'Running and accessible' if tftp_port_check.rc == 0 else 'Not running' }} - Port binding confirmed"
-        
-    - name: Test TFTP functionality manually
-      shell: |
-        echo "Testing TFTP connection..."
-        echo "quit" | tftp 127.0.0.1 69 2>&1 || echo "TFTP test failed"
-      register: tftp_manual_test
-      changed_when: false
-      ignore_errors: true
-      
-    - name: Log TFTP manual test result
-      debug:
-        msg: "TFTP manual test: {{ tftp_manual_test.stdout_lines }}"
+- name: Verify dnsmasq DNS service is running
+  wait_for:
+    port: 53
+    host: "{{ dnsmasq_listen_address }}"
+    state: started
+    timeout: 15
   tags:
     - netboot
 
-- name: Remove /etc/resolv.conf symlink and configure DNS
-  block:
-    - name: Remove /etc/resolv.conf symlink
-      file:
-        path: /etc/resolv.conf
-        state: absent
-    
-    - name: Create static /etc/resolv.conf
-      template:
-        src: resolv.conf.j2
-        dest: /etc/resolv.conf
-    
-    - name: Verify DNS resolution works via dnsmasq
-      command: nslookup google.com {{ dnsmasq_listen_address }}
-      register: dns_test
-      retries: 5
-      delay: 2
-      until: dns_test.rc == 0
-      changed_when: false
+- name: Verify DNS resolution works via dnsmasq
+  command: nslookup google.com {{ dnsmasq_listen_address }}
+  register: dns_test
+  retries: 3
+  delay: 2
+  until: dns_test.rc == 0
+  changed_when: false
   tags:
     - netboot
 

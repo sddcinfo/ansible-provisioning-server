@@ -47,7 +47,7 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 - **📝 Observability**: Comprehensive logging, health monitoring, and status tracking
 - **⚡ Performance**: Optimized for high-throughput with systemd resource limits
 - **🛡️ Reliability**: Automated error handling, service recovery, and rollback mechanisms
-- **🔍 Monitoring**: 5-minute health checks with automatic service restart capabilities
+- **🔍 Monitoring**: Automated health checks with service status verification
 - **✅ Validation**: End-to-end system validation with comprehensive verification checks
 
 ## Architecture
@@ -81,11 +81,11 @@ graph TB
 |-----------|------------|---------|
 | **DHCP Server** | dnsmasq | IP address allocation and PXE boot orchestration |
 | **DNS Server** | dnsmasq | Name resolution for provisioning network |
-| **TFTP Server** | dnsmasq (native) | iPXE bootloader distribution (integrated) |
+| **TFTP Server** | dnsmasq with integrated TFTP | iPXE bootloader distribution |
 | **Web Server** | nginx + PHP-FPM | Hardened autoinstall hosting and dashboard |
 | **NAT Gateway** | iptables + dynamic detection | Internet connectivity with interface auto-detection |
 | **Management API** | Python/Redfish | Hardware control and monitoring |
-| **Health Monitor** | systemd timers | 5-minute service health checks and recovery |
+| **Health Monitor** | systemd timers | Automated service health checks and recovery |
 | **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
 
 ## Prerequisites
@@ -460,7 +460,7 @@ nmap -p 443 <node-ip>
 | Issue Category | Symptoms | Resolution Strategy |
 |----------------|----------|-------------------|
 | **DHCP Failures** | No IP assignment | Interface binding, firewall rules, dynamic interface detection |
-| **TFTP Conflicts** | Port 69 binding errors | Remove conflicting TFTP daemons, use dnsmasq native TFTP |
+| **TFTP Conflicts** | Port 69 binding errors | Remove conflicting TFTP daemons, use dnsmasq integrated TFTP |
 | **PXE Boot Issues** | Boot loop/timeout | TFTP permissions, bootloader integrity, service conflicts |
 | **Provisioning Stalls** | Install hangs | Network connectivity, repository access, validation checks |
 | **Hardware Control** | API timeouts | Credential validation, network paths, Redfish compatibility |
