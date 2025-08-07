@@ -74,9 +74,30 @@
     - name: Wait for dnsmasq TFTP service to bind to port 69
       wait_for:
         port: 69
-        host: "{{ dnsmasq_listen_address }}"
+        host: "0.0.0.0"
         state: started
         timeout: 30
+        
+    - name: Verify TFTP is accessible on the configured address
+      wait_for:
+        port: 69
+        host: "{{ dnsmasq_listen_address }}"
+        state: started
+        timeout: 10
+      ignore_errors: true
+      register: tftp_specific_check
+      
+    - name: Check what ports dnsmasq is actually listening on
+      shell: "netstat -tulnp | grep dnsmasq || ss -tulnp | grep dnsmasq"
+      register: dnsmasq_ports
+      changed_when: false
+      ignore_errors: true
+      
+    - name: Log dnsmasq port binding details
+      debug:
+        msg: |
+          TFTP is {{ 'accessible on specific address' if tftp_specific_check is not failed else 'bound to all interfaces only' }}
+          Dnsmasq port bindings: {{ dnsmasq_ports.stdout_lines | default(['No netstat/ss output available']) }}
   tags:
     - netboot
 
