@@ -17,8 +17,13 @@
         enabled: no
         
     - name: Kill any remaining systemd-resolved processes
-      shell: "pkill -f systemd-resolved || true"
+      shell: |
+        if pgrep -f systemd-resolved > /dev/null; then
+          pkill -f systemd-resolved
+          sleep 1
+        fi
       changed_when: false
+      ignore_errors: true
       
     - name: Wait for port 53 to be freed
       wait_for:
