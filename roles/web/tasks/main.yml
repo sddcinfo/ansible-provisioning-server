@@ -77,14 +77,37 @@
   tags:
     - nginx
 
-- name: Copy web root
-  template:
-    src: index.php.j2
-    dest: /var/www/html/index.php
-    owner: www-data
-    group: www-data
-    mode: "0644"
-  notify: restart nginx
+- name: Copy web root with verification
+  block:
+    - name: Template index.php file
+      template:
+        src: index.php.j2
+        dest: /var/www/html/index.php
+        owner: www-data
+        group: www-data
+        mode: "0644"
+      notify: restart nginx
+      register: index_php_result
+      
+    - name: Verify index.php was created successfully
+      stat:
+        path: /var/www/html/index.php
+      register: index_php_check
+      failed_when: not index_php_check.stat.exists or not index_php_check.stat.readable
+      
+    - name: Log index.php creation success
+      debug:
+        msg: "index.php created successfully - size: {{ index_php_check.stat.size }} bytes"
+        
+    - name: Test nginx PHP configuration syntax
+      command: nginx -t
+      changed_when: false
+      register: nginx_test
+      
+    - name: Fail if nginx configuration is invalid
+      fail:
+        msg: "Nginx configuration test failed: {{ nginx_test.stderr }}"
+      when: nginx_test.rc != 0
   tags:
     - www_content
 
