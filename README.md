@@ -41,11 +41,14 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 - **🔧 Hardware Management**: Redfish API integration for server power and boot control
 
 ### Enterprise Capabilities  
-- **🔒 Security**: Ansible Vault encrypted credential management
-- **📈 Scalability**: Multi-node provisioning with customizable network topologies
+- **🔒 Security**: Hardened input validation, path sanitization, and encrypted credential management
+- **📈 Scalability**: Multi-node provisioning with dynamic network interface detection
 - **🎯 Flexibility**: Support for multiple Ubuntu versions and hardware platforms
-- **📝 Observability**: Comprehensive logging and status tracking
-- **⚡ Performance**: Optimized for high-throughput provisioning operations
+- **📝 Observability**: Comprehensive logging, health monitoring, and status tracking
+- **⚡ Performance**: Optimized for high-throughput with systemd resource limits
+- **🛡️ Reliability**: Automated error handling, service recovery, and rollback mechanisms
+- **🔍 Monitoring**: 5-minute health checks with automatic service restart capabilities
+- **✅ Validation**: End-to-end system validation with comprehensive verification checks
 
 ## Architecture
 
@@ -78,10 +81,12 @@ graph TB
 |-----------|------------|---------|
 | **DHCP Server** | dnsmasq | IP address allocation and PXE boot orchestration |
 | **DNS Server** | dnsmasq | Name resolution for provisioning network |
-| **TFTP Server** | dnsmasq | iPXE bootloader distribution |
-| **Web Server** | nginx + PHP-FPM | Autoinstall configuration hosting and dashboard |
-| **NAT Gateway** | iptables | Internet connectivity for provisioning network |
+| **TFTP Server** | dnsmasq (native) | iPXE bootloader distribution (integrated) |
+| **Web Server** | nginx + PHP-FPM | Hardened autoinstall hosting and dashboard |
+| **NAT Gateway** | iptables + dynamic detection | Internet connectivity with interface auto-detection |
 | **Management API** | Python/Redfish | Hardware control and monitoring |
+| **Health Monitor** | systemd timers | 5-minute service health checks and recovery |
+| **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
 
 ## Prerequisites
 
@@ -135,7 +140,7 @@ chmod 600 ~/.vault_pass
 ### 3. Infrastructure Deployment
 
 ```bash
-# Core provisioning infrastructure
+# Core provisioning infrastructure with validation
 sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
 
 # Target server boot configuration
@@ -145,14 +150,20 @@ sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --l
 ### 4. Deployment Verification
 
 ```bash
-# Service health validation
+# Service health validation (automated during deployment)
 sudo systemctl status dnsmasq nginx php8.3-fpm
+
+# Health monitoring status
+sudo systemctl status provisioning-health-check.timer
 
 # Web interface connectivity
 curl -I http://localhost
 
 # Hardware management verification
 ./redfish.py console-node1 sensors
+
+# View health monitoring logs
+sudo journalctl -u provisioning-health-check.service -f
 ```
 
 ## Configuration
@@ -203,17 +214,65 @@ vault_password: "encryption_key"
 - Restrict vault file permissions (600)
 - Never commit unencrypted credentials
 
+### Enterprise Security Features
+
+This solution implements comprehensive security hardening:
+
+**Input Validation & Sanitization:**
+- Strict MAC address format validation
+- Path traversal attack prevention
+- Parameter whitelist validation
+- Command injection protection
+
+**Error Handling:**
+- No sensitive information in error messages
+- Comprehensive logging without data exposure
+- Graceful failure handling with rollback
+
+**File System Security:**
+- Secure directory permissions (0750)
+- Safe file operations with verification
+- Protected session directory cleanup
+
+### Automated Monitoring & Health Checks
+
+**Health Monitoring System:**
+```bash
+# View current health status
+sudo systemctl status provisioning-health-check.timer
+
+# Check recent health check results
+sudo tail -f /var/log/provisioning_health.log
+
+# Manual health check execution
+sudo /usr/local/bin/monitoring/health_check.sh
+```
+
+**Monitoring Features:**
+- **Service Recovery**: Automatic restart of failed services
+- **Resource Monitoring**: Disk usage and memory alerts
+- **Network Validation**: Connectivity checks every 5 minutes
+- **Log Management**: Automatic log rotation (30 days retention)
+
+**Performance Limits:**
+- systemd resource limits for all critical services
+- File handle limits: 65536 per service
+- Process limits: 4096 per service
+
 ## Usage
 
 ### Primary Playbooks
 
 #### Infrastructure Deployment
 ```bash
-# Complete provisioning server setup
+# Complete provisioning server setup with validation
 sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
 
 # Selective role execution
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web"
+sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web,validation"
+
+# Skip validation if needed (not recommended)
+sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --skip-tags "validation"
 ```
 
 #### Hardware Management
@@ -332,13 +391,44 @@ Templates located in `roles/web/templates/`:
 
 ## Troubleshooting
 
+### Automated Diagnostics
+
+#### Health Monitoring System
+```bash
+# Check automated health monitoring
+sudo systemctl status provisioning-health-check.timer
+sudo tail -f /var/log/provisioning_health.log
+
+# View recent service recovery actions
+sudo journalctl -u provisioning-health-check.service --since "1 hour ago"
+
+# Manual health check execution
+sudo /usr/local/bin/monitoring/health_check.sh
+```
+
+#### Validation Framework
+```bash
+# Run system validation manually
+sudo ansible-playbook site.yml --tags "validation" --vault-password-file ~/.vault_pass
+
+# Check validation failure flags
+ls -la /tmp/ansible_validation_failed
+
+# View validation troubleshooting info
+sudo journalctl | grep "validation failed"
+```
+
 ### Service Diagnostics
 
 #### Network Services Issues
 ```bash
-# DHCP service validation
+# DHCP service validation with enhanced debugging
 sudo systemctl status dnsmasq
 sudo journalctl -u dnsmasq --since "1 hour ago"
+
+# TFTP service verification (dnsmasq native)
+sudo netstat -ulnp | grep ':69'
+echo "quit" | tftp 127.0.0.1 69
 
 # Network connectivity testing
 sudo tcpdump -i <interface> port 67 or port 68
@@ -346,12 +436,13 @@ sudo tcpdump -i <interface> port 67 or port 68
 
 #### Web Services Issues
 ```bash
-# Application stack health
+# Application stack health with resource monitoring
 sudo systemctl status nginx php8.3-fpm
 sudo tail -f /var/log/nginx/error.log
 
-# PHP-FPM diagnostics
+# PHP-FPM diagnostics with performance limits
 sudo tail -f /var/log/php8.3-fpm.log
+sudo systemctl show php8.3-fpm --property=LimitNOFILE,LimitNPROC
 ```
 
 #### Hardware Management Issues
@@ -368,19 +459,24 @@ nmap -p 443 <node-ip>
 
 | Issue Category | Symptoms | Resolution Strategy |
 |----------------|----------|-------------------|
-| **DHCP Failures** | No IP assignment | Interface binding, firewall rules |
-| **PXE Boot Issues** | Boot loop/timeout | TFTP permissions, bootloader integrity |
-| **Provisioning Stalls** | Install hangs | Network connectivity, repository access |
-| **Hardware Control** | API timeouts | Credential validation, network paths |
+| **DHCP Failures** | No IP assignment | Interface binding, firewall rules, dynamic interface detection |
+| **TFTP Conflicts** | Port 69 binding errors | Remove conflicting TFTP daemons, use dnsmasq native TFTP |
+| **PXE Boot Issues** | Boot loop/timeout | TFTP permissions, bootloader integrity, service conflicts |
+| **Provisioning Stalls** | Install hangs | Network connectivity, repository access, validation checks |
+| **Hardware Control** | API timeouts | Credential validation, network paths, Redfish compatibility |
+| **Service Recovery** | Services down | Check health monitoring logs, automatic restart status |
+| **Validation Failures** | Deployment issues | Review validation logs, check system requirements, manual verification |
 
 ### Log Analysis Locations
 
 | Service | Log Location | Analysis Focus |
 |---------|-------------|----------------|
-| **dnsmasq** | `journalctl -u dnsmasq` | DHCP leases, DNS queries |
-| **nginx** | `/var/log/nginx/` | HTTP requests, errors |
-| **PHP-FPM** | `/var/log/php8.3-fpm.log` | Application errors |
-| **System** | `/var/log/syslog` | General system events |
+| **dnsmasq** | `journalctl -u dnsmasq` | DHCP leases, DNS queries, TFTP transfers |
+| **nginx** | `/var/log/nginx/` | HTTP requests, errors, security events |
+| **PHP-FPM** | `/var/log/php8.3-fpm.log` | Application errors, performance issues |
+| **Health Monitor** | `/var/log/provisioning_health.log` | Service recovery, resource alerts |
+| **Validation** | `journalctl \| grep validation` | System validation results, failures |
+| **System** | `/var/log/syslog` | General system events, security logs |
 
 ## Contributing
 
