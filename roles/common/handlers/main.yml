@@ -3,3 +3,7 @@
   ansible.builtin.service:
     name: ssh
     state: restarted
+
+- name: systemd daemon reload
+  ansible.builtin.systemd:
+    daemon_reload: yes

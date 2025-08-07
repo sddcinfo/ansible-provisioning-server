@@ -29,13 +29,30 @@
     mode: '0755'
   when: not sentinel_file_stat.stat.exists
 
-- name: Mount Ubuntu ISO
-  ansible.posix.mount:
-    src: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
-    path: "{{ ubuntu_iso_mount_point }}"
-    fstype: iso9660
-    opts: loop
-    state: mounted
+- name: Mount Ubuntu ISO with verification
+  block:
+    - name: Mount Ubuntu ISO
+      ansible.posix.mount:
+        src: "{{ ubuntu_iso_download_dir }}/{{ ubuntu_iso_name }}"
+        path: "{{ ubuntu_iso_mount_point }}"
+        fstype: iso9660
+        opts: loop
+        state: mounted
+      register: mount_result
+      
+    - name: Verify ISO is mounted and accessible
+      ansible.builtin.stat:
+        path: "{{ ubuntu_iso_mount_point }}/casper"
+      register: mount_verification
+      
+    - name: Fail if mount verification failed
+      ansible.builtin.fail:
+        msg: "ISO mount failed or casper directory not accessible"
+      when: not mount_verification.stat.exists or not mount_verification.stat.isdir
+      
+    - name: Log mount success
+      ansible.builtin.debug:
+        msg: "Ubuntu ISO successfully mounted at {{ ubuntu_iso_mount_point }}"
   when: not sentinel_file_stat.stat.exists
 
 - name: Create casper directory for PXE boot files
@@ -45,15 +62,36 @@
     mode: '0755'
   when: not sentinel_file_stat.stat.exists
 
-- name: Copy kernel and initrd files for PXE boot
-  ansible.builtin.copy:
-    src: "{{ ubuntu_iso_mount_point }}/casper/{{ item }}"
-    dest: "{{ ubuntu_provisioning_dir }}/casper/{{ item }}"
-    remote_src: yes
-    mode: preserve
-  loop:
-    - vmlinuz
-    - initrd
+- name: Copy kernel and initrd files for PXE boot with verification
+  block:
+    - name: Copy kernel and initrd files
+      ansible.builtin.copy:
+        src: "{{ ubuntu_iso_mount_point }}/casper/{{ item }}"
+        dest: "{{ ubuntu_provisioning_dir }}/casper/{{ item }}"
+        remote_src: yes
+        mode: preserve
+      loop:
+        - vmlinuz
+        - initrd
+      register: copy_boot_files
+      
+    - name: Verify kernel and initrd files were copied
+      ansible.builtin.stat:
+        path: "{{ ubuntu_provisioning_dir }}/casper/{{ item }}"
+      loop:
+        - vmlinuz
+        - initrd
+      register: boot_files_verification
+      
+    - name: Fail if critical boot files are missing
+      ansible.builtin.fail:
+        msg: "Critical boot file missing: {{ item.item }}"
+      loop: "{{ boot_files_verification.results }}"
+      when: not item.stat.exists
+      
+    - name: Log boot files copy success
+      ansible.builtin.debug:
+        msg: "Kernel and initrd files successfully copied"
   when: not sentinel_file_stat.stat.exists
 
 - name: Copy necessary files from ISO to provisioning directory
@@ -89,16 +127,55 @@
     mode: '0644'
   when: not sentinel_file_stat.stat.exists
 
-- name: Unmount Ubuntu ISO
-  ansible.posix.mount:
-    path: "{{ ubuntu_iso_mount_point }}"
-    state: unmounted
+- name: Unmount Ubuntu ISO with verification
+  block:
+    - name: Unmount Ubuntu ISO
+      ansible.posix.mount:
+        path: "{{ ubuntu_iso_mount_point }}"
+        state: unmounted
+      register: unmount_result
+      
+    - name: Wait for unmount to complete
+      ansible.builtin.wait_for:
+        path: "{{ ubuntu_iso_mount_point }}/casper"
+        state: absent
+        timeout: 30
+      ignore_errors: true
+      
+    - name: Verify ISO is fully unmounted
+      ansible.builtin.shell: "mountpoint -q '{{ ubuntu_iso_mount_point }}'"
+      register: mountpoint_check
+      failed_when: false
+      changed_when: false
+      
+    - name: Force unmount if still mounted
+      ansible.builtin.command: "umount -f '{{ ubuntu_iso_mount_point }}'"
+      when: mountpoint_check.rc == 0
+      register: force_unmount
+      
+    - name: Log unmount result
+      ansible.builtin.debug:
+        msg: "ISO unmount: {{ 'successful' if mountpoint_check.rc != 0 else 'required force unmount' }}"
   when: not sentinel_file_stat.stat.exists
 
-- name: Clean up ISO mount point directory
-  ansible.builtin.file:
-    path: "{{ ubuntu_iso_mount_point }}"
-    state: absent
+- name: Clean up ISO mount point directory with verification
+  block:
+    - name: Final verification that mount point is not in use
+      ansible.builtin.shell: "mountpoint -q '{{ ubuntu_iso_mount_point }}'"
+      register: final_mountpoint_check
+      failed_when: false
+      changed_when: false
+      
+    - name: Remove ISO mount point directory
+      ansible.builtin.file:
+        path: "{{ ubuntu_iso_mount_point }}"
+        state: absent
+      when: final_mountpoint_check.rc != 0
+      
+    - name: Warn if mount point could not be removed
+      ansible.builtin.debug:
+        msg: "WARNING: Could not remove mount point directory - still mounted"
+      when: final_mountpoint_check.rc == 0
   when: not sentinel_file_stat.stat.exists
 
 - name: Clean up downloaded ISO (optional)

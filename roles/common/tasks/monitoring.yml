@@ -1,0 +1,131 @@
+---
+# Enterprise-grade monitoring and resource management
+- name: Configure resource limits and monitoring
+  block:
+    - name: Configure systemd resource limits for critical services
+      ansible.builtin.lineinfile:
+        path: "/etc/systemd/system/{{ item.service }}.service.d/limits.conf"
+        line: "{{ item.limit }}"
+        create: yes
+        mode: '0644'
+      loop:
+        - { service: dnsmasq, limit: "LimitNOFILE=65536" }
+        - { service: dnsmasq, limit: "LimitNPROC=4096" }
+        - { service: nginx, limit: "LimitNOFILE=65536" }
+        - { service: nginx, limit: "LimitNPROC=4096" }
+        - { service: php8.3-fpm, limit: "LimitNOFILE=65536" }
+        - { service: php8.3-fpm, limit: "LimitNPROC=4096" }
+      notify: systemd daemon reload
+
+    - name: Create monitoring script directory
+      ansible.builtin.file:
+        path: /usr/local/bin/monitoring
+        state: directory
+        mode: '0755'
+
+    - name: Create system health monitoring script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/monitoring/health_check.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Enterprise-grade health monitoring script
+          
+          LOGFILE="/var/log/provisioning_health.log"
+          TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+          
+          log_status() {
+              echo "[$TIMESTAMP] $1" >> $LOGFILE
+          }
+          
+          # Check critical services
+          SERVICES="dnsmasq nginx php8.3-fpm"
+          for service in $SERVICES; do
+              if systemctl is-active --quiet $service; then
+                  log_status "OK: $service is running"
+              else
+                  log_status "CRITICAL: $service is not running"
+                  systemctl restart $service
+                  sleep 5
+                  if systemctl is-active --quiet $service; then
+                      log_status "RECOVERED: $service restarted successfully"
+                  else
+                      log_status "FAILED: Unable to restart $service"
+                  fi
+              fi
+          done
+          
+          # Check disk space
+          DISK_USAGE=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
+          if [ $DISK_USAGE -gt 90 ]; then
+              log_status "WARNING: Disk usage is ${DISK_USAGE}%"
+          fi
+          
+          # Check memory usage
+          MEM_USAGE=$(free | awk 'NR==2 {printf "%.0f", $3/$2 * 100}')
+          if [ $MEM_USAGE -gt 90 ]; then
+              log_status "WARNING: Memory usage is ${MEM_USAGE}%"
+          fi
+          
+          # Check network connectivity
+          if ! ping -c 1 8.8.8.8 > /dev/null 2>&1; then
+              log_status "WARNING: External network connectivity issue"
+          fi
+          
+          log_status "Health check completed"
+
+    - name: Create systemd timer for health monitoring
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/provisioning-health-check.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Provisioning Health Check Timer
+          Requires=provisioning-health-check.service
+
+          [Timer]
+          OnCalendar=*:0/5
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Create systemd service for health monitoring
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/provisioning-health-check.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Provisioning Health Check
+          After=network.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/monitoring/health_check.sh
+          User=root
+
+    - name: Enable and start health monitoring timer
+      ansible.builtin.systemd:
+        name: provisioning-health-check.timer
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Configure log rotation for monitoring logs
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/provisioning-health
+        mode: '0644'
+        content: |
+          /var/log/provisioning_health.log {
+              daily
+              rotate 30
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 644 root root
+          }
+
+    - name: Log monitoring setup completion
+      ansible.builtin.debug:
+        msg: "Resource limits and health monitoring configured successfully"

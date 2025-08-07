@@ -10,11 +10,30 @@
     - nginx
     - php
 
-- name: Ensure php-fpm is running
-  service:
-    name: php8.3-fpm # This may need adjustment based on the exact package version
-    state: started
-    enabled: yes
+- name: Ensure php-fpm is running with verification
+  block:
+    - name: Start and enable php-fpm
+      service:
+        name: php8.3-fpm
+        state: started
+        enabled: yes
+      register: php_fpm_start_result
+      
+    - name: Wait for php-fpm socket to be available
+      ansible.builtin.wait_for:
+        path: /var/run/php/php8.3-fpm.sock
+        state: present
+        timeout: 30
+        
+    - name: Verify php-fpm service is active
+      ansible.builtin.command: systemctl is-active php8.3-fpm
+      register: php_fpm_status
+      changed_when: false
+      failed_when: php_fpm_status.stdout != "active"
+      
+    - name: Log php-fpm startup success
+      ansible.builtin.debug:
+        msg: "PHP-FPM successfully started and socket is available"
   tags:
     - php
 
@@ -182,22 +201,29 @@
   tags:
     - redfish_script
 
-- name: Generate verification script
-  template:
-    src: ../../templates/verify_provisioning.py.j2
-    dest: /home/sysadmin/verify_provisioning.py
-    owner: sysadmin
-    group: sysadmin
-    mode: "0755"
-  tags:
-    - verify_script
-
-- name: Generate verification script
-  template:
-    src: ../../templates/verify_provisioning.py.j2
-    dest: /home/sysadmin/verify_provisioning.py
-    owner: sysadmin
-    group: sysadmin
-    mode: "0755"
+- name: Generate verification script with error handling
+  block:
+    - name: Generate verification script
+      template:
+        src: ../../templates/verify_provisioning.py.j2
+        dest: /home/sysadmin/verify_provisioning.py
+        owner: sysadmin
+        group: sysadmin
+        mode: "0755"
+      register: verification_script_result
+      
+    - name: Verify script was created and is executable
+      ansible.builtin.stat:
+        path: /home/sysadmin/verify_provisioning.py
+      register: verification_script_check
+      
+    - name: Fail if verification script creation failed
+      ansible.builtin.fail:
+        msg: "Failed to create verification script"
+      when: not verification_script_check.stat.exists or not verification_script_check.stat.executable
+      
+    - name: Log verification script creation success
+      ansible.builtin.debug:
+        msg: "Verification script successfully created and is executable"
   tags:
     - verify_script

@@ -5,9 +5,17 @@
 function get_state_file_path(): string {
     $test_state_file = $_GET['test_state_file'] ?? null;
     if ($test_state_file) {
+        // Strict validation: only allow alphanumeric, dash, underscore, and .json extension
+        if (!preg_match('/^[a-zA-Z0-9_-]+\.json$/', $test_state_file)) {
+            error_log("Invalid test_state_file parameter: " . $test_state_file);
+            return __DIR__ . '/state.json';
+        }
         $safe_basename = basename($test_state_file);
         $test_path = "/var/www/html/sessions/" . $safe_basename;
-        if (file_exists($test_path)) {
+        // Additional security: ensure the resolved path is within allowed directory
+        $real_sessions_dir = realpath("/var/www/html/sessions");
+        $real_test_path = realpath($test_path);
+        if ($real_test_path && strpos($real_test_path, $real_sessions_dir) === 0 && file_exists($test_path)) {
             return $test_path;
         }
     }
@@ -101,8 +109,9 @@ function handle_boot_request(): void {
     } else {
         if (!prepare_session($mac)) {
             echo "#!ipxe\n";
-            echo "echo ERROR: Could not prepare installation session for {$mac}. Check server logs.\n";
+            echo "echo ERROR: Could not prepare installation session. Check server logs.\n";
             echo "reboot\n";
+            error_log("Failed to prepare session for MAC: {$mac}");
             return;
         }
         set_status($mac, 'INSTALLING');
@@ -124,17 +133,32 @@ function handle_boot_request(): void {
 function handle_callback_request(): void {
     $mac = strtolower($_GET['mac'] ?? '');
     $status = strtoupper($_GET['status'] ?? '');
-    if (!is_valid_mac($mac) || empty($status)) {
+    
+    // Validate MAC address
+    if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
-        echo "ERROR: MAC and status parameters are required.";
+        echo "ERROR: Invalid MAC address format.";
+        error_log("Invalid MAC address in callback: " . ($_GET['mac'] ?? 'empty'));
         return;
     }
+    
+    // Validate status against allowed values
+    $allowed_statuses = ['NEW', 'INSTALLING', 'DONE', 'FAILED', 'ERROR'];
+    if (empty($status) || !in_array($status, $allowed_statuses, true)) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "ERROR: Invalid status parameter.";
+        error_log("Invalid status in callback: " . ($_GET['status'] ?? 'empty'));
+        return;
+    }
+    
     if (set_status($mac, $status)) {
         header("Content-Type: text/plain");
-        echo "OK: Status for {$mac} updated to {$status}.";
+        echo "OK: Status updated successfully.";
+        error_log("Status updated for MAC {$mac} to {$status}");
     } else {
         header("HTTP/1.1 500 Internal Server Error");
-        echo "ERROR: Failed to update status for {$mac}.";
+        echo "ERROR: Failed to update status.";
+        error_log("Failed to update status for MAC {$mac} to {$status}");
     }
 }
 
@@ -154,7 +178,8 @@ function handle_reprovision_request(): void {
         exit();
     } else {
         header("HTTP/1.1 500 Internal Server Error");
-        echo "ERROR: Failed to update status for {$mac}.";
+        echo "ERROR: Failed to update status.";
+        error_log("Failed to update status for MAC: {$mac}");
     }
 }
 
@@ -174,7 +199,8 @@ function handle_delete_request(): void {
         exit();
     } else {
         header("HTTP/1.1 500 Internal Server Error");
-        echo "ERROR: Failed to delete entry for {$mac}.";
+        echo "ERROR: Failed to delete entry.";
+        error_log("Failed to delete entry for MAC: {$mac}");
     }
 }
 
@@ -257,34 +283,103 @@ function handle_status_request(): void {
 }
 
 function prepare_session(string $mac): bool {
-    $mac_config_dir = CONFIG_DIR . '/' . $mac;
+    // Additional MAC validation to prevent path traversal
+    if (!is_valid_mac($mac)) {
+        error_log("Invalid MAC address in prepare_session: {$mac}");
+        return false;
+    }
+    
+    // Sanitize MAC for safe filesystem use
+    $safe_mac = preg_replace('/[^a-fA-F0-9:]/', '', $mac);
+    if ($safe_mac !== $mac) {
+        error_log("MAC address sanitization failed: {$mac}");
+        return false;
+    }
+    
+    $mac_config_dir = CONFIG_DIR . '/' . $safe_mac;
     $default_config_dir = CONFIG_DIR . '/default';
     $source_dir = is_dir($mac_config_dir) ? $mac_config_dir : $default_config_dir;
-    if (!is_dir($source_dir)) { return false; }
-    $session_path = SESSION_DIR . '/' . $mac;
-    if (is_dir($session_path)) {
-        $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($session_path, RecursiveDirectoryIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
-        foreach ($files as $fileinfo) { ($fileinfo->isDir() ? 'rmdir' : 'unlink')($fileinfo->getRealPath()); }
-        rmdir($session_path);
+    
+    if (!is_dir($source_dir)) {
+        error_log("Source directory not found: {$source_dir}");
+        return false;
     }
-    if (!mkdir($session_path, 0755, true)) { return false; }
+    
+    $session_path = SESSION_DIR . '/' . $safe_mac;
+    
+    // Secure cleanup of existing session directory
+    if (is_dir($session_path)) {
+        try {
+            $files = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($session_path, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::CHILD_FIRST
+            );
+            foreach ($files as $fileinfo) {
+                if ($fileinfo->isDir()) {
+                    if (!rmdir($fileinfo->getRealPath())) {
+                        error_log("Failed to remove directory: " . $fileinfo->getRealPath());
+                        return false;
+                    }
+                } else {
+                    if (!unlink($fileinfo->getRealPath())) {
+                        error_log("Failed to remove file: " . $fileinfo->getRealPath());
+                        return false;
+                    }
+                }
+            }
+            if (!rmdir($session_path)) {
+                error_log("Failed to remove session directory: {$session_path}");
+                return false;
+            }
+        } catch (Exception $e) {
+            error_log("Exception during session cleanup: " . $e->getMessage());
+            return false;
+        }
+    }
+    
+    // Create session directory with secure permissions
+    if (!mkdir($session_path, 0750, true)) {
+        error_log("Failed to create session directory: {$session_path}");
+        return false;
+    }
+    
+    // Process template files with error handling
     $user_data_template_path = $source_dir . '/user-data';
     if (file_exists($user_data_template_path)) {
         $template_content = file_get_contents($user_data_template_path);
-        $final_content = str_replace('__MAC_ADDRESS__', $mac, $template_content);
-        file_put_contents($session_path . '/user-data', $final_content);
+        if ($template_content === false) {
+            error_log("Failed to read user-data template: {$user_data_template_path}");
+            return false;
+        }
+        $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
+        if (file_put_contents($session_path . '/user-data', $final_content) === false) {
+            error_log("Failed to write user-data for session: {$session_path}");
+            return false;
+        }
     }
+    
     $meta_data_template_path = $source_dir . '/meta-data';
     if (file_exists($meta_data_template_path)) {
-        copy($meta_data_template_path, $session_path . '/meta-data');
+        if (!copy($meta_data_template_path, $session_path . '/meta-data')) {
+            error_log("Failed to copy meta-data for session: {$session_path}");
+            return false;
+        }
     }
+    
     $vendor_data_template_path = $source_dir . '/vendor-data';
     $vendor_data_destination_path = $session_path . '/vendor-data';
     if (file_exists($vendor_data_template_path)) {
-        copy($vendor_data_template_path, $vendor_data_destination_path);
+        if (!copy($vendor_data_template_path, $vendor_data_destination_path)) {
+            error_log("Failed to copy vendor-data for session: {$session_path}");
+            return false;
+        }
     } else {
-        file_put_contents($vendor_data_destination_path, "#cloud-config\n# This file was intentionally generated empty.\n");
+        if (file_put_contents($vendor_data_destination_path, "#cloud-config\n# This file was intentionally generated empty.\n") === false) {
+            error_log("Failed to create empty vendor-data for session: {$session_path}");
+            return false;
+        }
     }
+    
     return true;
 }
 

@@ -148,23 +148,85 @@
   tags:
     - network
 
-- name: Check if NAT rule exists
-  ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
-  register: nat_rule_check
-  changed_when: false
-  failed_when: false
+- name: Configure NAT rules with dynamic interface detection
+  block:
+    - name: Detect external network interface
+      ansible.builtin.shell: "ip route | grep default | head -1 | awk '{print $5}'"
+      register: external_interface
+      changed_when: false
+      
+    - name: Validate external interface was detected
+      ansible.builtin.fail:
+        msg: "Could not detect external network interface"
+      when: external_interface.stdout == ""
+      
+    - name: Log detected external interface
+      ansible.builtin.debug:
+        msg: "Detected external interface: {{ external_interface.stdout }}"
+        
+    - name: Check if NAT rule exists
+      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      register: nat_rule_check
+      changed_when: false
+      failed_when: false
+      
+    - name: Set NAT rule for internal network
+      ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      when: nat_rule_check.rc != 0
+      register: nat_rule_add
+      
+    - name: Verify NAT rule was added successfully
+      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      when: nat_rule_check.rc != 0
+      changed_when: false
+      failed_when: false
+      register: nat_rule_verify
+      
+    - name: Log NAT rule configuration result
+      ansible.builtin.debug:
+        msg: "NAT rule configuration: {{ 'already exists' if nat_rule_check.rc == 0 else ('successfully added' if nat_rule_verify.rc == 0 else 'failed to add') }}"
+        
+    - name: Fail if NAT rule addition was unsuccessful
+      ansible.builtin.fail:
+        msg: "Failed to add NAT rule after attempt"
+      when: 
+        - nat_rule_check.rc != 0
+        - nat_rule_verify.rc != 0
   tags:
     - network
 
-- name: Set NAT rule for internal network
-  ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o ens34 -j MASQUERADE -m comment --comment 'NAT for internal network'"
-  when: nat_rule_check.rc != 0
+- name: Persist iptables rules with verification
+  block:
+    - name: Save iptables rules
+      ansible.builtin.command:
+        cmd: netfilter-persistent save
+      register: iptables_save_result
+      changed_when: false
+      
+    - name: Verify iptables rules were saved
+      ansible.builtin.stat:
+        path: /etc/iptables/rules.v4
+      register: iptables_rules_file
+      
+    - name: Log iptables persistence result
+      ansible.builtin.debug:
+        msg: "Iptables rules persistence: {{ 'successful' if iptables_rules_file.stat.exists else 'failed - rules file not found' }}"
+        
+    - name: Fail if iptables rules were not persisted
+      ansible.builtin.fail:
+        msg: "Failed to persist iptables rules"
+      when: not iptables_rules_file.stat.exists
   tags:
     - network
 
-- name: Persist iptables rules
-  ansible.builtin.command:
-    cmd: netfilter-persistent save
-  changed_when: false
+- name: Include resource limits and monitoring
+  include_tasks: monitoring.yml
   tags:
-    - network
+    - monitoring
+    - resource_limits
+
+- name: Include system validation and health checks
+  include_tasks: validation.yml
+  tags:
+    - validation
+    - health_check
