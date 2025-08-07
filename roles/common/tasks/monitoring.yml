@@ -2,19 +2,27 @@
 # Enterprise-grade monitoring and resource management
 - name: Configure resource limits and monitoring
   block:
-    - name: Configure systemd resource limits for critical services
-      ansible.builtin.lineinfile:
-        path: "/etc/systemd/system/{{ item.service }}.service.d/limits.conf"
-        line: "{{ item.limit }}"
-        create: yes
-        mode: '0644'
+    - name: Create systemd service override directories
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}.service.d"
+        state: directory
+        mode: '0755'
       loop:
-        - { service: dnsmasq, limit: "LimitNOFILE=65536" }
-        - { service: dnsmasq, limit: "LimitNPROC=4096" }
-        - { service: nginx, limit: "LimitNOFILE=65536" }
-        - { service: nginx, limit: "LimitNPROC=4096" }
-        - { service: php8.3-fpm, limit: "LimitNOFILE=65536" }
-        - { service: php8.3-fpm, limit: "LimitNPROC=4096" }
+        - dnsmasq
+        - nginx
+        - php8.3-fpm
+
+    - name: Configure systemd resource limits for critical services
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.service }}.service.d/limits.conf"
+        mode: '0644'
+        content: |
+          [Service]
+          {{ item.limit }}
+      loop:
+        - { service: dnsmasq, limit: "LimitNOFILE=65536\nLimitNPROC=4096" }
+        - { service: nginx, limit: "LimitNOFILE=65536\nLimitNPROC=4096" }
+        - { service: php8.3-fpm, limit: "LimitNOFILE=65536\nLimitNPROC=4096" }
       notify: systemd daemon reload
 
     - name: Create monitoring script directory

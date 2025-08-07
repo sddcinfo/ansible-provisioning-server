@@ -1,0 +1,6 @@
+---
+dependencies:
+  - common
+  - netboot
+  - web
+  - iso_preparation

@@ -1,0 +1,90 @@
+---
+# Final system validation after all components are installed
+- name: Final system validation and health checks
+  block:
+    - name: Validate required directories exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: directory_checks
+      loop:
+        - /var/www/html
+        - /var/www/html/sessions
+        - /var/www/html/autoinstall_configs
+        - /var/lib/tftpboot
+
+    - name: Check if all required directories exist
+      ansible.builtin.fail:
+        msg: "Required directory does not exist: {{ item.item }}"
+      loop: "{{ directory_checks.results }}"
+      when: not item.stat.exists
+
+    - name: Validate critical services are installed and running
+      ansible.builtin.service_facts:
+    
+    - name: Check critical services status
+      ansible.builtin.command: "systemctl is-active {{ item }}"
+      register: service_status
+      loop:
+        - dnsmasq
+        - nginx
+        - php8.3-fpm
+      changed_when: false
+      failed_when: service_status.stdout != "active"
+
+    - name: Validate network connectivity on critical ports
+      ansible.builtin.wait_for:
+        host: "127.0.0.1"
+        port: "{{ item }}"
+        timeout: 10
+      loop:
+        - 53   # DNS
+        - 69   # TFTP
+        - 80   # HTTP
+
+    - name: Validate DNS resolution works
+      ansible.builtin.command: "dig @127.0.0.1 google.com +short +time=5"
+      register: dns_test
+      changed_when: false
+      failed_when: dns_test.rc != 0 or dns_test.stdout == ""
+
+    - name: Validate web service responds
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: web_test
+
+    - name: Validate TFTP directory is accessible
+      ansible.builtin.stat:
+        path: /var/lib/tftpboot
+      register: tftp_dir
+      failed_when: not tftp_dir.stat.exists or not tftp_dir.stat.readable
+
+    - name: Log validation success
+      ansible.builtin.debug:
+        msg: "All system validation checks passed - system is ready for production"
+
+  rescue:
+    - name: Log validation failure details
+      ansible.builtin.debug:
+        msg: "System validation failed - check logs and fix issues before proceeding"
+        
+    - name: Create validation failure flag
+      ansible.builtin.file:
+        path: /tmp/ansible_validation_failed
+        state: touch
+        mode: '0644'
+        
+    - name: Display troubleshooting information
+      ansible.builtin.debug:
+        msg: |
+          Validation failed. Please check:
+          1. All services are running: systemctl status dnsmasq nginx php8.3-fpm
+          2. Ports are listening: netstat -tlnp | grep -E ':(53|69|80)'
+          3. Directory permissions are correct
+          4. Check logs in /var/log/ for error details
+        
+    - name: Fail the validation
+      ansible.builtin.fail:
+        msg: "Critical system validation failed - manual intervention required"

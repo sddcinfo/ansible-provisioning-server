@@ -224,9 +224,3 @@
   tags:
     - monitoring
     - resource_limits
-
-- name: Include system validation and health checks
-  include_tasks: validation.yml
-  tags:
-    - validation
-    - health_check
