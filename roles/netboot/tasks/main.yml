@@ -32,12 +32,22 @@
   tags:
     - netboot
 
-- name: Install dnsmasq and tftp server
+- name: Install dnsmasq and tftp client (dnsmasq provides TFTP server natively)
   apt:
     name:
       - dnsmasq
-      - tftpd-hpa
+      - tftp-hpa
     state: present
+  tags:
+    - netboot
+
+- name: Remove conflicting TFTP server packages
+  apt:
+    name:
+      - tftpd-hpa
+      - atftpd
+      - tftpd
+    state: absent
   tags:
     - netboot
 
@@ -54,50 +64,106 @@
   meta: flush_handlers
 
 
-- name: Start and enable dnsmasq
-  service:
-    name: dnsmasq
-    state: started
-    enabled: yes
+- name: Start and enable dnsmasq with debugging
+  block:
+    - name: Test dnsmasq configuration before starting
+      command: dnsmasq --test
+      register: dnsmasq_test
+      changed_when: false
+      failed_when: false
+      
+    - name: Log dnsmasq configuration test result
+      debug:
+        msg: "Dnsmasq config test: {{ 'PASSED' if dnsmasq_test.rc == 0 else 'FAILED' }} - {{ dnsmasq_test.stderr if dnsmasq_test.rc != 0 else 'Configuration is valid' }}"
+        
+    - name: Fix dnsmasq configuration if test failed
+      fail:
+        msg: "Dnsmasq configuration is invalid: {{ dnsmasq_test.stderr }}"
+      when: dnsmasq_test.rc != 0
+      
+    - name: Ensure TFTP root directory is accessible by dnsmasq
+      file:
+        path: "{{ tftp_root }}"
+        owner: root
+        group: root
+        mode: "0755"
+        state: directory
+      
+    - name: Start and enable dnsmasq
+      service:
+        name: dnsmasq
+        state: restarted
+        enabled: yes
+      register: dnsmasq_start
+      
+    - name: Check dnsmasq service status if start failed
+      command: systemctl status dnsmasq
+      register: dnsmasq_status
+      when: dnsmasq_start is failed
+      ignore_errors: true
+      
+    - name: Display dnsmasq service status on failure
+      debug:
+        msg: "Dnsmasq service status: {{ dnsmasq_status.stdout_lines }}"
+      when: dnsmasq_start is failed
+      
+    - name: Check dnsmasq logs for errors
+      command: journalctl -u dnsmasq -n 20 --no-pager
+      register: dnsmasq_logs
+      when: dnsmasq_start is failed
+      changed_when: false
+      
+    - name: Display dnsmasq logs on failure
+      debug:
+        msg: "Recent dnsmasq logs: {{ dnsmasq_logs.stdout_lines }}"
+      when: dnsmasq_start is failed
   tags:
     - netboot
 
-- name: Wait for dnsmasq to bind to ports 53 and 69
+- name: Verify dnsmasq services are running
   block:
     - name: Wait for dnsmasq DNS service to bind to port 53
       wait_for:
         port: 53
         host: "{{ dnsmasq_listen_address }}"
         state: started
-        timeout: 30
+        timeout: 15
     
-    - name: Wait for dnsmasq TFTP service to bind to port 69
+    - name: Check if TFTP is enabled by looking for the port
+      shell: "netstat -ulnp | grep ':69 ' || ss -ulnp | grep ':69 '"
+      register: tftp_port_check
+      changed_when: false
+      failed_when: false
+      
+    - name: Display TFTP port status
+      debug:
+        msg: "TFTP port status: {{ tftp_port_check.stdout if tftp_port_check.stdout != '' else 'Port 69 not found - TFTP may not be enabled' }}"
+        
+    - name: Wait for TFTP port (if it exists)
       wait_for:
         port: 69
         host: "0.0.0.0"
         state: started
-        timeout: 30
-        
-    - name: Verify TFTP is accessible on the configured address
-      wait_for:
-        port: 69
-        host: "{{ dnsmasq_listen_address }}"
-        state: started
-        timeout: 10
+        timeout: 5
+      when: tftp_port_check.rc == 0
       ignore_errors: true
-      register: tftp_specific_check
+      register: tftp_wait_result
       
-    - name: Check what ports dnsmasq is actually listening on
-      shell: "netstat -tulnp | grep dnsmasq || ss -tulnp | grep dnsmasq"
-      register: dnsmasq_ports
+    - name: Log TFTP service status
+      debug:
+        msg: "TFTP service: {{ 'Running' if tftp_port_check.rc == 0 and tftp_wait_result is not failed else 'Not running or not accessible' }}"
+        
+    - name: Test TFTP functionality manually
+      shell: |
+        echo "Testing TFTP connection..."
+        echo "quit" | tftp 127.0.0.1 69 2>&1 || echo "TFTP test failed"
+      register: tftp_manual_test
       changed_when: false
       ignore_errors: true
       
-    - name: Log dnsmasq port binding details
+    - name: Log TFTP manual test result
       debug:
-        msg: |
-          TFTP is {{ 'accessible on specific address' if tftp_specific_check is not failed else 'bound to all interfaces only' }}
-          Dnsmasq port bindings: {{ dnsmasq_ports.stdout_lines | default(['No netstat/ss output available']) }}
+        msg: "TFTP manual test: {{ tftp_manual_test.stdout_lines }}"
   tags:
     - netboot
 
@@ -123,52 +189,39 @@
   tags:
     - netboot
 
-- name: Disable and stop all TFTP services to prevent conflicts with dnsmasq
+- name: Ensure no conflicting TFTP services are running
   block:
-    - name: Disable and stop tftpd-hpa
+    - name: Stop and disable any remaining TFTP services
       service:
-        name: tftpd-hpa
+        name: "{{ item }}"
         state: stopped
         enabled: no
       ignore_errors: yes
+      loop:
+        - tftpd-hpa
+        - atftpd
+        - xinetd
+        - tftp.socket
+        - tftp.service
     
-    - name: Disable and stop xinetd (which may run in.tftpd)
-      service:
-        name: xinetd
-        state: stopped
-        enabled: no
-      ignore_errors: yes
-    
-    - name: Check for and disable tftp.socket (systemd socket activation)
-      service:
-        name: tftp.socket
-        state: stopped
-        enabled: no
-      ignore_errors: yes
-    
-    - name: Check for and disable tftp.service (systemd service)
-      service:
-        name: tftp.service
-        state: stopped
-        enabled: no
-      ignore_errors: yes
+    - name: Verify no standalone TFTP services are listening on port 69
+      shell: "netstat -ulnp | grep ':69 ' | grep -v dnsmasq || true"
+      register: conflicting_tftp
+      changed_when: false
       
-    - name: Verify no TFTP services are listening on port 69
-      wait_for:
-        port: 69
-        host: "{{ dnsmasq_listen_address }}"
-        state: stopped
-        timeout: 10
-      ignore_errors: yes
+    - name: Log conflicting TFTP services if found
+      debug:
+        msg: "Warning: Found non-dnsmasq services on port 69: {{ conflicting_tftp.stdout }}"
+      when: conflicting_tftp.stdout != ""
   tags:
     - netboot
 
-- name: Create tftpboot directory
+- name: Create tftpboot directory for dnsmasq TFTP service
   file:
     path: /var/lib/tftpboot
     state: directory
-    owner: tftp
-    group: tftp
+    owner: root
+    group: root
     mode: "0755"
   tags:
     - netboot

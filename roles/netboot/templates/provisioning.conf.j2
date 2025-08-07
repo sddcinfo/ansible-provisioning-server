@@ -2,8 +2,13 @@
 
 # === General Configuration ===
 listen-address={{ dnsmasq_listen_address }}
-# bind-interfaces - commented out as it can interfere with TFTP binding
-interface={{ ansible_default_ipv4.interface | default('eth0') }}
+# Using specific interface binding for better control
+{% if ansible_default_ipv4.interface is defined %}
+interface={{ ansible_default_ipv4.interface }}
+{% else %}
+# Fallback if interface detection fails
+bind-interfaces
+{% endif %}
 no-resolv
 no-poll
 clear-on-reload
