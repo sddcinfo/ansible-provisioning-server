@@ -83,13 +83,25 @@
   tags:
     - netboot
 
-- name: Verify DNS resolution works via dnsmasq
-  command: nslookup google.com {{ dnsmasq_listen_address }}
-  register: dns_test
-  retries: 3
-  delay: 2
-  until: dns_test.rc == 0
-  changed_when: false
+- name: Configure final DNS resolution
+  block:
+    - name: Remove /etc/resolv.conf symlink
+      file:
+        path: /etc/resolv.conf
+        state: absent
+    
+    - name: Create static /etc/resolv.conf with dnsmasq
+      template:
+        src: resolv.conf.j2
+        dest: /etc/resolv.conf
+    
+    - name: Verify DNS resolution works via dnsmasq
+      command: nslookup google.com {{ dnsmasq_listen_address }}
+      register: dns_test
+      retries: 3
+      delay: 2
+      until: dns_test.rc == 0
+      changed_when: false
   tags:
     - netboot
 
