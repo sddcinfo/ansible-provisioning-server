@@ -18,10 +18,19 @@
         
     - name: Kill any remaining systemd-resolved processes
       shell: |
-        if pgrep -f systemd-resolved > /dev/null 2>&1; then
-          pkill -f systemd-resolved || true
-          sleep 2
+        # Check if any systemd-resolved processes exist
+        if pgrep -f systemd-resolved >/dev/null 2>&1; then
+          echo "Found systemd-resolved processes, terminating..."
+          # Use SIGTERM first, then SIGKILL if needed
+          pkill -TERM -f systemd-resolved 2>/dev/null || true
+          sleep 1
+          if pgrep -f systemd-resolved >/dev/null 2>&1; then
+            echo "Force killing remaining systemd-resolved processes..."
+            pkill -KILL -f systemd-resolved 2>/dev/null || true
+            sleep 1
+          fi
         fi
+        # Always succeed
         exit 0
       changed_when: false
       
