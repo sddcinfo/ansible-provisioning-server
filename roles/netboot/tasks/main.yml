@@ -5,10 +5,30 @@
     content: "nameserver 1.1.1.1"
 
 - name: Disable systemd-resolved
-  service:
-    name: systemd-resolved
-    state: stopped
-    enabled: no
+  block:
+    - name: Stop systemd-resolved
+      service:
+        name: systemd-resolved
+        state: stopped
+    - name: Disable systemd-resolved
+      service:
+        name: systemd-resolved
+        enabled: no
+    - name: Wait for systemd-resolved to fully stop
+      wait_for:
+        port: 53
+        host: 127.0.0.1
+        state: stopped
+        timeout: 30
+      ignore_errors: yes
+    - name: Verify systemd-resolved is not running
+      command: systemctl is-active systemd-resolved
+      register: resolved_status
+      failed_when: resolved_status.stdout == "active"
+  rescue:
+    - name: Log systemd-resolved disable failure
+      debug:
+        msg: "Failed to disable systemd-resolved cleanly, but continuing with dnsmasq setup"
   tags:
     - netboot
 
@@ -42,17 +62,34 @@
   tags:
     - netboot
 
-- name: Remove /etc/resolv.conf symlink
-  file:
-    path: /etc/resolv.conf
-    state: absent
+- name: Wait for dnsmasq to bind to port 53
+  wait_for:
+    port: 53
+    host: "{{ dnsmasq_listen_address }}"
+    state: started
+    timeout: 30
   tags:
     - netboot
 
-- name: Create static /etc/resolv.conf
-  template:
-    src: resolv.conf.j2
-    dest: /etc/resolv.conf
+- name: Remove /etc/resolv.conf symlink and configure DNS
+  block:
+    - name: Remove /etc/resolv.conf symlink
+      file:
+        path: /etc/resolv.conf
+        state: absent
+    
+    - name: Create static /etc/resolv.conf
+      template:
+        src: resolv.conf.j2
+        dest: /etc/resolv.conf
+    
+    - name: Verify DNS resolution works via dnsmasq
+      command: nslookup google.com {{ dnsmasq_listen_address }}
+      register: dns_test
+      retries: 5
+      delay: 2
+      until: dns_test.rc == 0
+      changed_when: false
   tags:
     - netboot
 
@@ -96,3 +133,30 @@
   delay: 2
   tags:
     - netboot
+
+- name: Test comprehensive DNS functionality
+  block:
+    - name: Test local domain resolution
+      command: dig @{{ dnsmasq_listen_address }} {{ dnsmasq_domain }}
+      register: local_dns_test
+      changed_when: false
+      failed_when: local_dns_test.rc != 0
+
+    - name: Test external domain resolution
+      command: dig @{{ dnsmasq_listen_address }} google.com
+      register: external_dns_test
+      changed_when: false
+      failed_when: external_dns_test.rc != 0
+
+    - name: Test static host resolution
+      command: dig @{{ dnsmasq_listen_address }} gateway.{{ dnsmasq_domain }}
+      register: static_dns_test
+      changed_when: false
+      failed_when: static_dns_test.rc != 0
+      
+    - name: Display DNS test results
+      debug:
+        msg: "All DNS functionality tests passed successfully"
+  tags:
+    - netboot
+    - dns_test
