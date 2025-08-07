@@ -2,7 +2,7 @@
 - name: Create temporary /etc/resolv.conf to allow for DNS lookups
   ansible.builtin.copy:
     dest: /etc/resolv.conf
-    content: "nameserver 1.1.1.1"
+    content: "nameserver 8.8.8.8"
 
 - name: Disable systemd-resolved aggressively
   block:

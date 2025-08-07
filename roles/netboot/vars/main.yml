@@ -2,8 +2,8 @@
 dnsmasq_listen_address: "10.10.1.1"
 dnsmasq_domain: sddc.info
 dnsmasq_upstream_servers:
-  - 1.0.0.1
-  - 1.1.1.1
+  - 8.8.8.8
+  - 8.8.4.4
 
 # Single source of truth for node network configurations
 provisioning_nodes:
