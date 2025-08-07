@@ -44,13 +44,26 @@
         - { port: 80, service: "HTTP" }   
       register: port_tests
 
-    - name: Check TFTP port separately (may bind differently)
+    - name: Check TFTP port on specific interface
       ansible.builtin.wait_for:
         host: "{{ dnsmasq_listen_address }}"
         port: 69
-        timeout: 10
+        timeout: 5
       ignore_errors: true
-      register: tftp_port_test
+      register: tftp_specific_test
+      
+    - name: Check TFTP port on all interfaces if specific failed
+      ansible.builtin.wait_for:
+        host: "0.0.0.0"
+        port: 69
+        timeout: 5
+      ignore_errors: true
+      register: tftp_all_test
+      when: tftp_specific_test is failed
+      
+    - name: Set TFTP port test result
+      set_fact:
+        tftp_port_test: "{{ tftp_specific_test if tftp_specific_test is not failed else tftp_all_test }}"
       
     - name: Validate DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com +short +time=5"
@@ -85,7 +98,7 @@
         msg: |
           TFTP Status:
           - Port 69 accessible: {{ 'Yes' if tftp_port_test is not failed else 'No' }}
-          - TFTP test result: {{ tftp_test.stdout if tftp_test is defined else 'Port not accessible - test skipped' }}
+          - TFTP test result: {{ tftp_test.stdout if (tftp_test is defined and tftp_test.stdout is defined) else 'Port not accessible - test skipped' }}
           
     - name: Check dnsmasq TFTP configuration
       ansible.builtin.shell: "grep -E '^enable-tftp|^tftp-root' /etc/dnsmasq.d/provisioning.conf"
@@ -93,9 +106,31 @@
       changed_when: false
       ignore_errors: true
       
-    - name: Log dnsmasq TFTP configuration
+    - name: Check what ports dnsmasq is actually listening on
+      ansible.builtin.shell: "netstat -ulnp | grep dnsmasq || ss -ulnp | grep dnsmasq"
+      register: dnsmasq_ports_check
+      changed_when: false
+      ignore_errors: true
+      
+    - name: Check dnsmasq service status and logs
+      ansible.builtin.shell: "systemctl status dnsmasq --no-pager -l"
+      register: dnsmasq_status_check
+      changed_when: false
+      ignore_errors: true
+      
+    - name: Log comprehensive TFTP diagnostics
       ansible.builtin.debug:
-        msg: "Dnsmasq TFTP config: {{ tftp_config_check.stdout_lines if tftp_config_check.rc == 0 else 'TFTP not configured in dnsmasq' }}"
+        msg: |
+          TFTP Diagnostics:
+          
+          Configuration:
+          {{ tftp_config_check.stdout_lines | join('\n          ') if tftp_config_check.rc == 0 else '          TFTP not configured in dnsmasq' }}
+          
+          Dnsmasq Port Bindings:
+          {{ dnsmasq_ports_check.stdout_lines | join('\n          ') if dnsmasq_ports_check.rc == 0 else '          No dnsmasq port bindings found' }}
+          
+          Service Status:
+          {{ dnsmasq_status_check.stdout_lines[-10:] | join('\n          ') if dnsmasq_status_check.rc == 0 else '          Could not get dnsmasq status' }}
 
     - name: Log validation success
       ansible.builtin.debug:

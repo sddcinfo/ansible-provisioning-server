@@ -2,13 +2,11 @@
 
 # === General Configuration ===
 listen-address={{ dnsmasq_listen_address }}
-# Using specific interface binding for better control
+# Interface binding - TFTP requires special consideration
 {% if ansible_default_ipv4.interface is defined %}
 interface={{ ansible_default_ipv4.interface }}
-{% else %}
-# Fallback if interface detection fails
-bind-interfaces
 {% endif %}
+# Note: TFTP may bind to 0.0.0.0 even with interface binding
 no-resolv
 no-poll
 clear-on-reload
@@ -55,6 +53,8 @@ enable-tftp
 tftp-root={{ tftp_root }}
 tftp-secure
 tftp-lowercase
+# TFTP port binding - may need to bind to all interfaces
+tftp-port=69
 
 # === PXE/iPXE Chainloading Logic ===
 dhcp-match=set:ipxe,175
