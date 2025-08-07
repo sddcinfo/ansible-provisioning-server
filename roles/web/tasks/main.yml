@@ -53,20 +53,46 @@
   tags:
     - nginx
 
-- name: Configure nginx
-  template:
-    src: nginx.conf.j2
-    dest: /etc/nginx/sites-available/default
-  notify: restart nginx
-  tags:
-    - nginx
-
-- name: Enable new nginx site
-  file:
-    src: /etc/nginx/sites-available/default
-    dest: /etc/nginx/sites-enabled/default
-    state: link
-  notify: restart nginx
+- name: Configure nginx with verification
+  block:
+    - name: Deploy nginx configuration
+      template:
+        src: nginx.conf.j2
+        dest: /etc/nginx/sites-available/default
+      register: nginx_config_result
+      
+    - name: Test nginx configuration syntax
+      command: nginx -t
+      changed_when: false
+      register: nginx_syntax_test
+      
+    - name: Fail if nginx configuration is invalid
+      fail:
+        msg: "Nginx configuration syntax error: {{ nginx_syntax_test.stderr }}"
+      when: nginx_syntax_test.rc != 0
+      
+    - name: Enable new nginx site
+      file:
+        src: /etc/nginx/sites-available/default
+        dest: /etc/nginx/sites-enabled/default
+        state: link
+      
+    - name: Force nginx restart to apply new configuration
+      service:
+        name: nginx
+        state: restarted
+      register: nginx_restart_result
+      
+    - name: Wait for nginx to be ready
+      wait_for:
+        port: 80
+        host: "{{ server_ip }}"
+        state: started
+        timeout: 30
+        
+    - name: Log nginx configuration deployment success
+      debug:
+        msg: "Nginx configuration deployed and service restarted successfully"
   tags:
     - nginx
 
@@ -77,6 +103,16 @@
   tags:
     - nginx
 
+- name: Ensure web directory has proper permissions
+  file:
+    path: /var/www/html
+    owner: www-data
+    group: www-data
+    mode: "0755"
+    state: directory
+  tags:
+    - www_content
+
 - name: Copy web root with verification
   block:
     - name: Template index.php file
@@ -86,7 +122,6 @@
         owner: www-data
         group: www-data
         mode: "0644"
-      notify: restart nginx
       register: index_php_result
       
     - name: Verify index.php was created successfully
@@ -95,19 +130,19 @@
       register: index_php_check
       failed_when: not index_php_check.stat.exists or not index_php_check.stat.readable
       
-    - name: Log index.php creation success
-      debug:
-        msg: "index.php created successfully - size: {{ index_php_check.stat.size }} bytes"
-        
-    - name: Test nginx PHP configuration syntax
-      command: nginx -t
+    - name: Check if nginx can read the index.php file
+      command: sudo -u www-data test -r /var/www/html/index.php
       changed_when: false
-      register: nginx_test
+      register: nginx_read_test
       
-    - name: Fail if nginx configuration is invalid
-      fail:
-        msg: "Nginx configuration test failed: {{ nginx_test.stderr }}"
-      when: nginx_test.rc != 0
+    - name: Log file permissions and ownership
+      debug:
+        msg: |
+          index.php details:
+          - Size: {{ index_php_check.stat.size }} bytes
+          - Owner: {{ index_php_check.stat.pw_name }}:{{ index_php_check.stat.gr_name }}
+          - Mode: {{ index_php_check.stat.mode }}
+          - Readable by nginx: {{ 'Yes' if nginx_read_test.rc == 0 else 'No' }}
   tags:
     - www_content
 
@@ -250,3 +285,35 @@
         msg: "Verification script successfully created and is executable"
   tags:
     - verify_script
+
+- name: Final web service validation
+  block:
+    - name: Test HTTP response after configuration
+      uri:
+        url: "http://{{ server_ip }}/"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: final_web_test
+      ignore_errors: true
+      
+    - name: Log web service test result
+      debug:
+        msg: |
+          Web service test:
+          - Status: {{ 'SUCCESS' if final_web_test.status == 200 else 'FAILED' }}
+          - HTTP Status: {{ final_web_test.status | default('N/A') }}
+          - Content Type: {{ final_web_test.content_type | default('N/A') }}
+          
+    - name: Display troubleshooting info if web test failed
+      debug:
+        msg: |
+          Web service test failed. Check:
+          1. nginx status: systemctl status nginx
+          2. PHP-FPM status: systemctl status php8.3-fpm
+          3. nginx error logs: tail -f /var/log/nginx/error.log
+          4. PHP-FPM logs: tail -f /var/log/php8.3-fpm.log
+          5. File permissions: ls -la /var/www/html/index.php
+      when: final_web_test.status != 200
+  tags:
+    - web_validation
