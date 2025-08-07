@@ -273,6 +273,16 @@
     owner: root
     group: root
     mode: "0755"
+    recurse: yes
+  tags:
+    - netboot
+
+- name: Ensure dnsmasq can access TFTP directory (verify ownership)
+  shell: |
+    chown -R root:root /var/lib/tftpboot
+    chmod -R 755 /var/lib/tftpboot
+    find /var/lib/tftpboot -type f -exec chmod 644 {} \;
+  changed_when: false
   tags:
     - netboot
 
@@ -289,6 +299,8 @@
   get_url:
     url: "{{ item.item.url }}"
     dest: "{{ item.item.dest }}"
+    owner: root
+    group: root
     mode: '0644'
   loop: "{{ ipxe_files.results }}"
   when: not item.stat.exists
@@ -296,6 +308,19 @@
   until: ipxe_download is succeeded
   retries: 5
   delay: 2
+  tags:
+    - netboot
+
+- name: Fix permissions on existing TFTP files for dnsmasq access
+  file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: '0644'
+    state: file
+  loop:
+    - /var/lib/tftpboot/ipxe.efi
+  ignore_errors: true
   tags:
     - netboot
 
