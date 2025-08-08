@@ -24,10 +24,6 @@
         masked: yes
       ignore_errors: yes
       
-    - name: Kill any remaining systemd-resolved processes
-      shell: "pkill -f systemd-resolved || true"
-      changed_when: false
-      
     - name: Remove /etc/resolv.conf symlink
       file:
         path: /etc/resolv.conf
