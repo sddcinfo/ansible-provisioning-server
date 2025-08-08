@@ -12,15 +12,11 @@ network:
       dhcp4: false
       dhcp6: false
       mtu: {{ jumbo_frame_mtu | default('9000') }}
-      link-speed: 1000
-      link-duplex: full
       
     {{ bridge_interface_2 | default('enp3s0') }}:
       dhcp4: false
       dhcp6: false
       mtu: {{ jumbo_frame_mtu | default('9000') }}
-      link-speed: 1000
-      link-duplex: full
       
   bridges:
     # Provisioning bridge for internal network with jumbo frames

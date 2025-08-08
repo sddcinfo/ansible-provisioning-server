@@ -134,3 +134,14 @@
           - "Bridge members: {{ bridge_members.stdout if bridge_members.stdout != 'No bridge members found' else 'Bridge created but members may be attaching' }}"
           - "WAN Interface {{ wan_interface | default('enp1s0') }}: {{ 'CONNECTED' if wan_connectivity_test.rc == 0 else 'DISCONNECTED (may be expected)' }}"
           - "Active routes: {{ route_verification.stdout_lines | length }}"
+
+- name: Force 1000/full duplex on bridge interfaces
+  ethtool:
+    name: "{{ item }}"
+    speed: 1000
+    duplex: full
+    autoneg: "no"
+  loop:
+    - "{{ bridge_interface_1 | default('enp2s0') }}"
+    - "{{ bridge_interface_2 | default('enp3s0') }}"
+  notify: Restart systemd-networkd
