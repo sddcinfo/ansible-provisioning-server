@@ -5,6 +5,11 @@
 # This should be in the same range as the target nodes but with server IP
 ceph_ip: 10.10.2.1
 
-# Network interfaces (can be overridden in group_vars or host_vars)
+# Network interfaces (will be auto-detected, these are fallbacks)
+# These can be overridden in group_vars or host_vars if needed
 management_interface: eno1
 storage_interface: eno3
+
+# Ubuntu 24.04 compatibility settings
+netplan_renderer: networkd  # Use systemd-networkd for server consistency
+netplan_validation_timeout: 30  # Seconds to wait during netplan try

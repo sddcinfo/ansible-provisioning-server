@@ -1,9 +1,38 @@
 ---
+- name: Detect available network interfaces
+  block:
+    - name: Get all network interfaces except loopback
+      shell: "ip link show | grep '^[0-9]' | grep -v lo | awk '{print $2}' | sed 's/://'"
+      register: all_interfaces
+      changed_when: false
+      
+    - name: Set management interface (first available)
+      set_fact:
+        management_interface: "{{ all_interfaces.stdout_lines[0] | default('eno1') }}"
+      when: all_interfaces.stdout_lines | length > 0
+      
+    - name: Set storage interface (second available or default)
+      set_fact:
+        storage_interface: "{{ all_interfaces.stdout_lines[1] | default('eno3') }}"
+      when: all_interfaces.stdout_lines | length > 1
+      
+    - name: Log detected interfaces
+      debug:
+        msg: "Detected interfaces - Management: {{ management_interface | default('eno1') }}, Storage: {{ storage_interface | default('eno3') }}"
+
 - name: Find existing netplan configuration files
   ansible.builtin.find:
     paths: /etc/netplan
     patterns: "*.yaml,*.yml"
   register: netplan_files
+
+- name: Backup existing netplan configuration files
+  ansible.builtin.copy:
+    src: "{{ item.path }}"
+    dest: "{{ item.path }}.backup.{{ ansible_date_time.epoch }}"
+    remote_src: yes
+  with_items: "{{ netplan_files.files }}"
+  when: netplan_files.files | length > 0
 
 - name: Remove existing netplan configuration files
   ansible.builtin.file:
@@ -19,3 +48,38 @@
     group: root
     mode: '0600'
   notify: Apply netplan with verification
+
+- name: Validate and apply netplan configuration
+  block:
+    - name: Validate netplan configuration syntax
+      command: netplan try --timeout=30
+      register: netplan_try_result
+      changed_when: false
+      failed_when: netplan_try_result.rc != 0
+      
+    - name: Flush handlers to apply netplan
+      meta: flush_handlers
+      
+    - name: Wait for network interfaces to stabilize
+      pause:
+        seconds: 5
+        
+    - name: Verify network configuration is active
+      command: ip route show
+      register: route_verification
+      changed_when: false
+      failed_when: route_verification.stdout == ""
+      
+    - name: Test connectivity to ensure network is functional  
+      command: ping -c 2 -W 3 8.8.8.8
+      register: connectivity_test
+      changed_when: false
+      failed_when: connectivity_test.rc != 0
+      ignore_errors: yes
+      
+    - name: Log network configuration status
+      debug:
+        msg: 
+          - "Netplan configuration applied successfully"
+          - "Active routes: {{ route_verification.stdout_lines | length }}"
+          - "Connectivity test: {{ 'PASSED' if connectivity_test.rc == 0 else 'FAILED (may be expected if no internet)' }}"

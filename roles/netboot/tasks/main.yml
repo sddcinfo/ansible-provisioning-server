@@ -4,13 +4,29 @@
     dest: /etc/resolv.conf
     content: "nameserver 8.8.8.8"
 
-- name: Replace systemd-resolved with dnsmasq
+- name: Replace systemd-resolved with dnsmasq (Ubuntu 24.04 compatible)
   block:
-    - name: Mask systemd-resolved to prevent restart
+    - name: Stop systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        state: stopped
+      ignore_errors: yes
+      
+    - name: Disable systemd-resolved service
+      systemd:
+        name: systemd-resolved
+        enabled: no
+      ignore_errors: yes
+      
+    - name: Mask systemd-resolved to prevent restart (Ubuntu 24.04)
       systemd:
         name: systemd-resolved
         masked: yes
-        state: stopped
+      ignore_errors: yes
+      
+    - name: Kill any remaining systemd-resolved processes
+      shell: "pkill -f systemd-resolved || true"
+      changed_when: false
       
     - name: Remove /etc/resolv.conf symlink
       file:
@@ -23,6 +39,13 @@
         content: |
           nameserver 8.8.8.8
           nameserver 8.8.4.4
+        
+    - name: Ensure systemd-resolved won't restart (disable socket)
+      systemd:
+        name: systemd-resolved.service
+        masked: yes
+        enabled: no
+      ignore_errors: yes
   tags:
     - netboot
 
