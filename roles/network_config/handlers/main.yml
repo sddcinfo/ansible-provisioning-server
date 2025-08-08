@@ -1,3 +1,5 @@
 ---
-- name: Apply netplan with verification
-  command: netplan apply
+- name: Restart systemd-networkd
+  ansible.builtin.systemd:
+    name: systemd-networkd
+    state: restarted

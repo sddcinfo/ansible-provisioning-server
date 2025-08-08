@@ -1,9 +1,12 @@
 ---
-- hosts: local
+- name: Provisioning Server Setup
+  hosts: localhost
   connection: local
   become: yes
+
   roles:
-    - common
+    - role: common
+      tags: ['common']
     - network_config
     - netboot
     - web

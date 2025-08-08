@@ -136,12 +136,9 @@
           - "Active routes: {{ route_verification.stdout_lines | length }}"
 
 - name: Force 1000/full duplex on bridge interfaces
-  ethtool:
-    name: "{{ item }}"
-    speed: 1000
-    duplex: full
-    autoneg: "no"
+  ansible.builtin.command: ethtool -s {{ item }} speed 1000 duplex full autoneg off
   loop:
     - "{{ bridge_interface_1 | default('enp2s0') }}"
     - "{{ bridge_interface_2 | default('enp3s0') }}"
+  changed_when: true
   notify: Restart systemd-networkd
