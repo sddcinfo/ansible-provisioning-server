@@ -1,6 +1,6 @@
 ---
-ubuntu_iso_url: "https://releases.ubuntu.com/24.04/ubuntu-24.04.2-live-server-amd64.iso"
-ubuntu_iso_name: "ubuntu-24.04.2-live-server-amd64.iso"
+ubuntu_iso_url: "https://ftp.riken.jp/Linux/ubuntu-releases/noble/ubuntu-24.04.3-desktop-amd64.iso"
+ubuntu_iso_name: "ubuntu-24.04.3-desktop-amd64.iso"
 ubuntu_iso_download_dir: "/tmp"
 ubuntu_iso_mount_point: "/mnt/ubuntu_iso"
 ubuntu_provisioning_dir: "/var/www/html/provisioning/ubuntu24.04"

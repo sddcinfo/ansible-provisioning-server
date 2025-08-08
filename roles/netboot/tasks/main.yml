@@ -32,10 +32,6 @@
         masked: yes
       ignore_errors: yes
       
-    - name: Kill any remaining systemd-resolved processes
-      shell: "pkill -f systemd-resolved || true"
-      changed_when: false
-      
     - name: Prevent NetworkManager DNS management (Ubuntu 24.04)
       lineinfile:
         path: /etc/NetworkManager/NetworkManager.conf
