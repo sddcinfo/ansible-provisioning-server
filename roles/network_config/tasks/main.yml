@@ -43,6 +43,12 @@
     patterns: "*.yaml,*.yml"
   register: netplan_files
 
+- name: Install ethtool for network interface configuration
+  ansible.builtin.apt:
+    name: ethtool
+    state: present
+    update_cache: yes
+
 - name: Backup existing netplan configuration files
   ansible.builtin.copy:
     src: "{{ item.path }}"
