@@ -1,26 +1,4 @@
 ---
 - name: Apply netplan with verification
-  block:
-    - name: Validate netplan configuration syntax
-      ansible.builtin.command: netplan try --timeout=10
-      register: netplan_try_result
-      changed_when: false
-      failed_when: netplan_try_result.rc != 0
-      
-    - name: Apply netplan configuration
-      ansible.builtin.command: netplan apply
-      register: netplan_apply_result
-      
-    - name: Wait for network interfaces to be configured
-      ansible.builtin.wait_for:
-        timeout: 30
-      delegate_to: localhost
-      
-    - name: Verify network configuration is active
-      ansible.builtin.command: ip route show
-      register: route_verification
-      changed_when: false
-      
-    - name: Log netplan application success
-      ansible.builtin.debug:
-        msg: "Netplan configuration successfully applied and verified"
+  ansible.builtin.command: netplan apply
+  register: netplan_apply_result

@@ -3,8 +3,10 @@ network:
   ethernets:
     eno1:
       dhcp4: true
+      dhcp6: true
     eno3:
       dhcp4: false
+      dhcp6: false
       addresses:
         - {{ ceph_ip }}/24
       mtu: 9000

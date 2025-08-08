@@ -7,13 +7,3 @@
 - name: systemd daemon reload
   ansible.builtin.systemd:
     daemon_reload: yes
-
-- name: update grub
-  ansible.builtin.command:
-    cmd: update-grub
-  register: grub_update_result
-
-- name: update initramfs
-  ansible.builtin.command:
-    cmd: update-initramfs -u
-  register: initramfs_update_result
