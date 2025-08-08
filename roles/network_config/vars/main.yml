@@ -23,3 +23,6 @@ netplan_validation_timeout: 30  # Seconds to wait during netplan try
 # Bridge parameters
 bridge_stp_enabled: false  # Disable Spanning Tree Protocol for faster startup
 bridge_forward_delay: 0    # No forwarding delay for bridge
+
+# Jumbo frame support for high-performance networking
+jumbo_frame_mtu: 9000      # Enable jumbo frames on bridge and member interfaces

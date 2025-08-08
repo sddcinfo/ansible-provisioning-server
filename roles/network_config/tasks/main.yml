@@ -89,6 +89,13 @@
       pause:
         seconds: 10
         
+    - name: Ensure systemd-networkd manages the bridge (Ubuntu 24.04)
+      systemd:
+        name: systemd-networkd
+        state: restarted
+        enabled: yes
+      ignore_errors: yes
+        
     - name: Verify network configuration is active
       command: ip route show
       register: route_verification

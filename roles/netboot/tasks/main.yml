@@ -2,10 +2,18 @@
 - name: Create temporary /etc/resolv.conf to allow for DNS lookups
   ansible.builtin.copy:
     dest: /etc/resolv.conf
-    content: "nameserver 8.8.8.8"
+    content: "nameserver 192.168.10.1"
 
 - name: Replace systemd-resolved with dnsmasq (Ubuntu 24.04 compatible)
   block:
+    - name: Stop and disable systemd-resolved socket (Ubuntu 24.04)
+      systemd:
+        name: systemd-resolved.socket
+        state: stopped
+        enabled: no
+        masked: yes
+      ignore_errors: yes
+      
     - name: Stop systemd-resolved service
       systemd:
         name: systemd-resolved
@@ -24,6 +32,18 @@
         masked: yes
       ignore_errors: yes
       
+    - name: Kill any remaining systemd-resolved processes
+      shell: "pkill -f systemd-resolved || true"
+      changed_when: false
+      
+    - name: Prevent NetworkManager DNS management (Ubuntu 24.04)
+      lineinfile:
+        path: /etc/NetworkManager/NetworkManager.conf
+        section: main
+        option: dns
+        value: none
+        create: yes
+      ignore_errors: yes
     - name: Remove /etc/resolv.conf symlink
       file:
         path: /etc/resolv.conf
@@ -35,13 +55,6 @@
         content: |
           nameserver 8.8.8.8
           nameserver 8.8.4.4
-        
-    - name: Ensure systemd-resolved won't restart (disable socket)
-      systemd:
-        name: systemd-resolved.service
-        masked: yes
-        enabled: no
-      ignore_errors: yes
   tags:
     - netboot
 

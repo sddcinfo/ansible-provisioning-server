@@ -7,20 +7,23 @@ network:
       dhcp4: true
       dhcp6: true
       
-    # Bridge member interfaces - no IP configuration
+    # Bridge member interfaces - no IP configuration, jumbo frames enabled
     {{ bridge_interface_1 | default('enp2s0') }}:
       dhcp4: false
       dhcp6: false
+      mtu: {{ jumbo_frame_mtu | default('9000') }}
       
     {{ bridge_interface_2 | default('enp3s0') }}:
       dhcp4: false
       dhcp6: false
+      mtu: {{ jumbo_frame_mtu | default('9000') }}
       
   bridges:
-    # Provisioning bridge for internal network
+    # Provisioning bridge for internal network with jumbo frames
     {{ provisioning_bridge | default('br-prov') }}:
       dhcp4: false
       dhcp6: false
+      mtu: {{ jumbo_frame_mtu | default('9000') }}
       interfaces:
         - {{ bridge_interface_1 | default('enp2s0') }}
         - {{ bridge_interface_2 | default('enp3s0') }}
