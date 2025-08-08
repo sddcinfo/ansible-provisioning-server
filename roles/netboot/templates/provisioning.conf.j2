@@ -30,11 +30,9 @@ enable-ra
 quiet-ra
 
 # === Upstream DNS Servers (IPv4 and IPv6) ===
-server=8.8.8.8
-server=8.8.4.4
-# IPv6 DNS servers
-server=2001:4860:4860::8888
-server=2001:4860:4860::8844
+{% for server in dnsmasq_upstream_servers %}
+server={{ server }}
+{% endfor %}
 
 # === Static DNS Records (A and PTR) ===
 {% for host in dnsmasq_static_hosts %}

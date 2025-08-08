@@ -2,7 +2,9 @@
 - name: Create temporary /etc/resolv.conf to allow for DNS lookups
   ansible.builtin.copy:
     dest: /etc/resolv.conf
-    content: "nameserver 192.168.10.1"
+    content: |
+      nameserver 192.168.10.1
+      nameserver 2606:4700:4700::1111
 
 - name: Replace systemd-resolved with dnsmasq (Ubuntu 24.04 compatible)
   block:
@@ -49,8 +51,8 @@
       copy:
         dest: /etc/resolv.conf
         content: |
-          nameserver 8.8.8.8
-          nameserver 8.8.4.4
+          nameserver 192.168.10.1
+          nameserver 2606:4700:4700::1111
   tags:
     - netboot
 

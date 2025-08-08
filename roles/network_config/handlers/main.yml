@@ -1,4 +1,8 @@
 ---
+- name: Apply netplan with verification
+  ansible.builtin.command: netplan apply
+  changed_when: true
+
 - name: Restart systemd-networkd
   ansible.builtin.systemd:
     name: systemd-networkd
