@@ -1,15 +1,25 @@
 ---
 # Network configuration variables for the provisioning server
 
-# Ceph storage network IP for the provisioning server  
-# This should be in the same range as the target nodes but with server IP
-ceph_ip: 10.10.2.1
+# Provisioning server network configuration
+# WAN interface for external connectivity
+wan_interface: enp1s0
 
-# Network interfaces (will be auto-detected, these are fallbacks)
-# These can be overridden in group_vars or host_vars if needed
-management_interface: eno1
-storage_interface: eno3
+# Bridge configuration for provisioning network  
+bridge_interface_1: enp2s0
+bridge_interface_2: enp3s0
+provisioning_bridge: br-prov
+provisioning_ip: 10.10.1.1
+
+# Legacy variables for compatibility (deprecated)
+ceph_ip: 10.10.2.1  # Not used in bridge config
+management_interface: "{{ provisioning_bridge }}"  # Bridge is the management interface
+storage_interface: enp3s0  # Legacy compatibility
 
 # Ubuntu 24.04 compatibility settings
 netplan_renderer: networkd  # Use systemd-networkd for server consistency
 netplan_validation_timeout: 30  # Seconds to wait during netplan try
+
+# Bridge parameters
+bridge_stp_enabled: false  # Disable Spanning Tree Protocol for faster startup
+bridge_forward_delay: 0    # No forwarding delay for bridge

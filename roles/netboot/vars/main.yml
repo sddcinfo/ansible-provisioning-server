@@ -1,5 +1,6 @@
 ---
-dnsmasq_listen_address: "10.10.1.1"
+# Use the provisioning IP from network_config
+dnsmasq_listen_address: "{{ provisioning_ip | default('10.10.1.1') }}"
 dnsmasq_domain: sddc.info
 dnsmasq_upstream_servers:
   - 8.8.8.8

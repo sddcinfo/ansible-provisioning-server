@@ -2,12 +2,30 @@ network:
   version: 2
   renderer: networkd
   ethernets:
-    {{ management_interface | default('eno1') }}:
+    # WAN interface - external connectivity via DHCP
+    {{ wan_interface | default('enp1s0') }}:
       dhcp4: true
       dhcp6: true
-    {{ storage_interface | default('eno3') }}:
+      
+    # Bridge member interfaces - no IP configuration
+    {{ bridge_interface_1 | default('enp2s0') }}:
       dhcp4: false
       dhcp6: false
+      
+    {{ bridge_interface_2 | default('enp3s0') }}:
+      dhcp4: false
+      dhcp6: false
+      
+  bridges:
+    # Provisioning bridge for internal network
+    {{ provisioning_bridge | default('br-prov') }}:
+      dhcp4: false
+      dhcp6: false
+      interfaces:
+        - {{ bridge_interface_1 | default('enp2s0') }}
+        - {{ bridge_interface_2 | default('enp3s0') }}
       addresses:
-        - {{ ceph_ip }}/24
-      mtu: 9000
+        - {{ provisioning_ip | default('10.10.1.1') }}/24
+      parameters:
+        stp: false
+        forward-delay: 0

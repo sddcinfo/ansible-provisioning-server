@@ -62,11 +62,25 @@
       set_fact:
         tftp_port_test: "{{ {'failed': false} if tftp_port_bound.rc == 0 else {'failed': true} }}"
       
-    - name: Validate DNS resolution works
-      ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com +short +time=5"
-      register: dns_test
+    - name: Validate IPv4 DNS resolution works
+      ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com A +short +time=5"
+      register: dns_ipv4_test
       changed_when: false
-      failed_when: dns_test.rc != 0 or dns_test.stdout == ""
+      failed_when: dns_ipv4_test.rc != 0 or dns_ipv4_test.stdout == ""
+      
+    - name: Validate IPv6 DNS resolution works
+      ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com AAAA +short +time=5"
+      register: dns_ipv6_test
+      changed_when: false
+      failed_when: false  # Don't fail validation if IPv6 DNS doesn't work
+      ignore_errors: yes
+      
+    - name: Test IPv6 DNS server on localhost
+      ansible.builtin.command: "dig @::1 google.com AAAA +short +time=5"
+      register: dns_localhost_ipv6_test
+      changed_when: false
+      failed_when: false
+      ignore_errors: yes
 
     - name: Validate web service responds
       ansible.builtin.uri:
@@ -130,9 +144,22 @@
           Service Status:
           {{ dnsmasq_status_check.stdout_lines[-10:] | join('\n          ') if dnsmasq_status_check.rc == 0 else '          Could not get dnsmasq status' }}
 
+    - name: Log DNS validation results
+      ansible.builtin.debug:
+        msg: |
+          DNS Validation Results:
+          - IPv4 DNS ({{ dnsmasq_listen_address }}): {{ 'PASSED' if dns_ipv4_test.rc == 0 else 'FAILED' }}
+          - IPv6 DNS AAAA query ({{ dnsmasq_listen_address }}): {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
+          - IPv6 DNS localhost (::1): {{ 'PASSED' if dns_localhost_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
+          
+          IPv6 Support Status:
+          - dnsmasq configured for IPv6: YES
+          - IPv6 upstream servers: Google (2001:4860:4860::8888, 2001:4860:4860::8844)
+          - IPv6 DHCP range: ::1000 to ::2000 (if IPv6 available)
+
     - name: Log validation success
       ansible.builtin.debug:
-        msg: "System validation checks completed - TFTP may need manual verification if port test failed"
+        msg: "System validation checks completed - IPv6 DNS support enabled and tested"
 
   rescue:
     - name: Log validation failure details

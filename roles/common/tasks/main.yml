@@ -150,33 +150,36 @@
 
 - name: Configure NAT rules with dynamic interface detection
   block:
-    - name: Detect external network interface
-      ansible.builtin.shell: "ip route | grep default | head -1 | awk '{print $5}'"
-      register: external_interface
+    - name: Set external interface for NAT (WAN interface)
+      set_fact:
+        external_interface: "{{ wan_interface | default('enp1s0') }}"
+        
+    - name: Validate external interface exists
+      shell: "ip link show {{ external_interface }} 2>/dev/null"
+      register: external_interface_check
       changed_when: false
+      failed_when: external_interface_check.rc != 0
       
-    - name: Validate external interface was detected
-      ansible.builtin.fail:
-        msg: "Could not detect external network interface"
-      when: external_interface.stdout == ""
-      
-    - name: Log detected external interface
+    - name: Log NAT configuration
       ansible.builtin.debug:
-        msg: "Detected external interface: {{ external_interface.stdout }}"
+        msg: |
+          NAT Configuration:
+          - External Interface (WAN): {{ external_interface }}
+          - Internal Network: 10.10.1.0/24 (br-prov bridge)
         
     - name: Check if NAT rule exists
-      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
       register: nat_rule_check
       changed_when: false
       failed_when: false
       
     - name: Set NAT rule for internal network
-      ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      ansible.builtin.shell: "iptables -t nat -A POSTROUTING -s 10.10.1.0/24 -o {{ external_interface }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
       when: nat_rule_check.rc != 0
       register: nat_rule_add
       
     - name: Verify NAT rule was added successfully
-      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface.stdout }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
+      ansible.builtin.shell: "iptables -t nat -C POSTROUTING -s 10.10.1.0/24 -o {{ external_interface }} -j MASQUERADE -m comment --comment 'NAT for internal network'"
       when: nat_rule_check.rc != 0
       changed_when: false
       failed_when: false

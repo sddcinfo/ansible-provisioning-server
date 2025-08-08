@@ -128,13 +128,35 @@
         src: resolv.conf.j2
         dest: /etc/resolv.conf
     
-    - name: Verify DNS resolution works via dnsmasq
+    - name: Verify IPv4 DNS resolution works via dnsmasq
       command: nslookup google.com {{ dnsmasq_listen_address }}
-      register: dns_test
+      register: dns_ipv4_test
       retries: 3
       delay: 2
-      until: dns_test.rc == 0
+      until: dns_ipv4_test.rc == 0
       changed_when: false
+      
+    - name: Verify IPv6 DNS resolution works via dnsmasq
+      command: nslookup -type=AAAA google.com {{ dnsmasq_listen_address }}
+      register: dns_ipv6_test
+      retries: 3
+      delay: 2
+      until: dns_ipv6_test.rc == 0
+      changed_when: false
+      ignore_errors: yes  # IPv6 may not be fully configured yet
+      
+    - name: Test IPv6 DNS server availability
+      command: dig @::1 google.com AAAA +short
+      register: ipv6_dns_test
+      changed_when: false
+      ignore_errors: yes
+      
+    - name: Log DNS test results
+      debug:
+        msg:
+          - "IPv4 DNS test: {{ 'PASSED' if dns_ipv4_test.rc == 0 else 'FAILED' }}"
+          - "IPv6 DNS AAAA query: {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED (may be expected)' }}"
+          - "IPv6 DNS server test: {{ 'PASSED' if ipv6_dns_test.rc == 0 else 'FAILED (may be expected)' }}"
   tags:
     - netboot
 

@@ -1,11 +1,19 @@
 # /etc/dnsmasq.d/provisioning.conf
 
 # === General Configuration ===
-listen-address={{ dnsmasq_listen_address }}
-# Interface binding - TFTP requires special consideration
-{% if ansible_default_ipv4.interface is defined %}
-interface={{ ansible_default_ipv4.interface }}
+# Bind to provisioning bridge interface
+listen-address={{ provisioning_ip | default('10.10.1.1') }}
+# IPv6 support - listen on IPv6 addresses
+{% if ansible_default_ipv6.address is defined %}
+listen-address={{ ansible_default_ipv6.address }}
 {% endif %}
+# Listen on all interfaces for IPv6 (fallback)
+listen-address=::1
+
+# Interface binding - Bind to provisioning bridge
+interface={{ provisioning_bridge | default('br-prov') }}
+# Bind to localhost for IPv6
+bind-interfaces
 # Note: TFTP may bind to 0.0.0.0 even with interface binding
 no-resolv
 no-poll
@@ -16,9 +24,17 @@ domain-needed
 bogus-priv
 dns-forward-max=1000
 
-# === Upstream DNS Servers ===
+# IPv6 DNS configuration
+enable-ra
+# Disable IPv6 router advertisements (we're not a router for IPv6)
+quiet-ra
+
+# === Upstream DNS Servers (IPv4 and IPv6) ===
 server=8.8.8.8
 server=8.8.4.4
+# IPv6 DNS servers
+server=2001:4860:4860::8888
+server=2001:4860:4860::8844
 
 # === Static DNS Records (A and PTR) ===
 {% for host in dnsmasq_static_hosts %}
@@ -41,11 +57,23 @@ ptr-record={{ host.ip | regex_replace('^(\d+\.\d+\.\d+\.)(\d+)$', '\2.\1') }}in-
 {% endfor %}
 
 # === DHCP Configuration ===
+# IPv4 DHCP
 dhcp-range={{ dnsmasq_dhcp_range }}
 dhcp-option=option:router,{{ dnsmasq_dhcp_router }}
 dhcp-option=option:dns-server,{{ dnsmasq_dhcp_dns_server }}
+
+# IPv6 DHCP (if IPv6 is enabled)
+# Enable IPv6 DHCP on the provisioning bridge
+dhcp-range=::1000,::2000,constructor:{{ provisioning_bridge | default('br-prov') }},ra-names,12h
+# IPv6 DNS server option
+dhcp-option=option6:dns-server,[::1]
+
 dhcp-authoritative
 log-dhcp
+
+# IPv6 specific options
+# Enable IPv6 router advertisements
+dhcp-option=option6:information-refresh-time,6h
 
 # === TFTP Configuration ===
 enable-tftp
