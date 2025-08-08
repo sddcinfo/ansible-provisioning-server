@@ -4,6 +4,7 @@
   become: yes
   roles:
     - common
+    - network_config
     - netboot
     - web
     - iso_preparation

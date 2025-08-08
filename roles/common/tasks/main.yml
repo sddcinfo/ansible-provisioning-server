@@ -125,17 +125,34 @@
   tags:
     - packages
 
-- name: Configure sysctl to disable IPv6 and enable IP forwarding
+- name: Disable IPv6 comprehensively at boot
+  block:
+    - name: Add IPv6 disable to GRUB kernel parameters
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
+        line: 'GRUB_CMDLINE_LINUX_DEFAULT="quiet splash ipv6.disable=1"'
+        backup: yes
+      notify: update grub
+      
+    - name: Blacklist IPv6 kernel module
+      copy:
+        dest: /etc/modprobe.d/disable-ipv6.conf
+        content: |
+          # Disable IPv6 kernel module
+          blacklist ipv6
+          alias net-pf-10 off
+          alias ipv6 off
+        mode: '0644'
+      notify: update initramfs
+
+- name: Enable IP forwarding via sysctl
   ansible.posix.sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
+    name: net.ipv4.ip_forward
+    value: '1'
     sysctl_set: yes
     state: present
     reload: yes
-  with_items:
-    - { key: 'net.ipv6.conf.all.disable_ipv6', value: '1' }
-    - { key: 'net.ipv6.conf.default.disable_ipv6', value: '1' }
-    - { key: 'net.ipv4.ip_forward', value: '1' }
   tags:
     - network
 
