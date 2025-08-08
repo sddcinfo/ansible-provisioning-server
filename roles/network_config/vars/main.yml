@@ -1,0 +1,10 @@
+---
+# Network configuration variables for the provisioning server
+
+# Ceph storage network IP for the provisioning server  
+# This should be in the same range as the target nodes but with server IP
+ceph_ip: 10.10.2.1
+
+# Network interfaces (can be overridden in group_vars or host_vars)
+management_interface: eno1
+storage_interface: eno3
