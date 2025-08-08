@@ -18,4 +18,4 @@
     owner: root
     group: root
     mode: '0600'
-  notify: Apply netplan
+  notify: Apply netplan with verification
