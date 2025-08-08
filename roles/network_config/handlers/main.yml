@@ -1,3 +1,3 @@
 ---
 - name: Apply netplan with verification
-  ansible.builtin.command: netplan apply
+  command: netplan apply
