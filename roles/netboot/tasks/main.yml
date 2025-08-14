@@ -35,7 +35,7 @@
       ignore_errors: yes
       
     - name: Prevent NetworkManager DNS management (Ubuntu 24.04)
-      lineinfile:
+      ini_file:
         path: /etc/NetworkManager/NetworkManager.conf
         section: main
         option: dns
