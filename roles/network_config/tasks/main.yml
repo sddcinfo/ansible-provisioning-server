@@ -1,4 +1,12 @@
 ---
+- name: Install bridge utilities
+  apt:
+    name: bridge-utils
+    state: present
+  tags:
+    - network_config
+    - packages
+
 - name: Detect and validate specific network interfaces for provisioning server
   block:
     - name: Check for required interfaces (enp1s0, enp2s0, enp3s0)
