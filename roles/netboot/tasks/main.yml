@@ -101,10 +101,29 @@
 - name: Start and enable dnsmasq
   block:
     - name: Test dnsmasq configuration
-      command: dnsmasq --test
+      command: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
       register: dnsmasq_test
       changed_when: false
-      failed_when: dnsmasq_test.rc != 0
+      failed_when: false
+      
+    - name: Show dnsmasq configuration test results
+      debug:
+        msg: |
+          Dnsmasq config test: {{ 'PASSED' if dnsmasq_test.rc == 0 else 'FAILED' }}
+          {{ dnsmasq_test.stdout if dnsmasq_test.stdout else '' }}
+          {{ dnsmasq_test.stderr if dnsmasq_test.stderr else '' }}
+      
+    - name: Check dnsmasq configuration syntax
+      command: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
+      register: dnsmasq_syntax
+      changed_when: false
+      failed_when: dnsmasq_syntax.rc != 0
+      
+    - name: Verify provisioning bridge exists before starting dnsmasq
+      command: ip link show {{ provisioning_bridge | default('br-prov') }}
+      register: bridge_check
+      changed_when: false
+      failed_when: bridge_check.rc != 0
       
     - name: Start and enable dnsmasq
       systemd:
