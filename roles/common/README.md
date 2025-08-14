@@ -20,10 +20,10 @@ The common role performs essential system hardening, package management, and net
 - Sets up authorized keys for key-based authentication
 
 ### Network Configuration
-- Disables IPv6 system-wide via sysctl
-- Enables IP forwarding for NAT functionality
+- Enables IPv4 and IPv6 forwarding for dual-stack functionality
 - Configures iptables NAT rules for internal network access
 - Installs and configures iptables-persistent for rule persistence
+- Supports full dual-stack IPv4/IPv6 networking
 
 ### System Hardening
 - Sets proper file permissions and ownership for SSH keys
