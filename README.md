@@ -129,8 +129,10 @@ cd ansible-provisioning-server
 cp nodes.json.example nodes.json
 ${EDITOR:-nano} nodes.json
 
-# Configure additional settings if needed
-# All credentials are managed in inventory files
+# Configure Redfish/BMC credentials for hardware management
+cp .redfish_credentials.example .redfish_credentials
+${EDITOR:-nano} .redfish_credentials
+chmod 600 .redfish_credentials
 ```
 
 ### 3. Infrastructure Deployment
@@ -139,7 +141,7 @@ ${EDITOR:-nano} nodes.json
 # Core provisioning infrastructure with validation
 sudo ansible-playbook site.yml 
 # Target server boot configuration
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit console-node1
+sudo ansible-playbook set_boot_order.yml --limit console-node1
 ```
 
 ### 4. Deployment Verification
@@ -193,6 +195,7 @@ The `nodes.json` file serves as the single source of truth for infrastructure to
 
 ### Credential Management
 
+#### Ansible Inventory Credentials
 Credentials can be configured directly in inventory files:
 
 ```yaml
@@ -200,6 +203,19 @@ Credentials can be configured directly in inventory files:
 ---
 ipmi_user: "admin"
 ipmi_pass: "secure_password"
+```
+
+#### Redfish/BMC Credentials
+For the redfish.py script, configure BMC credentials:
+
+```bash
+# Copy example and configure
+cp .redfish_credentials.example .redfish_credentials
+chmod 600 .redfish_credentials
+
+# Edit with your BMC credentials
+# Format: REDFISH_AUTH="username:password"
+echo 'REDFISH_AUTH="admin:your_bmc_password"' > .redfish_credentials
 ```
 
 **Security Best Practices:**
