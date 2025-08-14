@@ -129,20 +129,15 @@ cd ansible-provisioning-server
 cp nodes.json.example nodes.json
 ${EDITOR:-nano} nodes.json
 
-# Vault initialization for credentials
-ansible-vault create group_vars/all/secrets.yml
-
-# Vault password management
-echo "$(openssl rand -base64 32)" > ~/.vault_pass
-chmod 600 ~/.vault_pass
+# Configure additional settings if needed
+# All credentials are managed in inventory files
 ```
 
 ### 3. Infrastructure Deployment
 
 ```bash
 # Core provisioning infrastructure with validation
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml 
 # Target server boot configuration
 sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit console-node1
 ```
@@ -198,21 +193,20 @@ The `nodes.json` file serves as the single source of truth for infrastructure to
 
 ### Credential Management
 
-This solution implements Ansible Vault for secure credential storage:
+Credentials can be configured directly in inventory files:
 
 ```yaml
-# group_vars/all/secrets.yml (encrypted)
+# In inventory or group_vars files
 ---
 ipmi_user: "admin"
 ipmi_pass: "secure_password"
-vault_password: "encryption_key"
 ```
 
 **Security Best Practices:**
 - Use strong, unique passwords for all accounts
 - Rotate credentials regularly
-- Restrict vault file permissions (600)
-- Never commit unencrypted credentials
+- Restrict file permissions (600) for sensitive files
+- Never commit unencrypted credentials to version control
 
 ### Enterprise Security Features
 
@@ -266,8 +260,7 @@ sudo /usr/local/bin/monitoring/health_check.sh
 #### Infrastructure Deployment
 ```bash
 # Complete provisioning server setup with validation
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml 
 # Selective role execution
 sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web,validation"
 
@@ -281,8 +274,7 @@ sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --skip-tags "
 sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit <hostname>
 
 # Bulk boot configuration
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass
-```
+sudo ansible-playbook set_boot_order.yml ```
 
 ### Management Scripts
 
@@ -409,8 +401,7 @@ sudo /usr/local/bin/monitoring/health_check.sh
 #### Validation Framework
 ```bash
 # Run system validation manually
-sudo ansible-playbook site.yml --tags "validation" --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml --tags "validation" 
 # Check validation failure flags
 ls -la /tmp/ansible_validation_failed
 
