@@ -50,7 +50,7 @@ kube_proxy_mode: ipvs
 # internal network. When used, it will assign IP
 # addresses from this range to individual pods.
 # This network must be unused in your network infrastructure!
-kube_pods_subnet: {{ kube_pods_subnet }}
+kube_pods_subnet: {{ pod_network_cidr }}
 
 # internal network node size allocation (optional). This is the size allocated
 # to each node on your network.  With these defaults you should have

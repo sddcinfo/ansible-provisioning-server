@@ -249,6 +249,54 @@
   tags:
     - autoinstall_configs
 
+# Multi-OS configuration support
+- name: Create multi-OS default configuration directories
+  file:
+    path: "{{ nginx_web_root }}/autoinstall_configs/{{ os_key }}_default"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop: "{{ supported_operating_systems | dict2items }}"
+  loop_control:
+    loop_var: os_item
+  vars:
+    os_key: "{{ os_item.key }}"
+  tags:
+    - multi_os_configs
+
+- name: Template out Ubuntu default configurations (for backward compatibility)
+  template:
+    src: "{{ item.template }}"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/ubuntu2404_default/{{ item.filename }}"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop:
+    - { template: "autoinstall-user-data.j2", filename: "user-data" }
+    - { template: "autoinstall-meta-data.j2", filename: "meta-data" }
+  vars:
+    hostname: "{{ default_autoinstall_nodes.ubuntu2404.hostname }}"
+    mac: "{{ default_autoinstall_nodes.ubuntu2404.mac }}"
+  tags:
+    - multi_os_configs
+
+- name: Template out Proxmox default configurations
+  template:
+    src: "{{ item.template }}"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/proxmox9_default/{{ item.filename }}"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop:
+    - { template: "proxmox-preseed.cfg.j2", filename: "preseed.cfg" }
+    - { template: "proxmox-meta-data.j2", filename: "meta-data" }
+  vars:
+    hostname: "{{ default_autoinstall_nodes.proxmox9.hostname }}"
+    mac: "{{ default_autoinstall_nodes.proxmox9.mac }}"
+  tags:
+    - multi_os_configs
+
 - name: Generate redfish script
   template:
     src: ../../templates/redfish.py.j2

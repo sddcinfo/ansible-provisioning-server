@@ -1,0 +1,17 @@
+---
+# Legacy Ubuntu ISO preparation for backward compatibility
+# This maintains the original file structure and variables
+
+- name: Define legacy Ubuntu sentinel file path
+  set_fact:
+    legacy_extraction_sentinel_file: "{{ ubuntu_provisioning_dir }}/.extraction_complete"
+
+- name: Check if legacy Ubuntu ISO extraction is already complete
+  stat:
+    path: "{{ legacy_extraction_sentinel_file }}"
+  register: legacy_sentinel_file_stat
+
+- name: Skip legacy preparation if already handled by new multi-OS system
+  debug:
+    msg: "Legacy Ubuntu preparation skipped - handled by multi-OS system"
+  when: legacy_sentinel_file_stat.stat.exists

@@ -26,8 +26,34 @@ define('STATE_FILE', get_state_file_path());
 define('SERVER_IP', '{{ server_ip }}');
 define('CONFIG_DIR', __DIR__ . '/autoinstall_configs');
 define('SESSION_DIR', __DIR__ . '/sessions');
-define('ISO_BASE_URL', '{{ iso_base_url }}');
-define('ISO_NAME', 'ubuntu-24.04.3-live-server-amd64.iso');
+
+// Multi-OS Configuration
+$os_configs = [
+    'ubuntu2404' => [
+        'name' => 'Ubuntu 24.04 LTS',
+        'iso_base_url' => '{{ os_base_urls.ubuntu2404 }}',
+        'iso_name' => 'ubuntu-24.04.3-live-server-amd64.iso',
+        'kernel_path' => 'casper/vmlinuz',
+        'initrd_path' => 'casper/initrd',
+        'kernel_params' => 'modprobe.blacklist=nvme autoinstall ip=dhcp',
+        'config_type' => 'autoinstall',
+        'default_config' => 'ubuntu2404_default'
+    ],
+    'proxmox9' => [
+        'name' => 'Proxmox VE 9',
+        'iso_base_url' => '{{ os_base_urls.proxmox9 }}',
+        'iso_name' => 'proxmox-ve_9.0-1.iso',
+        'kernel_path' => 'boot/linux26',
+        'initrd_path' => 'boot/initrd.img',
+        'kernel_params' => 'ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer auto=true priority=critical',
+        'config_type' => 'preseed',
+        'default_config' => 'proxmox9_default'
+    ]
+];
+
+// Legacy compatibility
+define('ISO_BASE_URL', $os_configs['ubuntu2404']['iso_base_url']);
+define('ISO_NAME', $os_configs['ubuntu2404']['iso_name']);
 // --- End Configuration ---
 
 
@@ -48,6 +74,35 @@ function get_status(string $mac): string {
     return $db[strtolower($mac)]['status'] ?? 'NEW';
 }
 
+function get_os_type(string $mac): string {
+    $db = read_state_db();
+    return $db[strtolower($mac)]['os_type'] ?? 'ubuntu2404';
+}
+
+function set_os_type(string $mac, string $os_type): bool {
+    $mac = strtolower($mac);
+    $fp = fopen(STATE_FILE, 'c+');
+    if (!$fp) { return false; }
+    if (flock($fp, LOCK_EX)) {
+        $raw_data = stream_get_contents($fp);
+        $db = json_decode($raw_data, true) ?: [];
+        if (!isset($db[$mac])) {
+            $db[$mac] = ['status' => 'NEW', 'timestamp' => date('c')];
+        }
+        $db[$mac]['os_type'] = $os_type;
+        $db[$mac]['timestamp'] = date('c');
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($db, JSON_PRETTY_PRINT));
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return true;
+    }
+    fclose($fp);
+    return false;
+}
+
 function set_status(string $mac, string $status): bool {
     $mac = strtolower($mac);
     $fp = fopen(STATE_FILE, 'c+');
@@ -55,7 +110,11 @@ function set_status(string $mac, string $status): bool {
     if (flock($fp, LOCK_EX)) {
         $raw_data = stream_get_contents($fp);
         $db = json_decode($raw_data, true) ?: [];
-        $db[$mac] = ['status' => $status, 'timestamp' => date('c')];
+        if (!isset($db[$mac])) {
+            $db[$mac] = ['os_type' => 'ubuntu2404'];
+        }
+        $db[$mac]['status'] = $status;
+        $db[$mac]['timestamp'] = date('c');
         ftruncate($fp, 0);
         rewind($fp);
         fwrite($fp, json_encode($db, JSON_PRETTY_PRINT));
@@ -94,6 +153,7 @@ function delete_entry(string $mac): bool {
 // --- Action Handlers ---
 
 function handle_boot_request(): void {
+    global $os_configs;
     $mac = strtolower($_GET['mac'] ?? '');
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
@@ -102,26 +162,39 @@ function handle_boot_request(): void {
     }
     header("Content-Type: text/plain");
     $status = get_status($mac);
+    $os_type = get_os_type($mac);
+    
     if ($status === 'DONE') {
         echo "#!ipxe\n";
         echo "echo Installation is DONE for {$mac}. Booting from local disk.\n";
         echo "exit\n";
     } else {
-        if (!prepare_session($mac)) {
+        if (!prepare_session($mac, $os_type)) {
             echo "#!ipxe\n";
             echo "echo ERROR: Could not prepare installation session. Check server logs.\n";
             echo "reboot\n";
-            error_log("Failed to prepare session for MAC: {$mac}");
+            error_log("Failed to prepare session for MAC: {$mac}, OS: {$os_type}");
             return;
         }
         set_status($mac, 'INSTALLING');
+        
+        $os_config = $os_configs[$os_type];
         $seed_url = "http://" . SERVER_IP . "/sessions/" . $mac . "/";
-        $kernel_params = "modprobe.blacklist=nvme autoinstall ip=dhcp url=" . ISO_BASE_URL . "/" . ISO_NAME;
-        $kernel_params .= " ds=nocloud;seedfrom=" . $seed_url;
+        
         echo "#!ipxe\n";
-        echo "echo Starting Ubuntu 24.04 installation for {$mac}...\n";
-        echo "kernel " . ISO_BASE_URL . "/casper/vmlinuz {$kernel_params}\n";
-        echo "initrd " . ISO_BASE_URL . "/casper/initrd\n";
+        echo "echo Starting {$os_config['name']} installation for {$mac}...\n";
+        
+        if ($os_type === 'ubuntu2404') {
+            $kernel_params = $os_config['kernel_params'] . " url=" . $os_config['iso_base_url'] . "/" . $os_config['iso_name'];
+            $kernel_params .= " ds=nocloud;seedfrom=" . $seed_url;
+            echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        } elseif ($os_type === 'proxmox9') {
+            $kernel_params = $os_config['kernel_params'] . " preseed/url=" . $seed_url . "preseed.cfg";
+            echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        }
+        
         echo "boot || goto error\n";
         echo ":error\n";
         echo "echo Critical boot error. Please check server logs. Rebooting in 10s.\n";
@@ -204,7 +277,39 @@ function handle_delete_request(): void {
     }
 }
 
+function handle_set_os_request(): void {
+    global $os_configs;
+    $mac = strtolower($_GET['mac'] ?? '');
+    $os_type = $_GET['os_type'] ?? '';
+    
+    if (!is_valid_mac($mac)) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "Invalid or missing MAC address.";
+        return;
+    }
+    
+    if (!isset($os_configs[$os_type])) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "Invalid OS type.";
+        return;
+    }
+    
+    if (set_os_type($mac, $os_type)) {
+        $redirect_url = '?action=status';
+        if (isset($_GET['test_state_file'])) {
+            $redirect_url .= '&test_state_file=' . urlencode($_GET['test_state_file']);
+        }
+        header("Location: " . $redirect_url);
+        exit();
+    } else {
+        header("HTTP/1.1 500 Internal Server Error");
+        echo "ERROR: Failed to set OS type.";
+        error_log("Failed to set OS type for MAC: {$mac}");
+    }
+}
+
 function handle_status_request(): void {
+    global $os_configs;
     header("Content-Type: text/html");
     $db = read_state_db();
 ?>
@@ -242,6 +347,7 @@ function handle_status_request(): void {
                 <thead class="table-dark">
                     <tr>
                         <th>MAC Address</th>
+                        <th>OS Type</th>
                         <th>Status</th>
                         <th>Last Update</th>
                         <th>Actions</th>
@@ -249,11 +355,20 @@ function handle_status_request(): void {
                 </thead>
                 <tbody>
                     <?php if (empty($db)): ?>
-                        <tr><td colspan="4" class="text-center">No systems have been provisioned yet.</td></tr>
+                        <tr><td colspan="5" class="text-center">No systems have been provisioned yet.</td></tr>
                     <?php else: ?>
                         <?php foreach ($db as $mac => $data): ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($mac); ?></td>
+                                <td>
+                                    <select class="form-select form-select-sm" onchange="setOsType('<?php echo $mac; ?>', this.value)">
+                                        <?php foreach ($os_configs as $os_key => $os_config): ?>
+                                            <option value="<?php echo $os_key; ?>" <?php echo ($data['os_type'] ?? 'ubuntu2404') === $os_key ? 'selected' : ''; ?>>
+                                                <?php echo htmlspecialchars($os_config['name']); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
                                 <td><span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ?>"><?php echo htmlspecialchars($data['status']); ?></span></td>
                                 <td><?php echo htmlspecialchars($data['timestamp'] ?? 'N/A'); ?></td>
                                 <td>
@@ -277,12 +392,23 @@ function handle_status_request(): void {
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function setOsType(mac, osType) {
+            const testParam = new URLSearchParams(window.location.search).get('test_state_file');
+            let url = '?action=set_os&mac=' + encodeURIComponent(mac) + '&os_type=' + encodeURIComponent(osType);
+            if (testParam) {
+                url += '&test_state_file=' + encodeURIComponent(testParam);
+            }
+            window.location.href = url;
+        }
+    </script>
 </body>
 </html>
 <?php
 }
 
-function prepare_session(string $mac): bool {
+function prepare_session(string $mac, string $os_type = 'ubuntu2404'): bool {
+    global $os_configs;
     // Additional MAC validation to prevent path traversal
     if (!is_valid_mac($mac)) {
         error_log("Invalid MAC address in prepare_session: {$mac}");
@@ -297,8 +423,17 @@ function prepare_session(string $mac): bool {
     }
     
     $mac_config_dir = CONFIG_DIR . '/' . $safe_mac;
+    $os_default_config_dir = CONFIG_DIR . '/' . $os_configs[$os_type]['default_config'];
     $default_config_dir = CONFIG_DIR . '/default';
-    $source_dir = is_dir($mac_config_dir) ? $mac_config_dir : $default_config_dir;
+    
+    // Priority: MAC-specific -> OS-specific default -> global default
+    if (is_dir($mac_config_dir)) {
+        $source_dir = $mac_config_dir;
+    } elseif (is_dir($os_default_config_dir)) {
+        $source_dir = $os_default_config_dir;
+    } else {
+        $source_dir = $default_config_dir;
+    }
     
     if (!is_dir($source_dir)) {
         error_log("Source directory not found: {$source_dir}");
@@ -343,18 +478,38 @@ function prepare_session(string $mac): bool {
         return false;
     }
     
-    // Process template files with error handling
-    $user_data_template_path = $source_dir . '/user-data';
-    if (file_exists($user_data_template_path)) {
-        $template_content = file_get_contents($user_data_template_path);
-        if ($template_content === false) {
-            error_log("Failed to read user-data template: {$user_data_template_path}");
-            return false;
+    // Process template files with error handling - OS-specific
+    $os_config = $os_configs[$os_type];
+    
+    if ($os_config['config_type'] === 'autoinstall') {
+        // Ubuntu autoinstall configuration
+        $user_data_template_path = $source_dir . '/user-data';
+        if (file_exists($user_data_template_path)) {
+            $template_content = file_get_contents($user_data_template_path);
+            if ($template_content === false) {
+                error_log("Failed to read user-data template: {$user_data_template_path}");
+                return false;
+            }
+            $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
+            if (file_put_contents($session_path . '/user-data', $final_content) === false) {
+                error_log("Failed to write user-data for session: {$session_path}");
+                return false;
+            }
         }
-        $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
-        if (file_put_contents($session_path . '/user-data', $final_content) === false) {
-            error_log("Failed to write user-data for session: {$session_path}");
-            return false;
+    } elseif ($os_config['config_type'] === 'preseed') {
+        // Proxmox preseed configuration
+        $preseed_template_path = $source_dir . '/preseed.cfg';
+        if (file_exists($preseed_template_path)) {
+            $template_content = file_get_contents($preseed_template_path);
+            if ($template_content === false) {
+                error_log("Failed to read preseed template: {$preseed_template_path}");
+                return false;
+            }
+            $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
+            if (file_put_contents($session_path . '/preseed.cfg', $final_content) === false) {
+                error_log("Failed to write preseed.cfg for session: {$session_path}");
+                return false;
+            }
         }
     }
     
@@ -404,6 +559,9 @@ switch ($action) {
         break;
     case 'delete':
         handle_delete_request();
+        break;
+    case 'set_os':
+        handle_set_os_request();
         break;
     case 'status':
     default:

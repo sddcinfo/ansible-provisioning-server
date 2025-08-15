@@ -5,7 +5,6 @@ cluster_name: "mycluster"
 
 # Kubernetes configuration
 pod_network_cidr: "172.16.0.0/12"
-kube_pods_subnet: "172.16.0.0/12"
 kube_service_addresses: "10.233.0.0/18"
 kube_network_plugin: "calico"
 

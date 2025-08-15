@@ -280,26 +280,26 @@ sudo /usr/local/bin/monitoring/health_check.sh
 # Complete provisioning server setup with validation
 sudo ansible-playbook site.yml 
 # Selective role execution
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web,validation"
+sudo ansible-playbook site.yml --tags "netboot,web,validation"
 
 # Skip validation if needed (not recommended)
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --skip-tags "validation"
+sudo ansible-playbook site.yml --skip-tags "validation"
 ```
 
 #### Hardware Management
 ```bash
 # Boot order configuration (per node)
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit <hostname>
+sudo ansible-playbook set_boot_order.yml --limit <hostname>
 
 # Bulk boot configuration
-sudo ansible-playbook set_boot_order.yml ```
+sudo ansible-playbook set_boot_order.yml
 
 ### Kubernetes Cluster Management
 
 #### Kubespray Setup
 ```bash
 # Setup Kubespray management environment
-sudo ansible-playbook site.yml --tags kubespray_mgmt --vault-password-file ~/.vault_pass
+sudo ansible-playbook site.yml --tags kubespray_mgmt
 
 # Generated deployment script usage
 cd /mnt/github/kubespray
@@ -487,7 +487,7 @@ sudo /usr/local/bin/monitoring/health_check.sh
 #### Validation Framework
 ```bash
 # Run system validation manually
-sudo ansible-playbook site.yml --tags "validation" 
+sudo ansible-playbook site.yml --tags "validation"
 # Check validation failure flags
 ls -la /tmp/ansible_validation_failed
 

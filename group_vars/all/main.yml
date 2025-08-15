@@ -1,0 +1,63 @@
+---
+# Multi-OS Provisioning Configuration
+# This file defines the supported operating systems and their configurations
+
+# Default operating system for new installations
+default_os_type: "ubuntu2404"
+
+# Supported Operating Systems Configuration
+supported_operating_systems:
+  ubuntu2404:
+    name: "Ubuntu 24.04 LTS"
+    iso_url: "https://ftp.riken.jp/Linux/ubuntu-releases/noble/ubuntu-24.04.3-live-server-amd64.iso"
+    iso_name: "ubuntu-24.04.3-live-server-amd64.iso"
+    iso_download_dir: "/tmp"
+    iso_mount_point: "/mnt/ubuntu_iso"
+    provisioning_dir: "/var/www/html/provisioning/ubuntu24.04"
+    config_type: "autoinstall"
+    boot_files:
+      kernel: "casper/vmlinuz"
+      initrd: "casper/initrd"
+    kernel_params: "modprobe.blacklist=nvme autoinstall ip=dhcp"
+    config_dirs:
+      - ".disk"
+      - "dists" 
+      - "EFI"
+      - "install"
+      - "pool"
+      - "boot"
+      - "casper"
+    config_files:
+      - "md5sum.txt"
+      - "boot.catalog"
+    
+  proxmox9:
+    name: "Proxmox VE 9"
+    iso_url: "https://enterprise.proxmox.com/iso/proxmox-ve_9.0-1.iso"
+    iso_name: "proxmox-ve_9.0-1.iso"
+    iso_download_dir: "/tmp"
+    iso_mount_point: "/mnt/proxmox_iso"
+    provisioning_dir: "/var/www/html/provisioning/proxmox9"
+    config_type: "preseed"
+    boot_files:
+      kernel: "boot/linux26"
+      initrd: "boot/initrd.img"
+    kernel_params: "ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer auto=true priority=critical"
+    config_dirs:
+      - "boot"
+      - "pve"
+      - ".disk"
+    config_files:
+      - "proxmox-ve.iso"
+
+# Network Configuration (existing)
+provisioning_ip: "10.10.1.1"
+provisioning_bridge: "br-prov"
+
+# Default credentials and SSH key
+sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
+sysadmin_pub_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... # Add your public key here"
+
+# Server configuration
+server_ip: "{{ provisioning_ip }}"
+nginx_web_root: "/var/www/html"
