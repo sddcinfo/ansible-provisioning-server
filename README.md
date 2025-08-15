@@ -312,6 +312,47 @@ cd /mnt/github/kubespray
 ./deploy-cluster.sh --tags apps
 ```
 
+#### Kubespray Management Role (`kubespray_mgmt`)
+
+This role automates the setup of the Kubespray management environment on the provisioning server. It handles the installation of necessary tools, cloning the Kubespray repository, and configuring the environment for cluster deployment.
+
+**Key Features:**
+- Installs `uv` package manager for isolated Python environment management.
+- Clones the Kubespray repository to `{{ kubespray_path }}` (default: `/mnt/github/kubespray`).
+- Creates a dedicated Python virtual environment (`{{ kubespray_path }}/venv`) and installs Kubespray's Python dependencies.
+- Configures the Kubespray inventory (`{{ kubespray_path }}/inventory/{{ cluster_name }}/inventory.ini`) based on the `kubernetes_nodes` variable.
+- Generates cluster-specific configuration files (`{{ kubespray_path }}/inventory/{{ cluster_name }}/group_vars/k8s_cluster/k8s-cluster.yml`) using variables defined in this project.
+- Creates a `deploy-cluster.sh` script (`{{ kubespray_path }}/deploy-cluster.sh`) for simplified cluster deployment.
+
+**Configuration Variables:**
+
+The `kubespray_mgmt` role uses variables defined in `roles/kubespray_mgmt/vars/main.yml` to customize the Kubespray setup and cluster configuration.
+
+| Variable Name        | Description                                                              | Default Value (in `vars/main.yml`) |
+|----------------------|--------------------------------------------------------------------------|------------------------------------|
+| `kubespray_path`     | Absolute path where the Kubespray repository will be cloned.             | `/mnt/github/kubespray`            |
+| `cluster_name`       | Name of the Kubernetes cluster. Used for inventory and configuration.    | `mycluster`                        |
+| `pod_network_cidr`   | CIDR for the Kubernetes pod network.                                     | `172.16.0.0/12`                    |
+| `kube_pods_subnet`   | Alias for `pod_network_cidr` used internally by Kubespray.               | `172.16.0.0/12`                    |
+| `kube_service_addresses` | CIDR for the Kubernetes service network.                                 | `10.233.0.0/18`                    |
+| `kube_network_plugin`| Kubernetes CNI plugin to use (e.g., `calico`, `flannel`).                | `calico`                           |
+| `kubernetes_nodes`   | List of dictionaries defining Kubernetes nodes (name, IP, role, etc.).   | (Defined in `vars/main.yml`)       |
+
+**Usage:**
+
+To set up the Kubespray management environment, run the following command:
+
+```bash
+sudo ansible-playbook site.yml --tags kubespray_mgmt
+```
+
+After successful execution, navigate to the Kubespray directory and use the generated `deploy-cluster.sh` script to deploy the Kubernetes cluster:
+
+```bash
+cd /mnt/github/kubespray
+./deploy-cluster.sh
+```
+
 #### Cluster Configuration
 The kubespray_mgmt role automatically:
 - Installs uv package manager for Python environment management

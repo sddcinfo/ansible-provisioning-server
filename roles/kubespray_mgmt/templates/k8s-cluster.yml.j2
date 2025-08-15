@@ -73,12 +73,7 @@ kube_proxy_strict_arp: false
 # Values may be valid IP blocks (e.g. 1.2.3.0/24, 1.2.3.4/32).
 # The default empty string slice ([]) means to use all local addresses.
 # kube_proxy_nodeport_addresses_cidr is retained for legacy config
-kube_proxy_nodeport_addresses: >-
-  {%- if kube_proxy_nodeport_addresses_cidr is defined -%}
-  [{{ kube_proxy_nodeport_addresses_cidr }}]
-  {%- else -%}
-  []
-  {%- endif -%}
+kube_proxy_nodeport_addresses: []
 
 # If non-empty, will use this string as identification instead of the actual hostname
 # kube_override_hostname: >-
@@ -109,7 +104,7 @@ kubectl_localhost: true
 
 # A comma separated list of levels of node allocatable enforcement to be enforced by kubelet.
 # Acceptable options are 'pods', 'system-reserved', 'kube-reserved' and ''. Default is "".
-kubelet_enforce_node_allocatable: ""
+kubelet_enforce_node_allocatable: "pods"
 
 # Supplementary addresses that can be added in kubernetes ssl keys.
 # That can be useful for example to setup a keepalived virtual IP
@@ -121,4 +116,3 @@ auto_renew_certificates: false
 auto_renew_certificates_systemd_calendar: "Mon 09:00:00"
 
 # cluster configuration
-cluster_name: cluster.local

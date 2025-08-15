@@ -43,6 +43,8 @@
     cd {{ kubespray_path }}
     source venv/bin/activate
     uv pip install -r requirements.txt
+  args:
+    executable: /bin/bash
   become: false
 
 - name: Create cluster inventory from template
@@ -67,6 +69,22 @@
   args:
     creates: "{{ kubespray_path }}/inventory/{{ cluster_name }}/group_vars"
   become: false
+
+- name: Set inventory_dir fact
+  set_fact:
+    inventory_dir: "{{ kubespray_path }}/inventory/{{ cluster_name }}"
+
+- name: Load Kubespray default variables
+  include_vars:
+    file: "{{ kubespray_path }}/roles/kubespray_defaults/defaults/main/main.yml"
+
+- name: Set cluster_name fact
+  set_fact:
+    cluster_name: "mycluster"
+
+- name: Set kube_pods_subnet fact
+  set_fact:
+    kube_pods_subnet: "{{ pod_network_cidr }}"
 
 - name: Configure Kubernetes cluster settings
   template:
