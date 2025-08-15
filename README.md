@@ -131,22 +131,19 @@ cd ansible-provisioning-server
 cp nodes.json.example nodes.json
 ${EDITOR:-nano} nodes.json
 
-# Vault initialization for credentials
-ansible-vault create group_vars/all/secrets.yml
-
-# Vault password management
-echo "$(openssl rand -base64 32)" > ~/.vault_pass
-chmod 600 ~/.vault_pass
+# Configure Redfish/BMC credentials for hardware management
+cp .redfish_credentials.example .redfish_credentials
+${EDITOR:-nano} .redfish_credentials
+chmod 600 .redfish_credentials
 ```
 
 ### 3. Infrastructure Deployment
 
 ```bash
 # Core provisioning infrastructure with validation
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml 
 # Target server boot configuration
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit console-node1
+sudo ansible-playbook set_boot_order.yml --limit console-node1
 ```
 
 ### 4. Deployment Verification
@@ -200,21 +197,34 @@ The `nodes.json` file serves as the single source of truth for infrastructure to
 
 ### Credential Management
 
-This solution implements Ansible Vault for secure credential storage:
+#### Ansible Inventory Credentials
+Credentials can be configured directly in inventory files:
 
 ```yaml
-# group_vars/all/secrets.yml (encrypted)
+# In inventory or group_vars files
 ---
 ipmi_user: "admin"
 ipmi_pass: "secure_password"
-vault_password: "encryption_key"
+```
+
+#### Redfish/BMC Credentials
+For the redfish.py script, configure BMC credentials:
+
+```bash
+# Copy example and configure
+cp .redfish_credentials.example .redfish_credentials
+chmod 600 .redfish_credentials
+
+# Edit with your BMC credentials
+# Format: REDFISH_AUTH="username:password"
+echo 'REDFISH_AUTH="admin:your_bmc_password"' > .redfish_credentials
 ```
 
 **Security Best Practices:**
 - Use strong, unique passwords for all accounts
 - Rotate credentials regularly
-- Restrict vault file permissions (600)
-- Never commit unencrypted credentials
+- Restrict file permissions (600) for sensitive files
+- Never commit unencrypted credentials to version control
 
 ### Enterprise Security Features
 
@@ -268,8 +278,7 @@ sudo /usr/local/bin/monitoring/health_check.sh
 #### Infrastructure Deployment
 ```bash
 # Complete provisioning server setup with validation
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml 
 # Selective role execution
 sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web,validation"
 
@@ -283,8 +292,7 @@ sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --skip-tags "
 sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit <hostname>
 
 # Bulk boot configuration
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass
-```
+sudo ansible-playbook set_boot_order.yml ```
 
 ### Kubernetes Cluster Management
 
@@ -438,8 +446,7 @@ sudo /usr/local/bin/monitoring/health_check.sh
 #### Validation Framework
 ```bash
 # Run system validation manually
-sudo ansible-playbook site.yml --tags "validation" --vault-password-file ~/.vault_pass
-
+sudo ansible-playbook site.yml --tags "validation" 
 # Check validation failure flags
 ls -la /tmp/ansible_validation_failed
 
