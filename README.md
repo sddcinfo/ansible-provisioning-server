@@ -39,7 +39,7 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 - **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
 - **Web Dashboard**: Real-time provisioning status monitoring and management
 - **Hardware Management**: Redfish API integration for server power and boot control
-- **Kubernetes Management**: Automated Kubespray setup and cluster deployment
+- **Multi-OS Support**: Ubuntu 24.04 and Proxmox VE 9 automated installation
 
 ### Enterprise Capabilities  
 - **Security**: Hardened input validation, path sanitization, and encrypted credential management
@@ -88,7 +88,7 @@ graph TB
 | **Management API** | Python/Redfish | Hardware control and monitoring |
 | **Health Monitor** | systemd timers | Automated service health checks and recovery |
 | **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
-| **Kubespray Manager** | Python/Ansible | Kubernetes cluster deployment automation |
+| **Multi-OS Manager** | Ansible/Templates | Ubuntu and Proxmox automated provisioning |
 
 ## Prerequisites
 
@@ -294,73 +294,51 @@ sudo ansible-playbook set_boot_order.yml --limit <hostname>
 # Bulk boot configuration
 sudo ansible-playbook set_boot_order.yml
 
-### Kubernetes Cluster Management
+### Multi-OS Provisioning Support
 
-#### Kubespray Setup
+#### Supported Operating Systems
+
+**Ubuntu 24.04 LTS:**
+- Cloud-init autoinstall configuration
+- Network-based installation via HTTP
+- Automated user and SSH key setup
+- Package installation and configuration
+
+**Proxmox VE 9:**
+- TOML-based answer file configuration  
+- ZFS storage setup with configurable options
+- Network boot with HTTP-served installation media
+- Post-installation automation hooks
+
+#### Configuration Management
 ```bash
-# Setup Kubespray management environment
-sudo ansible-playbook site.yml --tags kubespray_mgmt
+# Test multi-OS configuration
+./test-multi-os.sh
 
-# Generated deployment script usage
-cd /mnt/github/kubespray
-./deploy-cluster.sh
+# View OS-specific templates
+ls roles/web/templates/*ubuntu* roles/web/templates/*proxmox*
 
-# Check deployment status
-./deploy-cluster.sh --check
-
-# Deploy with specific tags
-./deploy-cluster.sh --tags apps
+# Check provisioning directories
+ls -la /var/www/html/provisioning/
 ```
 
-#### Kubespray Management Role (`kubespray_mgmt`)
+## Kubernetes Integration
 
-This role automates the setup of the Kubespray management environment on the provisioning server. It handles the installation of necessary tools, cloning the Kubespray repository, and configuring the environment for cluster deployment.
+This provisioning server works with the separate `ansible-kubernetes-nodes` project for Kubernetes cluster management:
 
-**Key Features:**
-- Installs `uv` package manager for isolated Python environment management.
-- Clones the Kubespray repository to `{{ kubespray_path }}` (default: `/mnt/github/kubespray`).
-- Creates a dedicated Python virtual environment (`{{ kubespray_path }}/venv`) and installs Kubespray's Python dependencies.
-- Configures the Kubespray inventory (`{{ kubespray_path }}/inventory/{{ cluster_name }}/inventory.ini`) based on the `kubernetes_nodes` variable.
-- Generates cluster-specific configuration files (`{{ kubespray_path }}/inventory/{{ cluster_name }}/group_vars/k8s_cluster/k8s-cluster.yml`) using variables defined in this project.
-- Creates a `deploy-cluster.sh` script (`{{ kubespray_path }}/deploy-cluster.sh`) for simplified cluster deployment.
+### Kubernetes Workflow
 
-**Configuration Variables:**
+1. **Provision nodes** using this server (Ubuntu 24.04 or Proxmox VE 9)
+2. **Use ansible-kubernetes-nodes** project for Kubernetes deployment:
+   - Kubespray management and setup
+   - Kubernetes cluster deployment
+   - Ceph storage configuration
+   - Management tools installation
 
-The `kubespray_mgmt` role uses variables defined in `roles/kubespray_mgmt/vars/main.yml` to customize the Kubespray setup and cluster configuration.
+### Related Projects
 
-| Variable Name        | Description                                                              | Default Value (in `vars/main.yml`) |
-|----------------------|--------------------------------------------------------------------------|------------------------------------|
-| `kubespray_path`     | Absolute path where the Kubespray repository will be cloned.             | `/mnt/github/kubespray`            |
-| `cluster_name`       | Name of the Kubernetes cluster. Used for inventory and configuration.    | `mycluster`                        |
-| `pod_network_cidr`   | CIDR for the Kubernetes pod network.                                     | `172.16.0.0/12`                    |
-| `kube_pods_subnet`   | Alias for `pod_network_cidr` used internally by Kubespray.               | `172.16.0.0/12`                    |
-| `kube_service_addresses` | CIDR for the Kubernetes service network.                                 | `10.233.0.0/18`                    |
-| `kube_network_plugin`| Kubernetes CNI plugin to use (e.g., `calico`, `flannel`).                | `calico`                           |
-| `kubernetes_nodes`   | List of dictionaries defining Kubernetes nodes (name, IP, role, etc.).   | (Defined in `vars/main.yml`)       |
-
-**Usage:**
-
-To set up the Kubespray management environment, run the following command:
-
-```bash
-sudo ansible-playbook site.yml --tags kubespray_mgmt
-```
-
-After successful execution, navigate to the Kubespray directory and use the generated `deploy-cluster.sh` script to deploy the Kubernetes cluster:
-
-```bash
-cd /mnt/github/kubespray
-./deploy-cluster.sh
-```
-
-#### Cluster Configuration
-The kubespray_mgmt role automatically:
-- Installs uv package manager for Python environment management
-- Clones latest Kubespray repository
-- Creates isolated Python virtual environment
-- Configures cluster inventory from node definitions
-- Generates cluster-specific configuration files
-- Creates deployment script for cluster management
+- **ansible-kubernetes-nodes**: Handles Kubernetes cluster deployment and management
+- **Kubespray integration**: Located in the kubernetes nodes project for better separation of concerns
 
 ### Management Scripts
 
@@ -410,6 +388,9 @@ Navigate to `http://<provisioning-server-ip>` for the management interface.
 
 ### Automated Testing Suite
 ```bash
+# Multi-OS provisioning validation
+./test-multi-os.sh
+
 # Python script validation
 cd test
 python3 -m pytest test_redfish.py -v
@@ -418,6 +399,28 @@ python3 -m pytest test_web_actions.py -v
 # Ansible syntax validation
 ansible-playbook --syntax-check site.yml
 ansible-playbook --syntax-check set_boot_order.yml
+```
+
+#### Multi-OS Test Script
+
+The `test-multi-os.sh` script provides comprehensive validation of both Ubuntu 24.04 and Proxmox VE 9 configurations:
+
+**Test Coverage:**
+- Web service availability and HTTP response codes
+- Ubuntu autoinstall configuration (user-data, meta-data, YAML syntax)
+- Proxmox answer.toml configuration (TOML syntax, required sections)
+- TFTP boot setup and PXE configuration  
+- PHP configuration and OS support validation
+- Kernel parameters for network boot
+- Network services (DHCP, DNS, HTTP) status
+
+**Usage:**
+```bash
+# Run all tests with color-coded output
+./test-multi-os.sh
+
+# Check specific test results
+echo $?  # 0 = all passed, 1 = failures detected
 ```
 
 ### Integration Testing Checklist

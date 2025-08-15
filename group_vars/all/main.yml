@@ -42,7 +42,7 @@ supported_operating_systems:
     boot_files:
       kernel: "boot/linux26"
       initrd: "boot/initrd.img"
-    kernel_params: "ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer answer=http://{{ provisioning_ip }}/provisioning/proxmox9/answer.toml"
+    kernel_params: "ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer fetch-from=http://{{ provisioning_ip }}/provisioning/proxmox9/answer.toml install-media=http://{{ provisioning_ip }}/provisioning/proxmox9/proxmox-ve_9.0-1.iso"
     config_dirs:
       - "boot"
       - "pve"

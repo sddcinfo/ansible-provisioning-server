@@ -45,8 +45,8 @@ $os_configs = [
         'iso_name' => 'proxmox-ve_9.0-1.iso',
         'kernel_path' => 'boot/linux26',
         'initrd_path' => 'boot/initrd.img',
-        'kernel_params' => 'ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer auto=true priority=critical',
-        'config_type' => 'preseed',
+        'kernel_params' => 'ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer fetch-from=http://{{ provisioning_ip }}/provisioning/proxmox9/answer.toml install-media=http://{{ provisioning_ip }}/provisioning/proxmox9/proxmox-ve_9.0-1.iso',
+        'config_type' => 'answer',
         'default_config' => 'proxmox9_default'
     ]
 ];
