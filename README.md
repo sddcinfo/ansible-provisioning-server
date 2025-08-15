@@ -34,21 +34,22 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 ## Features
 
 ### Core Infrastructure Services
-- **🌐 Network Services**: Integrated DHCP, DNS, and TFTP server using dnsmasq
-- **🚀 Boot Management**: iPXE-based network booting with EFI support
-- **☁️ Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
-- **📊 Web Dashboard**: Real-time provisioning status monitoring and management
-- **🔧 Hardware Management**: Redfish API integration for server power and boot control
+- **Network Services**: Integrated DHCP, DNS, and TFTP server using dnsmasq
+- **Boot Management**: iPXE-based network booting with EFI support
+- **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
+- **Web Dashboard**: Real-time provisioning status monitoring and management
+- **Hardware Management**: Redfish API integration for server power and boot control
+- **Kubernetes Management**: Automated Kubespray setup and cluster deployment
 
 ### Enterprise Capabilities  
-- **🔒 Security**: Hardened input validation, path sanitization, and encrypted credential management
-- **📈 Scalability**: Multi-node provisioning with dynamic network interface detection
-- **🎯 Flexibility**: Support for multiple Ubuntu versions and hardware platforms
-- **📝 Observability**: Comprehensive logging, health monitoring, and status tracking
-- **⚡ Performance**: Optimized for high-throughput with systemd resource limits
-- **🛡️ Reliability**: Automated error handling, service recovery, and rollback mechanisms
-- **🔍 Monitoring**: Automated health checks with service status verification
-- **✅ Validation**: End-to-end system validation with comprehensive verification checks
+- **Security**: Hardened input validation, path sanitization, and encrypted credential management
+- **Scalability**: Multi-node provisioning with dynamic network interface detection
+- **Flexibility**: Support for multiple Ubuntu versions and hardware platforms
+- **Observability**: Comprehensive logging, health monitoring, and status tracking
+- **Performance**: Optimized for high-throughput with systemd resource limits
+- **Reliability**: Automated error handling, service recovery, and rollback mechanisms
+- **Monitoring**: Automated health checks with service status verification
+- **Validation**: End-to-end system validation with comprehensive verification checks
 
 ## Architecture
 
@@ -87,6 +88,7 @@ graph TB
 | **Management API** | Python/Redfish | Hardware control and monitoring |
 | **Health Monitor** | systemd timers | Automated service health checks and recovery |
 | **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
+| **Kubespray Manager** | Python/Ansible | Kubernetes cluster deployment automation |
 
 ## Prerequisites
 
@@ -283,6 +285,33 @@ sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --l
 # Bulk boot configuration
 sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass
 ```
+
+### Kubernetes Cluster Management
+
+#### Kubespray Setup
+```bash
+# Setup Kubespray management environment
+sudo ansible-playbook site.yml --tags kubespray_mgmt --vault-password-file ~/.vault_pass
+
+# Generated deployment script usage
+cd /mnt/github/kubespray
+./deploy-cluster.sh
+
+# Check deployment status
+./deploy-cluster.sh --check
+
+# Deploy with specific tags
+./deploy-cluster.sh --tags apps
+```
+
+#### Cluster Configuration
+The kubespray_mgmt role automatically:
+- Installs uv package manager for Python environment management
+- Clones latest Kubespray repository
+- Creates isolated Python virtual environment
+- Configures cluster inventory from node definitions
+- Generates cluster-specific configuration files
+- Creates deployment script for cluster management
 
 ### Management Scripts
 
@@ -522,4 +551,4 @@ For production deployments and enterprise support:
 
 ---
 
-*Built with ❤️ by the SDDC.info community*
+*Built by the SDDC.info community*

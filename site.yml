@@ -12,3 +12,6 @@
     - web
     - iso_preparation
     - validation
+    - role: kubespray_mgmt
+      tags: ['kubespray_mgmt']
+      become: no
