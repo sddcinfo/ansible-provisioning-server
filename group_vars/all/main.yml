@@ -38,17 +38,18 @@ supported_operating_systems:
     iso_download_dir: "/tmp"
     iso_mount_point: "/mnt/proxmox_iso"
     provisioning_dir: "/var/www/html/provisioning/proxmox9"
-    config_type: "preseed"
+    config_type: "answer"
     boot_files:
       kernel: "boot/linux26"
       initrd: "boot/initrd.img"
-    kernel_params: "ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer auto=true priority=critical"
+    kernel_params: "ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer answer=http://{{ provisioning_ip }}/provisioning/proxmox9/answer.toml"
     config_dirs:
       - "boot"
       - "pve"
       - ".disk"
     config_files:
       - "proxmox-ve.iso"
+    disk_devices: ["sda", "nvme0n1", "vda", "hda"]
 
 # Network Configuration (existing)
 provisioning_ip: "10.10.1.1"
@@ -56,7 +57,7 @@ provisioning_bridge: "br-prov"
 
 # Default credentials and SSH key
 sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
-sysadmin_pub_key: "{{ sysadmin_public_key }}"
+sysadmin_pub_key: "{{ sysadmin_pub_key }}"
 
 # Server configuration
 server_ip: "{{ provisioning_ip }}"

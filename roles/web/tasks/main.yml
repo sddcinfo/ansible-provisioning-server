@@ -289,7 +289,7 @@
     group: www-data
     mode: "0644"
   loop:
-    - { template: "proxmox-preseed.cfg.j2", filename: "preseed.cfg" }
+    - { template: "proxmox-preseed.cfg.j2", filename: "answer.toml" }
     - { template: "proxmox-meta-data.j2", filename: "meta-data" }
   vars:
     hostname: "{{ default_autoinstall_nodes.proxmox9.hostname }}"

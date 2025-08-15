@@ -1,74 +1,41 @@
-# Proxmox VE preseed configuration for automated installation
-# This file is used by the Debian installer for unattended installation
+# Proxmox VE Auto-Installer Configuration (answer.toml format)
+# This file configures the Proxmox VE auto-installer for unattended installation
 
-# Localization
-d-i debian-installer/locale string en_US.UTF-8
-d-i console-setup/ask_detect boolean false
-d-i keyboard-configuration/xkb-keymap select us
+[global]
+keyboard = "us"
+country = "US"
+fqdn = "{{ hostname }}.{{ domain | default('local') }}"
+mailto = "admin@{{ domain | default('local') }}"
+timezone = "{{ timezone | default('UTC') }}"
+root_password = "{{ root_password | default('proxmox') }}"
 
-# Network configuration
-d-i netcfg/choose_interface select auto
-d-i netcfg/disable_autoconfig boolean false
-d-i netcfg/hostname string {{ hostname }}
-d-i netcfg/domain string {{ domain | default('local') }}
+[network]
+source = "from-dhcp"
 
-# Mirror settings
-d-i mirror/country string manual
-d-i mirror/http/hostname string enterprise.proxmox.com
-d-i mirror/http/directory string /debian/pve
-d-i mirror/http/proxy string
+[disk-setup]
+filesystem = "zfs"
+disk_list = ["{{ supported_operating_systems.proxmox9.disk_devices[0] }}"]
+zfs_raid = "raid0"
+compress = "on"
+checksum = "on"
+copies = 1
 
-# Account setup
-d-i passwd/root-login boolean true
-d-i passwd/root-password password {{ root_password | default('proxmox') }}
-d-i passwd/root-password-again password {{ root_password | default('proxmox') }}
+[disk-setup.zfs]
+hdsize = 32
+swapsize = 8
+maxroot = 16
+maxvz = 0
+minfree = 16
 
-# Clock and time zone setup
-d-i clock-setup/utc boolean true
-d-i time/zone string {{ timezone | default('UTC') }}
-d-i clock-setup/ntp boolean true
-
-# Partitioning
-d-i partman-auto/method string lvm
-d-i partman-auto/choose_recipe select atomic
-d-i partman-partitioning/confirm_write_new_label boolean true
-d-i partman/choose_partition select finish
-d-i partman/confirm boolean true
-d-i partman/confirm_nooverwrite boolean true
-d-i partman-lvm/device_remove_lvm boolean true
-d-i partman-lvm/confirm boolean true
-d-i partman-lvm/confirm_nooverwrite boolean true
-
-# Base system installation
-d-i base-installer/install-recommends boolean false
-d-i base-installer/kernel/image string linux-image-amd64
-
-# Package selection
-tasksel tasksel/first multiselect standard, ssh-server
-d-i pkgsel/include string curl wget vim openssh-server
-d-i pkgsel/upgrade select full-upgrade
-popularity-contest popularity-contest/participate boolean false
-
-# Boot loader installation
-d-i grub-installer/only_debian boolean true
-d-i grub-installer/with_other_os boolean false
-d-i grub-installer/bootdev string default
-
-# Network console
-d-i anna/choose_modules string network-console
-d-i network-console/password password {{ installer_password | default('install') }}
-d-i network-console/password-again password {{ installer_password | default('install') }}
-
-# Finishing up the installation
-d-i finish-install/reboot_in_progress note
-
-# Run commands during the installation
-d-i preseed/early_command string \
-    echo "Starting Proxmox VE installation..." > /dev/console
-
-# Post-install commands
-d-i preseed/late_command string \
-    in-target curl -s "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={{ mac }}"; \
-    in-target systemctl enable ssh; \
-    in-target systemctl start ssh; \
-    echo "Installation complete. System will reboot." > /dev/console
+[post-hook]
+script = """#!/bin/bash
+# Post-installation script
+curl -s "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={{ mac }}" || true
+systemctl enable ssh
+systemctl start ssh
+echo "{{ sysadmin_pub_key }}" >> /home/{{ ansible_user | default('sysadmin') }}/.ssh/authorized_keys || true
+mkdir -p /home/{{ ansible_user | default('sysadmin') }}/.ssh
+chmod 700 /home/{{ ansible_user | default('sysadmin') }}/.ssh
+chmod 600 /home/{{ ansible_user | default('sysadmin') }}/.ssh/authorized_keys
+chown -R {{ ansible_user | default('sysadmin') }}:{{ ansible_user | default('sysadmin') }} /home/{{ ansible_user | default('sysadmin') }}/.ssh
+"""
