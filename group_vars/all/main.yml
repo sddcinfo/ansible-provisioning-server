@@ -56,7 +56,7 @@ provisioning_bridge: "br-prov"
 
 # Default credentials and SSH key
 sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
-sysadmin_pub_key: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQC... # Add your public key here"
+sysadmin_pub_key: "{{ sysadmin_public_key }}"
 
 # Server configuration
 server_ip: "{{ provisioning_ip }}"

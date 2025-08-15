@@ -349,7 +349,7 @@
       debug:
         msg: |
           Web service test:
-          - Status: {{ 'SUCCESS' if final_web_test.status == 200 else 'FAILED' }}
+          - Status: {{ 'SUCCESS' if (final_web_test.status | default(0)) == 200 else 'FAILED' }}
           - HTTP Status: {{ final_web_test.status | default('N/A') }}
           - Content Type: {{ final_web_test.content_type | default('N/A') }}
           
@@ -362,6 +362,6 @@
           3. nginx error logs: tail -f /var/log/nginx/error.log
           4. PHP-FPM logs: tail -f /var/log/php8.3-fpm.log
           5. File permissions: ls -la /var/www/html/index.php
-      when: final_web_test.status != 200
+      when: (final_web_test.status | default(0)) != 200
   tags:
     - web_validation
