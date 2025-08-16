@@ -1,41 +1,22 @@
-# Proxmox VE Auto-Installer Configuration (answer.toml format)
+# Proxmox VE 9.0 Auto-Installer Configuration (answer.toml format)
 # This file configures the Proxmox VE auto-installer for unattended installation
 
 [global]
-keyboard = "us"
-country = "US"
-fqdn = "{{ hostname }}.{{ domain | default('local') }}"
-mailto = "admin@{{ domain | default('local') }}"
-timezone = "{{ timezone | default('UTC') }}"
-root_password = "{{ root_password | default('proxmox') }}"
+keyboard = "en-us"
+country = "jp"
+fqdn = "node4.sddc.info"
+mailto = "sddc@sddc.info"
+timezone = "Asia/Tokyo"
+root-password = "{{ root_password | default('proxmox') }}"
 
 [network]
 source = "from-dhcp"
 
 [disk-setup]
 filesystem = "zfs"
-disk_list = ["{{ supported_operating_systems.proxmox9.disk_devices[0] }}"]
-zfs_raid = "raid0"
-compress = "on"
-checksum = "on"
-copies = 1
-
-[disk-setup.zfs]
-hdsize = 32
-swapsize = 8
-maxroot = 16
-maxvz = 0
-minfree = 16
-
-[post-hook]
-script = """#!/bin/bash
-# Post-installation script
-curl -s "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={{ mac }}" || true
-systemctl enable ssh
-systemctl start ssh
-echo "{{ sysadmin_pub_key }}" >> /home/{{ ansible_user | default('sysadmin') }}/.ssh/authorized_keys || true
-mkdir -p /home/{{ ansible_user | default('sysadmin') }}/.ssh
-chmod 700 /home/{{ ansible_user | default('sysadmin') }}/.ssh
-chmod 600 /home/{{ ansible_user | default('sysadmin') }}/.ssh/authorized_keys
-chown -R {{ ansible_user | default('sysadmin') }}:{{ ansible_user | default('sysadmin') }} /home/{{ ansible_user | default('sysadmin') }}/.ssh
-"""
+disk_list = ["sda"]
+zfs.raid = "raid0"
+zfs.compress = "on"
+zfs.checksum = "on"
+zfs.copies = 1
+zfs.hdsize = 32

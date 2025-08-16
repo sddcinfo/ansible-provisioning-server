@@ -44,4 +44,10 @@ server {
         alias {{ nginx_web_root }}/provisioning;
         try_files $uri $uri/ =404;
     }
+
+    location /sessions {
+        alias {{ nginx_web_root }}/sessions;
+        try_files $uri $uri/ =404;
+        add_header Content-Type text/plain;
+    }
 }

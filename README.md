@@ -309,6 +309,7 @@ sudo ansible-playbook set_boot_order.yml
 - ZFS storage setup with configurable options
 - Network boot with HTTP-served installation media
 - Post-installation automation hooks
+- iPXE EFI network boot support with auto-installer
 
 #### Configuration Management
 ```bash
@@ -320,6 +321,120 @@ ls roles/web/templates/*ubuntu* roles/web/templates/*proxmox*
 
 # Check provisioning directories
 ls -la /var/www/html/provisioning/
+
+# Verify Proxmox iPXE configuration
+/mnt/verify_proxmox_config.sh
+```
+
+## Proxmox VE 9.0 iPXE Network Boot
+
+### Overview
+This server provides complete support for iPXE-based EFI network boot installation of Proxmox VE 9.0, including automated configuration discovery and ZFS storage setup.
+
+### Key Features
+- **Zero-touch installation** via iPXE EFI network boot
+- **Auto-installer activation** with proper kernel parameters
+- **Multiple configuration discovery methods** (embedded, HTTP, DHCP)
+- **ZFS storage configuration** with automated disk setup
+- **Post-installation callbacks** for status tracking
+
+### Critical Requirements
+
+#### Kernel Parameters
+Proxmox 9.0 requires specific kernel parameters for auto-installer activation:
+```
+ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer
+```
+
+#### Answer File Format (TOML)
+Proxmox 9.0 uses kebab-case field names in TOML format:
+```toml
+[global]
+keyboard = "us"
+country = "US"
+fqdn = "pve-node.local"
+mailto = "admin@local"
+timezone = "UTC"
+root-password = "proxmox"
+
+[network]
+source = "from-dhcp"
+
+[disk-setup]
+filesystem = "zfs"
+disk_list = ["sda"]
+zfs.raid = "raid0"
+zfs.compress = "on"
+zfs.checksum = "on"
+zfs.copies = 1
+zfs.hdsize = 32
+```
+
+#### initrd Requirements
+The initrd must contain:
+- **ISO file named exactly `proxmox.iso`** (critical for auto-installer recognition)
+- **answer.toml in `/proxmox-auto-installer/` directory**
+- **Proper TOML format with kebab-case field names**
+
+### Configuration Discovery Methods
+
+The Proxmox installation supports multiple fallback mechanisms:
+
+1. **Embedded Configuration** (Primary)
+   - answer.toml embedded directly in initrd
+   - ISO file embedded as `proxmox.iso`
+   - Works offline without network dependencies
+
+2. **HTTP-served Configuration** (Secondary)
+   - Answer file served via HTTP at kernel parameter URL
+   - Dynamic configuration per MAC address
+   - Allows runtime configuration changes
+
+3. **DHCP Option Discovery** (Tertiary)
+   - DHCP option 250 provides answer file URL
+   - Automatic discovery without hardcoded URLs
+   - Network-based configuration distribution
+
+### DHCP Configuration
+```bash
+# DHCP option 250 for answer file discovery
+dhcp-option=250,http://10.10.1.1/sessions/answer.toml
+```
+
+### Verification
+A comprehensive verification script validates all components:
+```bash
+# Run full Proxmox iPXE verification
+/mnt/verify_proxmox_config.sh
+```
+
+**Verification includes:**
+- Network services (dnsmasq, nginx)
+- DHCP configuration and option 250
+- File accessibility (kernel, initrd, ISO, answer.toml)
+- PHP configuration with correct kernel parameters
+- Answer file TOML format validation
+- initrd content verification (embedded ISO and config)
+- iPXE response testing
+
+### Troubleshooting
+
+**Common Issues:**
+1. **ISO Naming** - Must be `proxmox.iso` in initrd (not original filename)
+2. **TOML Format** - Must use kebab-case field names (`root-password` not `root_password`)
+3. **Kernel Parameters** - Must include `proxmox-start-auto-installer`
+4. **initrd Size** - Large due to embedded ISO (~1.6GB)
+
+**Resolution Steps:**
+```bash
+# Check initrd content
+mkdir /tmp/check_initrd && cd /tmp/check_initrd
+zstd -dc /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i
+ls -la proxmox.iso  # Must exist with this exact name
+ls -la proxmox-auto-installer/answer.toml  # Must exist with correct format
+
+# Verify TOML format
+grep "root-password" proxmox-auto-installer/answer.toml  # Should use kebab-case
 ```
 
 ## Kubernetes Integration
@@ -391,6 +506,9 @@ Navigate to `http://<provisioning-server-ip>` for the management interface.
 # Multi-OS provisioning validation
 ./test-multi-os.sh
 
+# Proxmox iPXE configuration verification
+/mnt/verify_proxmox_config.sh
+
 # Python script validation
 cd test
 python3 -m pytest test_redfish.py -v
@@ -430,6 +548,10 @@ echo $?  # 0 = all passed, 1 = failures detected
 - [ ] **Web Services**: Autoinstall configuration accessibility
 - [ ] **Hardware Management**: Redfish API connectivity and control
 - [ ] **Dashboard Functionality**: Status updates and reprovisioning
+- [ ] **Ubuntu Provisioning**: Cloud-init autoinstall workflow
+- [ ] **Proxmox Provisioning**: iPXE auto-installer with embedded ISO
+- [ ] **Multi-OS Support**: OS selection and configuration switching
+- [ ] **DHCP Option 250**: Answer file URL discovery
 - [ ] **End-to-End**: Complete provisioning workflow validation
 
 ### Performance Benchmarks
@@ -546,6 +668,10 @@ nmap -p 443 <node-ip>
 | **Hardware Control** | API timeouts | Credential validation, network paths, Redfish compatibility |
 | **Service Recovery** | Services down | Check health monitoring logs, automatic restart status |
 | **Validation Failures** | Deployment issues | Review validation logs, check system requirements, manual verification |
+| **Proxmox Auto-installer** | "Searching for block device" | Check ISO naming in initrd (must be `proxmox.iso`) |
+| **Proxmox Config Discovery** | "No config for fetching answer file" | Verify kernel parameters include `proxmox-start-auto-installer` |
+| **Proxmox TOML Errors** | Configuration parsing failures | Use kebab-case field names (`root-password` not `root_password`) |
+| **Large initrd Issues** | Slow downloads/timeouts | Optimize network, consider compression levels, verify ramdisk size |
 
 ### Log Analysis Locations
 

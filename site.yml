@@ -6,9 +6,14 @@
 
   roles:
     - role: common
-      tags: ['common']
-    - network_config
-    - netboot
-    - web
-    - iso_preparation
-    - validation
+      tags: ['common', 'packages', 'ssh_setup', 'network_setup', 'docker_setup']
+    - role: network_config
+      tags: ['network_config', 'network_setup']
+    - role: netboot
+      tags: ['netboot', 'pxe_setup']
+    - role: web
+      tags: ['web', 'web_setup', 'autoinstall_templates']
+    - role: iso_preparation
+      tags: ['iso_preparation', 'iso_processing']
+    - role: validation
+      tags: ['validation']

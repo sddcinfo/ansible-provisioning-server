@@ -45,7 +45,7 @@ $os_configs = [
         'iso_name' => 'proxmox-ve_9.0-1.iso',
         'kernel_path' => 'boot/linux26',
         'initrd_path' => 'boot/initrd.img',
-        'kernel_params' => 'ramdisk_size=16777216 rw quiet splash=verbose proxmox-start-auto-installer fetch-from=http://{{ provisioning_ip }}/provisioning/proxmox9/answer.toml install-media=http://{{ provisioning_ip }}/provisioning/proxmox9/proxmox-ve_9.0-1.iso',
+        'kernel_params' => '{{ supported_operating_systems.proxmox9.kernel_params }}',
         'config_type' => 'answer',
         'default_config' => 'proxmox9_default'
     ]
@@ -183,6 +183,7 @@ function handle_boot_request(): void {
         
         echo "#!ipxe\n";
         echo "echo Starting {$os_config['name']} installation for {$mac}...\n";
+        echo "imgfree\n";
         
         if ($os_type === 'ubuntu2404') {
             $kernel_params = $os_config['kernel_params'] . " url=" . $os_config['iso_base_url'] . "/" . $os_config['iso_name'];
@@ -190,7 +191,7 @@ function handle_boot_request(): void {
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         } elseif ($os_type === 'proxmox9') {
-            $kernel_params = $os_config['kernel_params'] . " preseed/url=" . $seed_url . "preseed.cfg";
+            $kernel_params = $os_config['kernel_params'];
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         }

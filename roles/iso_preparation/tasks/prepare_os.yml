@@ -2,6 +2,28 @@
 # OS-agnostic ISO preparation task
 # Called for each operating system in supported_operating_systems
 
+- name: "Stat the source unattended ISO for timestamp comparison"
+  stat:
+    path: "/mnt/iso_builder/output/proxmox-ve-unattended.iso"
+  register: unattended_iso_stat
+  when: os_item.key == 'proxmox9'
+
+- name: "Stat the sentinel file for timestamp comparison"
+  stat:
+    path: "{{ os_item.value.provisioning_dir }}/.extraction_complete"
+  register: sentinel_file_stat_for_compare
+  when: os_item.key == 'proxmox9'
+
+- name: "Force Proxmox ISO update if source ISO is newer"
+  ansible.builtin.file:
+    path: "{{ os_item.value.provisioning_dir }}/.extraction_complete"
+    state: absent
+  when:
+    - os_item.key == 'proxmox9'
+    - unattended_iso_stat.stat.exists
+    - sentinel_file_stat_for_compare.stat.exists
+    - unattended_iso_stat.stat.mtime > sentinel_file_stat_for_compare.stat.mtime
+
 - name: Set OS-specific variables
   set_fact:
     current_os: "{{ os_item.key }}"
@@ -27,6 +49,15 @@
     timeout: 3600
   register: download_iso
   when: not sentinel_file_stat.stat.exists
+
+- name: "Copy unattended Proxmox ISO to download directory"
+  copy:
+    src: /mnt/iso_builder/output/proxmox-ve-unattended.iso
+    dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+    remote_src: yes
+  when: 
+    - not sentinel_file_stat.stat.exists
+    - current_os == 'proxmox9'
 
 - name: "Ensure {{ os_config.name }} ISO mount point exists"
   ansible.builtin.file:

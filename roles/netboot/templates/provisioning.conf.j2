@@ -59,6 +59,8 @@ ptr-record={{ host.ip | regex_replace('^(\d+\.\d+\.\d+\.)(\d+)$', '\2.\1') }}in-
 dhcp-range={{ dnsmasq_dhcp_range }}
 dhcp-option=option:router,{{ dnsmasq_dhcp_router }}
 dhcp-option=option:dns-server,{{ dnsmasq_dhcp_dns_server }}
+# Proxmox Auto-Installer DHCP Option 250 (answer.toml URL)
+dhcp-option=250,http://{{ provisioning_ip | default('10.10.1.1') }}/sessions/answer.toml
 
 # IPv6 DHCP (if IPv6 is enabled)
 # Enable IPv6 DHCP on the provisioning bridge
