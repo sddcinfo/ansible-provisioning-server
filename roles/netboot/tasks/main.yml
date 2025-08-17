@@ -74,6 +74,9 @@
     state: present
   tags:
     - netboot
+    - initial
+    - packages
+    - dns_dhcp
 
 - name: Remove conflicting TFTP server packages
   apt:
@@ -93,6 +96,9 @@
   tags:
     - netboot
     - dnsmasq_template
+    - config
+    - dnsmasq_config
+    - dns_dhcp
 
 - name: Flush handlers to restart dnsmasq
   meta: flush_handlers
@@ -132,6 +138,10 @@
         enabled: yes
   tags:
     - netboot
+    - service_restart
+    - quick
+    - dnsmasq_config
+    - maintenance
 
 - name: Verify dnsmasq DNS service is running
   wait_for:
@@ -255,6 +265,10 @@
   delay: 2
   tags:
     - netboot
+    - expensive
+    - initial
+    - ipxe_download
+    - bootloader_setup
 
 - name: Force correct permissions on all TFTP files after download
   shell: |

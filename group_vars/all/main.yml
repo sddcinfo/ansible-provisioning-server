@@ -12,7 +12,7 @@ supported_operating_systems:
     iso_url: "https://ftp.riken.jp/Linux/ubuntu-releases/noble/ubuntu-24.04.3-live-server-amd64.iso"
     iso_name: "ubuntu-24.04.3-live-server-amd64.iso"
     iso_download_dir: "/tmp"
-    iso_mount_point: "/mnt/ubuntu_iso"
+    iso_mount_point: "{{ playbook_dir }}/../../iso_builder/ubuntu_iso"
     provisioning_dir: "/var/www/html/provisioning/ubuntu24.04"
     config_type: "autoinstall"
     boot_files:
@@ -36,7 +36,7 @@ supported_operating_systems:
     iso_url: "https://enterprise.proxmox.com/iso/proxmox-ve_9.0-1.iso"
     iso_name: "proxmox-ve_9.0-1.iso"
     iso_download_dir: "/tmp"
-    iso_mount_point: "/mnt/proxmox_iso"
+    iso_mount_point: "{{ playbook_dir }}/../../iso_builder/proxmox_iso"
     provisioning_dir: "/var/www/html/provisioning/proxmox9"
     config_type: "answer"
     boot_files:
@@ -50,7 +50,7 @@ supported_operating_systems:
       - "efi"
       - "isolinux"
     config_files:
-      - "proxmox-ve.iso"
+      - "proxmox-ve_9.0-1.iso"
       - "VERSION.txt"
       - "checksum.txt"
     disk_devices: ["sda", "nvme0n1", "vda", "hda"]

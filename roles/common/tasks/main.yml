@@ -5,6 +5,8 @@
     cache_valid_time: 3600 # Cache is valid for 1 hour
   tags:
     - packages
+    - maintenance
+    - quick
 
 - name: Install common packages
   apt:
@@ -20,6 +22,8 @@
     state: present
   tags:
     - packages
+    - initial
+    - system_config
 
 - name: Generate SSH key pair for sysadmin user
   ansible.builtin.shell:
@@ -27,6 +31,8 @@
     creates: /home/sysadmin/.ssh/sysadmin_automation_key
   tags:
     - ssh_setup
+    - initial
+    - security_config
 
 - name: Set correct ownership for sysadmin SSH keys
   ansible.builtin.file:
@@ -127,6 +133,8 @@
     autoclean: yes
   tags:
     - packages
+    - expensive
+    - system_upgrade
 
 - name: Configure sysctl for networking
   ansible.posix.sysctl:
@@ -200,6 +208,9 @@
         - nat_rule_verify.rc != 0
   tags:
     - network_setup
+    - initial
+    - network
+    - firewall_config
 
 - name: Persist iptables rules with verification
   block:
@@ -230,6 +241,8 @@
   tags:
     - monitoring
     - resource_limits
+    - config
+    - maintenance
 
 - name: Install Docker
   block:
@@ -287,3 +300,6 @@
         append: yes
   tags:
     - docker_setup
+    - expensive
+    - initial
+    - container_platform

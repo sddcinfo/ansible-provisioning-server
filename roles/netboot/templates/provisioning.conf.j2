@@ -3,16 +3,10 @@
 # === General Configuration ===
 # Bind to provisioning bridge interface
 listen-address={{ provisioning_ip | default('10.10.1.1') }}
-# IPv6 support - listen on IPv6 addresses
-{% if ansible_default_ipv6.address is defined %}
-listen-address={{ ansible_default_ipv6.address }}
-{% endif %}
-# Listen on all interfaces for IPv6 (fallback)
-listen-address=::1
+# IPv6 disabled for local services - only IPv4 for DNS/DHCP
 
 # Interface binding - Bind to provisioning bridge
 interface={{ provisioning_bridge | default('br-prov') }}
-# Bind to localhost for IPv6
 bind-interfaces
 # Note: TFTP may bind to 0.0.0.0 even with interface binding
 no-resolv
@@ -24,10 +18,7 @@ domain-needed
 bogus-priv
 dns-forward-max=1000
 
-# IPv6 DNS configuration
-enable-ra
-# Quiet mode for IPv6 router advertisements (reduces log verbosity)
-quiet-ra
+# IPv6 disabled for local DHCP/DNS services
 
 # === Upstream DNS Servers (IPv4 and IPv6) ===
 {% for server in dnsmasq_upstream_servers %}
@@ -62,18 +53,11 @@ dhcp-option=option:dns-server,{{ dnsmasq_dhcp_dns_server }}
 # Proxmox Auto-Installer DHCP Option 250 (answer.toml URL)
 dhcp-option=250,http://{{ provisioning_ip | default('10.10.1.1') }}/sessions/answer.toml
 
-# IPv6 DHCP (if IPv6 is enabled)
-# Enable IPv6 DHCP on the provisioning bridge
-dhcp-range=::1000,::2000,constructor:{{ provisioning_bridge | default('br-prov') }},ra-names,12h
-# IPv6 DNS server option
-dhcp-option=option6:dns-server,[::1]
+# IPv6 DHCP disabled - only IPv4 DHCP for local clients
 
 dhcp-authoritative
 log-dhcp
 
-# IPv6 specific options
-# Enable IPv6 router advertisements
-dhcp-option=option6:information-refresh-time,6h
 
 # === TFTP Configuration ===
 enable-tftp

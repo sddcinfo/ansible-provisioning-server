@@ -103,13 +103,14 @@ def format_as_human_readable(data, resource_type):
 def process_response(node_name, action, response_body, http_status, args):
     """Processes the response and returns formatted output string."""
     output_format = getattr(args, 'format', None)
+    json_output = getattr(args, 'json', False)
 
     if not response_body:
         return f"{node_name}: Action '{action}' completed successfully."
 
     data = json.loads(response_body)
     
-    if output_format == 'json':
+    if output_format == 'json' or json_output:
         return json.dumps(data, indent=4)
     elif output_format == 'csv':
         return format_as_csv(data, action if action == 'sensors' else args.resource)
@@ -124,8 +125,9 @@ def process_response(node_name, action, response_body, http_status, args):
     elif action == 'sensors':
         sensor_type = getattr(args, 'type', None)
         sensor_name = getattr(args, 'name', None)
+        filter_name = getattr(args, 'filter', None)
         output = [f"Sensor status for '{node_name}':"]
-        name_filter = sensor_name.lower() if sensor_name else None
+        name_filter = (sensor_name or filter_name).lower() if (sensor_name or filter_name) else None
         found_sensor = False
         if not sensor_type or sensor_type == 'temperature':
             for temp in data.get('Temperatures', []):
@@ -160,6 +162,10 @@ def build_request(node_name, args):
         "sensors": {"method": "GET", "base": "chassis", "path": "/Thermal"},
         "inventory": {"method": "GET", "base": "system"},
         "power-on": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "On"}},
+        "power-off": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulShutdown"}},
+        "power-reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "GracefulRestart"}},
+        "power-cycle": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
+        "set-boot-to-bios": {"method": "PATCH", "base": "system", "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup"}}},
         "reboot": {"base": "system", "path": "/Actions/ComputerSystem.Reset", "payload": {"ResetType": "ForceRestart"}},
     }
 
@@ -211,14 +217,16 @@ def create_parser():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output for debugging.")
     subparsers = parser.add_subparsers(dest="action", metavar='action')
 
-    actions_list = ["status", "power-on", "power-off", "power-force-off", "reboot", "bios", "pxe", "disk"]
+    actions_list = ["status", "power-on", "power-off", "power-reboot", "power-cycle", "set-boot-to-bios", "reboot"]
     for action in actions_list:
         subparsers.add_parser(action)
 
     parser_sensors = subparsers.add_parser("sensors")
     parser_sensors.add_argument("--type", choices=["temperature", "fan"])
     parser_sensors.add_argument("--name")
+    parser_sensors.add_argument("--filter", help="Filter sensors by name (case-insensitive substring)")
     parser_sensors.add_argument("--format", choices=["json", "csv"])
+    parser_sensors.add_argument("--json", action="store_true", help="Output result in JSON format (alias for --format json)")
     
     parser_inventory = subparsers.add_parser("inventory")
     parser_inventory.add_argument("--resource", choices=["system", "bios", "memory", "processors", "storage"], required=True)

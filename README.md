@@ -276,15 +276,118 @@ sudo /usr/local/bin/monitoring/health_check.sh
 ### Primary Playbooks
 
 #### Infrastructure Deployment
-```bash
-# Complete provisioning server setup with validation
-sudo ansible-playbook site.yml 
-# Selective role execution
-sudo ansible-playbook site.yml --tags "netboot,web,validation"
 
-# Skip validation if needed (not recommended)
-sudo ansible-playbook site.yml --skip-tags "validation"
+The playbook supports comprehensive tagging for efficient component-based execution instead of running the entire expensive playbook.
+
+**Full Initial Deployment:**
+```bash
+# Complete provisioning server setup (first time)
+sudo ansible-playbook site.yml
 ```
+
+**Tag-Based Execution:**
+```bash
+# Quick service restarts and validation
+sudo ansible-playbook site.yml --tags "quick,maintenance"
+
+# Update configurations only (no expensive operations)
+sudo ansible-playbook site.yml --tags "config"
+
+# Run validation and health checks
+sudo ansible-playbook site.yml --tags "validation,maintenance"
+
+# Skip expensive operations (ISO downloads, system upgrades)
+sudo ansible-playbook site.yml --skip-tags "expensive"
+```
+
+#### Tag Strategy Overview
+
+| Tag Category | Tags | Purpose | Frequency |
+|--------------|------|---------|-----------|
+| **Execution Frequency** | `expensive`, `initial`, `config`, `maintenance`, `quick` | Control when tasks run | Based on operation cost |
+| **Component-Based** | `dns_dhcp`, `web_services`, `autoinstall`, `iso_management` | Target specific components | By functional area |
+| **Service-Specific** | `dnsmasq_config`, `nginx_config`, `service_restart` | Precise service control | For targeted updates |
+
+#### Execution Frequency Tags
+
+| Tag | Purpose | Frequency | Examples |
+|-----|---------|-----------|----------|
+| `expensive` | Resource intensive operations | Monthly/Quarterly | ISO downloads (~6GB), system upgrades |
+| `initial` | One-time setup | Once per deployment | SSH keys, directory creation, package installation |
+| `config` | Configuration updates | When configs change | Template updates, service configurations |
+| `maintenance` | Regular validation | Daily/Weekly | Health checks, service validation |
+| `quick` | Fast operations | Anytime | Service restarts, permission fixes |
+
+#### Component-Based Tags
+
+| Tag | Components | Usage |
+|-----|------------|-------|
+| `packages` | Package management, system upgrades | `--tags "packages,initial"` |
+| `network` | Bridge setup, NAT rules, interface config | `--tags "network,config"` |
+| `dns_dhcp` | dnsmasq configuration, DNS/DHCP services | `--tags "dns_dhcp,config"` |
+| `web_services` | nginx, PHP-FPM, web content | `--tags "web_services,config"` |
+| `autoinstall` | OS provisioning configurations | `--tags "autoinstall,templates"` |
+| `iso_management` | ISO downloads, extraction | `--tags "iso_management" --skip-tags "expensive"` |
+| `validation` | Health checks, service validation | `--tags "validation,quick"` |
+
+#### Common Usage Scenarios
+
+**Daily Operations:**
+```bash
+# Quick health check and service validation
+sudo ansible-playbook site.yml --tags "quick,validation"
+
+# Update autoinstall configurations for new nodes
+sudo ansible-playbook site.yml --tags "autoinstall,config"
+
+# Restart services after configuration changes
+sudo ansible-playbook site.yml --tags "service_restart,quick"
+```
+
+**Configuration Management:**
+```bash
+# Update DNS/DHCP settings
+sudo ansible-playbook site.yml --tags "dns_dhcp,config"
+
+# Update web services configuration
+sudo ansible-playbook site.yml --tags "web_services,config"
+
+# Update all configurations without expensive operations
+sudo ansible-playbook site.yml --tags "config" --skip-tags "expensive"
+```
+
+**Maintenance Operations:**
+```bash
+# Run all validation and health checks
+sudo ansible-playbook site.yml --tags "maintenance,validation"
+
+# Update system packages (expensive - run monthly)
+sudo ansible-playbook site.yml --tags "expensive,system_upgrade"
+
+# Download and process ISOs (expensive - run when needed)
+sudo ansible-playbook site.yml --tags "iso_management,expensive"
+```
+
+**Performance Optimization:**
+```bash
+# Run everything except expensive operations (saves hours)
+sudo ansible-playbook site.yml --skip-tags "expensive"
+
+# Target specific role for faster execution
+sudo ansible-playbook site.yml --tags "netboot,config,maintenance"
+
+# Quick service recovery after issues
+sudo ansible-playbook site.yml --tags "service_restart,validation"
+```
+
+#### Legacy Tag Compatibility
+
+The playbook maintains backward compatibility with existing tags:
+- `common`, `packages`, `ssh_setup`, `network_setup`, `docker_setup`
+- `network_config`, `netboot`, `pxe_setup`  
+- `web`, `web_setup`, `autoinstall_templates`
+- `iso_preparation`, `iso_processing`
+- `validation`
 
 #### Hardware Management
 ```bash

@@ -9,6 +9,9 @@
   tags:
     - nginx
     - php
+    - initial
+    - packages
+    - web_services
 
 - name: Ensure php-fpm is running with verification
   block:
@@ -210,6 +213,9 @@
     mac: "{{ item.mac }}"
   tags:
     - autoinstall_configs
+    - config
+    - autoinstall
+    - templates
 
 - name: Template out meta-data for each node
   template:
@@ -296,6 +302,10 @@
     mac: "{{ default_autoinstall_nodes.proxmox9.mac }}"
   tags:
     - multi_os_configs
+    - config
+    - autoinstall
+    - proxmox_config
+    - templates
 
 - name: Generate redfish script
   template:

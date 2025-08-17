@@ -23,6 +23,9 @@
 
     - name: Validate critical services are installed and running
       ansible.builtin.service_facts:
+      tags:
+        - service_validation
+        - quick
     
     - name: Check critical services status
       ansible.builtin.command: "systemctl is-active {{ item }}"
@@ -33,6 +36,10 @@
         - php8.3-fpm
       changed_when: false
       failed_when: service_status.stdout != "active"
+      tags:
+        - service_validation
+        - quick
+        - maintenance
 
     - name: Validate network connectivity on critical ports
       ansible.builtin.wait_for:
@@ -67,6 +74,10 @@
       register: dns_ipv4_test
       changed_when: false
       failed_when: dns_ipv4_test.rc != 0 or dns_ipv4_test.stdout == ""
+      tags:
+        - dns_validation
+        - quick
+        - maintenance
       
     - name: Validate IPv6 DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com AAAA +short +time=5"
@@ -89,6 +100,10 @@
         status_code: 200
         timeout: 10
       register: web_test
+      tags:
+        - web_validation
+        - quick
+        - maintenance
 
     - name: Validate TFTP directory is accessible
       ansible.builtin.stat:

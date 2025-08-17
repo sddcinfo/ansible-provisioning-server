@@ -4,7 +4,7 @@
 
 - name: "Stat the source unattended ISO for timestamp comparison"
   stat:
-    path: "/mnt/iso_builder/output/proxmox-ve-unattended.iso"
+    path: "{{ playbook_dir }}/../../../iso_builder/output/proxmox-ve-unattended.iso"
   register: unattended_iso_stat
   when: os_item.key == 'proxmox9'
 
@@ -40,6 +40,10 @@
     path: "{{ os_config.provisioning_dir }}"
     state: directory
     mode: '0755'
+  tags:
+    - initial
+    - directory_setup
+    - quick
 
 - name: "Download {{ os_config.name }} ISO"
   ansible.builtin.get_url:
@@ -49,10 +53,14 @@
     timeout: 3600
   register: download_iso
   when: not sentinel_file_stat.stat.exists
+  tags:
+    - expensive
+    - iso_download
+    - bandwidth_intensive
 
-- name: "Copy unattended Proxmox ISO to download directory"
+- name: "Use original Proxmox ISO for PXE extraction (not unattended ISO)"
   copy:
-    src: /mnt/iso_builder/output/proxmox-ve-unattended.iso
+    src: "{{ playbook_dir }}/../../../iso_builder/input/proxmox-ve_9.0-1.iso"
     dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
     remote_src: yes
   when: 
@@ -140,6 +148,10 @@
   loop: "{{ os_config.config_dirs }}"
   when: not sentinel_file_stat.stat.exists
   ignore_errors: yes # Some directories might not exist on all ISOs
+  tags:
+    - expensive
+    - disk_intensive
+    - iso_extraction
 
 - name: "Copy necessary files from {{ os_config.name }} ISO to provisioning directory"
   ansible.builtin.copy:
@@ -158,6 +170,10 @@
     remote_src: yes
     mode: '0644'
   when: not sentinel_file_stat.stat.exists
+  tags:
+    - expensive
+    - disk_intensive
+    - iso_copy
 
 - name: "Create sentinel file to mark {{ os_config.name }} extraction as complete"
   ansible.builtin.file:

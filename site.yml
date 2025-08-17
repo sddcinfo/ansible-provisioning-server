@@ -6,14 +6,71 @@
 
   roles:
     - role: common
-      tags: ['common', 'packages', 'ssh_setup', 'network_setup', 'docker_setup']
+      tags: 
+        # Legacy tags (backward compatibility)
+        - common
+        - packages
+        - ssh_setup  
+        - network_setup
+        - docker_setup
+        # New granular tags
+        - initial
+        - system_config
+        - expensive
+        - maintenance
+
     - role: network_config
-      tags: ['network_config', 'network_setup']
-    - role: netboot
-      tags: ['netboot', 'pxe_setup']
+      tags:
+        # Legacy tags
+        - network_config
+        - network_setup
+        # New granular tags
+        - initial
+        - network
+        - config
+        - maintenance
+
+    - role: netboot  
+      tags:
+        # Legacy tags
+        - netboot
+        - pxe_setup
+        # New granular tags
+        - initial
+        - config
+        - dns_dhcp
+        - maintenance
+        - quick
+
     - role: web
-      tags: ['web', 'web_setup', 'autoinstall_templates']
+      tags:
+        # Legacy tags  
+        - web
+        - web_setup
+        - autoinstall_templates
+        # New granular tags
+        - initial
+        - config
+        - web_services
+        - autoinstall
+        - maintenance
+        - quick
+
     - role: iso_preparation
-      tags: ['iso_preparation', 'iso_processing']
+      tags:
+        # Legacy tags
+        - iso_preparation
+        - iso_processing  
+        # New granular tags
+        - expensive
+        - iso_management
+        - maintenance
+
     - role: validation
-      tags: ['validation']
+      tags:
+        # Legacy tags
+        - validation
+        # New granular tags
+        - maintenance
+        - quick
+        - validation
