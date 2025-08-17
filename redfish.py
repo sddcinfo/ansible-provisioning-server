@@ -8,7 +8,7 @@ from urllib import request, error
 import base64
 
 # --- Configuration ---
-NODES_FILE = "/home/sysadmin/ansible-provisioning-server/nodes.json"
+NODES_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'nodes.json')
 CREDENTIALS_FILE = os.path.expanduser("~/.redfish_credentials")
 
 def get_node_ip(node_name):

@@ -163,17 +163,56 @@
   when: not sentinel_file_stat.stat.exists
   ignore_errors: yes # Some files might not exist on all ISOs
 
-- name: "Copy {{ os_config.name }} ISO itself to provisioning directory"
-  ansible.builtin.copy:
-    src: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
-    dest: "{{ os_config.provisioning_dir }}/{{ os_config.iso_name }}"
-    remote_src: yes
-    mode: '0644'
+- name: "Prepare Proxmox ISO with auto-install-assistant for HTTP fetch"
+  block:
+    - name: "Check if Docker is available for Proxmox ISO preparation"
+      ansible.builtin.command: docker --version
+      register: docker_check
+      changed_when: false
+      failed_when: docker_check.rc != 0
+      when: current_os == 'proxmox9'
+      
+    - name: "Ensure Docker service is running for Proxmox preparation"
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+      when: current_os == 'proxmox9'
+      
+    - name: "Create Proxmox auto-installer ISO with HTTP fetch configuration"
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v "{{ os_config.iso_download_dir }}:/input" \
+          -v "{{ os_config.provisioning_dir }}:/output" \
+          --name proxmox-prepare-iso \
+          proxmoxve/proxmox-ve:latest \
+          proxmox-auto-install-assistant prepare-iso \
+          /input/{{ os_config.iso_name }} \
+          --fetch-from http \
+          --url "http://{{ provisioning_ip }}/autoinstall_configs/proxmox9_default/answer.toml" \
+          --output-file /output/{{ os_config.iso_name }}
+      register: proxmox_prepare_result
+      when: current_os == 'proxmox9'
+      timeout: 1800  # 30 minutes timeout for ISO preparation
+      
+    - name: "Log Proxmox ISO preparation result"
+      ansible.builtin.debug:
+        msg: "Proxmox auto-installer ISO prepared: {{ proxmox_prepare_result.stdout }}"
+      when: current_os == 'proxmox9'
+      
+    - name: "Copy other OS ISOs directly (non-Proxmox)"
+      ansible.builtin.copy:
+        src: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+        dest: "{{ os_config.provisioning_dir }}/{{ os_config.iso_name }}"
+        remote_src: yes
+        mode: '0644'
+      when: current_os != 'proxmox9'
+      
   when: not sentinel_file_stat.stat.exists
   tags:
     - expensive
     - disk_intensive
     - iso_copy
+    - proxmox_prepare
 
 - name: "Create sentinel file to mark {{ os_config.name }} extraction as complete"
   ansible.builtin.file:
