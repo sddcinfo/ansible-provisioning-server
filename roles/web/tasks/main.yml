@@ -409,4 +409,3 @@
       when: (final_web_test.status | default(0)) != 200
   tags:
     - validation
-    - quick

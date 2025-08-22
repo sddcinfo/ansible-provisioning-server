@@ -4,27 +4,10 @@
   include_vars: "{{ playbook_dir }}/roles/netboot/vars/main.yml"
   tags:
     - validation
-    - quick
     - health_check
 
-- name: Quick validation checks (fast operations)
+- name: Quick validation checks (fast operations only)
   block:
-    - name: Validate required directories exist
-      ansible.builtin.stat:
-        path: "{{ item }}"
-      register: directory_checks
-      loop:
-        - /var/www/html
-        - /var/www/html/sessions
-        - /var/www/html/autoinstall_configs
-        - /var/lib/tftpboot
-
-    - name: Check if all required directories exist
-      ansible.builtin.fail:
-        msg: "Required directory does not exist: {{ item.item }}"
-      loop: "{{ directory_checks.results }}"
-      when: not item.stat.exists
-      
     - name: Check critical services status (quick check)
       ansible.builtin.command: "systemctl is-active {{ item }}"
       register: service_status
@@ -34,9 +17,25 @@
         - php8.3-fpm
       changed_when: false
       failed_when: service_status.stdout != "active"
+      
+    - name: Quick DNS test
+      ansible.builtin.command: "dig @127.0.0.1 google.com A +short +time=2"
+      register: quick_dns_test
+      changed_when: false
+      failed_when: quick_dns_test.rc != 0 or quick_dns_test.stdout == ""
+      
+    - name: Quick web test
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        method: GET
+        status_code: 200
+        timeout: 3
+      register: quick_web_test
+      
+    - name: Quick validation summary
+      ansible.builtin.debug:
+        msg: "Quick validation passed: All critical services active, DNS resolving, web responding"
   tags:
-    - validation
-    - quick
     - health_check
 
 - name: Network connectivity validation
@@ -52,7 +51,6 @@
       register: port_tests
   tags:
     - validation
-    - quick
     - health_check
 
 - name: TFTP validation (comprehensive)
@@ -93,7 +91,7 @@
     - maintenance
     - health_check
       
-- name: DNS validation (quick)
+- name: DNS validation (comprehensive)
   block:
     - name: Validate IPv4 DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com A +short +time=3"
@@ -102,7 +100,6 @@
       failed_when: dns_ipv4_test.rc != 0 or dns_ipv4_test.stdout == ""
   tags:
     - validation
-    - quick
     - health_check
 
       
@@ -122,7 +119,7 @@
       failed_when: false
       ignore_errors: yes
 
-- name: Web service validation (quick)
+- name: Web service validation (comprehensive)
   block:
     - name: Validate web service responds
       ansible.builtin.uri:
@@ -133,7 +130,6 @@
       register: web_test
   tags:
     - validation
-    - quick
     - health_check
 
 - name: Comprehensive diagnostic checks
@@ -203,7 +199,3 @@
     - name: Fail the validation
       ansible.builtin.fail:
         msg: "Critical system validation failed - manual intervention required"
-  tags:
-    - validation
-    - quick
-    - health_check

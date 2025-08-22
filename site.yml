@@ -44,7 +44,6 @@
         - dns_dhcp
         # Operation-specific tags
         - validation
-        - quick
 
     - role: web
       tags:
@@ -60,7 +59,6 @@
         - templates
         - permissions
         - validation
-        - quick
 
     - role: iso_preparation
       tags:
@@ -78,5 +76,36 @@
         - validation
         # Optimized operation tags
         - validation
-        - quick
         - health_check
+        
+  tasks:
+    - name: Quick system health check (isolated)
+      block:
+        - name: Check critical services are active
+          ansible.builtin.command: "systemctl is-active {{ item }}"
+          register: service_status
+          loop:
+            - dnsmasq
+            - nginx
+            - php8.3-fpm
+          changed_when: false
+          failed_when: service_status.stdout != "active"
+          
+        - name: Quick DNS resolution test
+          ansible.builtin.command: "dig @127.0.0.1 google.com A +short +time=2"
+          register: quick_dns_test
+          changed_when: false
+          failed_when: quick_dns_test.rc != 0 or quick_dns_test.stdout == ""
+          
+        - name: Quick web service test
+          ansible.builtin.uri:
+            url: "http://127.0.0.1/"
+            method: GET
+            status_code: 200
+            timeout: 3
+            
+        - name: Quick validation complete
+          ansible.builtin.debug:
+            msg: "✓ Quick validation passed: Services active, DNS resolving, web responding"
+      tags:
+        - quick

@@ -153,7 +153,6 @@
     - services_install
     - dns_config
     - validation
-    - quick
 
 - name: Verify dnsmasq DNS service is running
   wait_for:
@@ -163,7 +162,6 @@
     timeout: 15
   tags:
     - validation
-    - quick
     - dns_config
 
 - name: Configure final DNS resolution
@@ -265,6 +263,8 @@
   tags:
     - services_install
     - validation
+    - foundation
+    - expensive
 
 - name: Download iPXE bootloaders (expensive operation)
   get_url:
@@ -340,5 +340,4 @@
         msg: "All DNS functionality tests passed successfully"
   tags:
     - validation
-    - quick
     - dns_config
