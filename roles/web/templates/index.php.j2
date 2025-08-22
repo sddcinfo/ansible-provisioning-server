@@ -191,7 +191,9 @@ function handle_boot_request(): void {
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         } elseif ($os_type === 'proxmox9') {
-            $kernel_params = $os_config['kernel_params'];
+            // Generate MAC-specific answer.toml URL for Proxmox auto-installer API
+            $answer_url = "http://" . SERVER_IP . "/api/answer.php?mac=" . $mac;
+            $kernel_params = "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer proxmox-fetch-answer=" . $answer_url;
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         }
