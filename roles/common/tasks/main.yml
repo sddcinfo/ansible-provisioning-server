@@ -124,7 +124,15 @@
     regexp: '^#?PermitRootLogin'
     line: 'PermitRootLogin prohibit-password'
     state: present
-  notify: restart sshd
+  register: sshd_config_changed
+  tags:
+    - ssh_setup
+
+- name: Restart sshd when configuration changes
+  service:
+    name: sshd
+    state: restarted
+  when: sshd_config_changed.changed
   tags:
     - ssh_setup
 

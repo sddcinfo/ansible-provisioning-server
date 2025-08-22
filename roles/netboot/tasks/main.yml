@@ -107,14 +107,39 @@
   template:
     src: provisioning.conf.j2
     dest: /etc/dnsmasq.d/provisioning.conf
-  notify: restart dnsmasq
+  register: dnsmasq_config_deployed
   tags:
     - dns_config
     - services_install
     - maintenance
 
-- name: Flush handlers to restart dnsmasq
-  meta: flush_handlers
+- name: Restart dnsmasq when configuration changes
+  block:
+    - name: Test dnsmasq configuration before restart
+      command: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
+      changed_when: false
+      register: dnsmasq_config_test
+      
+    - name: Restart dnsmasq service
+      service:
+        name: dnsmasq
+        state: restarted
+      when: dnsmasq_config_test.rc == 0
+      register: dnsmasq_restart_result
+      
+    - name: Wait for dnsmasq DNS service to be ready
+      wait_for:
+        port: 53
+        host: "{{ dnsmasq_listen_address | default('10.10.1.1') }}"
+        state: started
+        timeout: 15
+      when: dnsmasq_restart_result.changed
+      
+  when: dnsmasq_config_deployed.changed
+  tags:
+    - dns_config
+    - services_install
+    - maintenance
 
 
 - name: Start and enable dnsmasq with validation
