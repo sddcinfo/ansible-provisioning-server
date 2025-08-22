@@ -106,18 +106,18 @@
         dest: /etc/nginx/sites-enabled/default
         state: link
       
-    - name: Restart nginx only if configuration changed
+    - name: Ensure nginx is running and enabled
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+        
+    - name: Restart nginx if configuration changed
       service:
         name: nginx
         state: restarted
       when: nginx_config_result.changed
       register: nginx_restart_result
-      
-    - name: Ensure nginx is running
-      service:
-        name: nginx
-        state: started
-        enabled: yes
       
     - name: Wait for nginx to be ready
       wait_for:
