@@ -66,7 +66,7 @@
 
 - name: "Use original Proxmox ISO for PXE extraction (not unattended ISO)"
   copy:
-    src: "{{ playbook_dir }}/../../../iso_builder/input/proxmox-ve_9.0-1.iso"
+    src: "{{ playbook_dir }}/../iso_builder/input/proxmox-ve_9.0-1.iso"
     dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
     remote_src: yes
   when: 
@@ -183,26 +183,26 @@
         state: started
       when: current_os == 'proxmox9'
       
-    - name: "Create Proxmox auto-installer ISO with HTTP fetch configuration"
+    - name: "Create Proxmox auto-installer ISO with HTTP fetch using proper Docker container"
       ansible.builtin.shell: |
         docker run --rm \
           -v "{{ os_config.iso_download_dir }}:/input" \
           -v "{{ os_config.provisioning_dir }}:/output" \
           --name proxmox-prepare-iso \
-          proxmoxve/proxmox-ve:latest \
+          jamestalmage/proxmox-auto-install-assistant \
           proxmox-auto-install-assistant prepare-iso \
-          /input/{{ os_config.iso_name }} \
           --fetch-from http \
-          --url "http://{{ provisioning_ip }}/autoinstall_configs/proxmox9_default/answer.toml" \
-          --output-file /output/{{ os_config.iso_name }}
+          --url "http://{{ provisioning_ip }}/api/answer.php" \
+          --output /output/{{ os_config.iso_name }} \
+          /input/{{ os_config.iso_name }}
       register: proxmox_prepare_result
       when: current_os == 'proxmox9'
-      timeout: 1800  # 30 minutes timeout for ISO preparation
+      timeout: 1800
       
     - name: "Log Proxmox ISO preparation result"
       ansible.builtin.debug:
-        msg: "Proxmox auto-installer ISO prepared: {{ proxmox_prepare_result.stdout }}"
-      when: current_os == 'proxmox9'
+        msg: "Proxmox auto-installer ISO copied successfully"
+      when: current_os == 'proxmox9' and proxmox_prepare_result.changed
       
     - name: "Copy other OS ISOs directly (non-Proxmox)"
       ansible.builtin.copy:

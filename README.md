@@ -499,36 +499,64 @@ ls -la /var/www/html/provisioning/
 /mnt/verify_proxmox_config.sh
 ```
 
-## Proxmox VE 9.0 iPXE Network Boot
+## Proxmox VE 9.0 iPXE Network Boot with HTTP Autoinstaller
 
 ### Overview
-This server provides complete support for iPXE-based EFI network boot installation of Proxmox VE 9.0, including automated configuration discovery and ZFS storage setup.
+This server provides complete support for iPXE-based EFI network boot installation of Proxmox VE 9.0 with advanced HTTP-based autoinstaller functionality. The system combines PXE boot requirements with HTTP answer file fetching to enable both block device recognition and dynamic configuration.
 
 ### Key Features
 - **Zero-touch installation** via iPXE EFI network boot
+- **HTTP-based dynamic configuration** with MAC-specific answer files
+- **Dual-mode operation** supporting both ISO detection and HTTP fetch
 - **Auto-installer activation** with proper kernel parameters
-- **Multiple configuration discovery methods** (embedded, HTTP, DHCP)
 - **ZFS storage configuration** with automated disk setup
 - **Post-installation callbacks** for status tracking
+- **MAC-based configuration discovery** via JSON POST requests
+
+### Architecture Overview
+
+The Proxmox autoinstaller solution addresses two critical challenges:
+1. **PXE Boot Requirement**: Proxmox installer needs access to the ISO as a block device
+2. **HTTP Configuration**: Dynamic answer file fetching via HTTP POST requests
+
+**Solution Design:**
+```
+┌─── PXE Boot ────┬─── HTTP Autoinstaller ───┐
+│                 │                          │
+│ Kernel/initrd   │ JSON POST Request        │
+│ via HTTP        │ to answer.php API        │
+│                 │                          │
+│ initrd contains │ MAC-based dynamic        │
+│ embedded ISO    │ answer.toml generation   │
+│                 │                          │
+│ Solves: "Cannot │ Solves: HTTP fetch       │
+│ find valid ISO" │ configuration discovery  │
+└─────────────────┴──────────────────────────┘
+```
 
 ### Critical Requirements
 
 #### Kernel Parameters
 Proxmox 9.0 requires specific kernel parameters for auto-installer activation:
-```
+```bash
 ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer
 ```
+
+**Key Points:**
+- `proxmox-start-auto-installer` enables the autoinstaller
+- No `proxmox-fetch-answer` parameter needed (embedded in ISO)
+- `--mod-dhcp` flag used during ISO preparation for PXE environments
 
 #### Answer File Format (TOML)
 Proxmox 9.0 uses kebab-case field names in TOML format:
 ```toml
 [global]
-keyboard = "us"
-country = "US"
-fqdn = "pve-node.local"
-mailto = "admin@local"
+keyboard = "en-us"
+country = "jp"
+fqdn = "node4.sddc.info"
+mailto = "admin@sddc.info"
 timezone = "UTC"
-root-password = "proxmox"
+root-password = "proxmox123"
 
 [network]
 source = "from-dhcp"
@@ -541,74 +569,196 @@ zfs.compress = "on"
 zfs.checksum = "on"
 zfs.copies = 1
 zfs.hdsize = 32
+
+[post-installation-webhook]
+url = "http://10.10.1.1/index.php?action=callback&status=DONE&mac=ac:1f:6b:6c:58:2c"
 ```
 
-#### initrd Requirements
-The initrd must contain:
-- **ISO file named exactly `proxmox.iso`** (critical for auto-installer recognition)
-- **answer.toml in `/proxmox-auto-installer/` directory**
-- **Proper TOML format with kebab-case field names**
+### HTTP Autoinstaller Implementation
+
+#### JSON POST Request Handling
+The autoinstaller sends HTTP POST requests with system information:
+
+**Request Format:**
+```json
+{
+  "network_interfaces": [
+    {
+      "link": "eth0", 
+      "mac": "ac:1f:6b:6c:58:2c"
+    }
+  ],
+  "product": {
+    "fullname": "Proxmox VE"
+  },
+  "iso": {
+    "release": "9.0"
+  }
+}
+```
+
+**API Response:**
+The `/api/answer.php` endpoint:
+1. Parses JSON POST data
+2. Extracts MAC address from `network_interfaces` array
+3. Generates dynamic TOML configuration
+4. Returns MAC-specific answer file with callback URL
+
+#### ISO Preparation Process
+
+The system uses `jamestalmage/proxmox-auto-install-assistant` Docker container:
+
+```bash
+# Create autoinstaller ISO with HTTP fetch capability
+docker run --rm \
+  -v "/tmp:/input" \
+  -v "/var/www/html/provisioning/proxmox9:/output" \
+  jamestalmage/proxmox-auto-install-assistant \
+  proxmox-auto-install-assistant prepare-iso \
+  --fetch-from http \
+  --url "http://10.10.1.1/api/answer.php" \
+  --mod-dhcp \
+  --output /output/proxmox-ve_9.0-1.iso \
+  /input/proxmox-ve_9.0-1.iso
+```
+
+**Key Features:**
+- `--fetch-from http`: Enables HTTP-based answer file fetching
+- `--url`: Specifies the answer file endpoint  
+- `--mod-dhcp`: Increases DHCP timeout for PXE environments
+- Creates ISO with embedded autoinstaller mode configuration
+
+#### initrd Modification for PXE Boot
+
+**Critical Process:** Manual ISO embedding in initrd for PXE compatibility:
+
+```bash
+# Extract original initrd from autoinstaller ISO
+zstd -d < original_initrd.img > initrd.cpio
+cpio -i -d -H newc < initrd.cpio
+
+# Add autoinstaller ISO as proxmox.iso
+cp proxmox-ve_9.0-1.iso ./proxmox.iso
+
+# Recompress with embedded ISO
+find . | cpio -o -H newc | zstd -5 > new_initrd.img
+```
+
+**Requirements:**
+- ISO file must be named exactly `proxmox.iso` in initrd root
+- Final initrd size: ~1.8GB (contains filesystem + 1.7GB ISO)
+- Uses zstd compression level 5 for optimal performance
 
 ### Configuration Discovery Methods
 
-The Proxmox installation supports multiple fallback mechanisms:
+The Proxmox installation supports multiple discovery mechanisms:
 
-1. **Embedded Configuration** (Primary)
-   - answer.toml embedded directly in initrd
-   - ISO file embedded as `proxmox.iso`
-   - Works offline without network dependencies
+1. **HTTP POST Discovery** (Primary - Implemented)
+   - Dynamic POST requests to `/api/answer.php`
+   - MAC-based configuration generation
+   - Real-time answer file creation
+   - JSON payload with system information
 
-2. **HTTP-served Configuration** (Secondary)
-   - Answer file served via HTTP at kernel parameter URL
-   - Dynamic configuration per MAC address
-   - Allows runtime configuration changes
+2. **Embedded ISO Configuration** (Secondary)
+   - ISO contains `auto-installer-mode.toml`:
+     ```toml
+     mode = "http"
+     [http]
+     url = "http://10.10.1.1/api/answer.php"
+     ```
+   - Fallback if HTTP requests fail
+   - Self-contained configuration
 
 3. **DHCP Option Discovery** (Tertiary)
    - DHCP option 250 provides answer file URL
    - Automatic discovery without hardcoded URLs
    - Network-based configuration distribution
 
-### DHCP Configuration
+### Testing and Verification
+
+#### API Testing
 ```bash
-# DHCP option 250 for answer file discovery
-dhcp-option=250,http://10.10.1.1/sessions/answer.toml
+# Test HTTP POST endpoint with Proxmox-style payload
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"network_interfaces": [{"link": "eth0", "mac": "ac:1f:6b:6c:58:2c"}]}' \
+  http://10.10.1.1/api/answer.php
 ```
 
-### Verification
-A comprehensive verification script validates all components:
+#### initrd Verification
 ```bash
-# Run full Proxmox iPXE verification
-/mnt/verify_proxmox_config.sh
+# Verify ISO embedding
+cd /tmp && mkdir verify && cd verify
+zstd -d < /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i
+ls -lh proxmox.iso  # Should show ~1.7GB file
 ```
 
-**Verification includes:**
-- Network services (dnsmasq, nginx)
-- DHCP configuration and option 250
-- File accessibility (kernel, initrd, ISO, answer.toml)
-- PHP configuration with correct kernel parameters
-- Answer file TOML format validation
-- initrd content verification (embedded ISO and config)
-- iPXE response testing
+#### Boot File Accessibility
+```bash
+# Verify PXE boot files are accessible
+curl -I http://10.10.1.1/provisioning/proxmox9/boot/linux26
+curl -I http://10.10.1.1/provisioning/proxmox9/boot/initrd.img
+```
 
 ### Troubleshooting
 
-**Common Issues:**
-1. **ISO Naming** - Must be `proxmox.iso` in initrd (not original filename)
-2. **TOML Format** - Must use kebab-case field names (`root-password` not `root_password`)
-3. **Kernel Parameters** - Must include `proxmox-start-auto-installer`
-4. **initrd Size** - Large due to embedded ISO (~1.6GB)
+#### Common Issues and Solutions
 
-**Resolution Steps:**
+**1. "Searching for block device containing the ISO proxmox-ve-9.0-1"**
+- **Cause**: initrd doesn't contain embedded ISO
+- **Solution**: Ensure `proxmox.iso` is embedded in initrd root
+- **Verification**: Extract initrd and check for `proxmox.iso` file
+
+**2. "Automatic installation selected but no config for fetching the answer file found!"**
+- **Cause**: Kernel parameters missing or ISO not prepared for HTTP fetch
+- **Solution**: Use `proxmox-auto-install-assistant` with `--fetch-from http`
+- **Verification**: Check ISO contains `auto-installer-mode.toml`
+
+**3. HTTP POST Request Parsing Errors**
+- **Cause**: API expects `network_interfaces` array, not `network`
+- **Solution**: Updated answer.php to parse correct JSON structure
+- **Verification**: Test with actual Proxmox JSON payload
+
+**4. Large initrd Size Issues**
+- **Cause**: Embedded 1.7GB ISO creates 1.8GB initrd
+- **Solution**: Use zstd compression level 5, increase ramdisk_size parameter
+- **Verification**: Monitor PXE transfer times and memory usage
+
+#### Resolution Steps
 ```bash
-# Check initrd content
-mkdir /tmp/check_initrd && cd /tmp/check_initrd
-zstd -dc /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i
-ls -la proxmox.iso  # Must exist with this exact name
-ls -la proxmox-auto-installer/answer.toml  # Must exist with correct format
+# Complete verification process
+./verify_proxmox_config.sh
 
-# Verify TOML format
-grep "root-password" proxmox-auto-installer/answer.toml  # Should use kebab-case
+# Check initrd content manually  
+mkdir /tmp/check_initrd && cd /tmp/check_initrd
+zstd -dc /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i 2>/dev/null
+ls -la proxmox.iso  # Must exist with correct size
+
+# Verify API response
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"network_interfaces": [{"link": "eth0", "mac": "test:mac:address"}]}' \
+  http://10.10.1.1/api/answer.php
+
+# Check autoinstaller mode configuration
+sudo mount -o loop /var/www/html/provisioning/proxmox9/proxmox-ve_9.0-1.iso /mnt
+cat /mnt/auto-installer-mode.toml
+sudo umount /mnt
 ```
+
+### Implementation Benefits
+
+**Dual-Mode Solution:**
+- ✅ Solves PXE boot ISO detection via embedded `proxmox.iso`
+- ✅ Enables HTTP-based dynamic configuration via JSON POST API
+- ✅ MAC-based configuration with automatic callback URLs
+- ✅ Compatible with official Proxmox documentation requirements
+- ✅ Supports both BIOS and EFI boot modes
+- ✅ Optimized for enterprise PXE environments with `--mod-dhcp`
+
+**Performance Optimizations:**
+- Uses Docker container for consistent ISO preparation
+- zstd compression for optimal initrd size/performance balance  
+- Automated health monitoring and validation
+- End-to-end testing with comprehensive verification scripts
 
 ## Kubernetes Integration
 

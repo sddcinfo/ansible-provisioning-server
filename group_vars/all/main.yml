@@ -42,7 +42,7 @@ supported_operating_systems:
     boot_files:
       kernel: "boot/linux26"
       initrd: "boot/initrd.img"
-    kernel_params: "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer proxmox-fetch-answer=http://{{ provisioning_ip }}/autoinstall_configs/proxmox9_default/answer.toml"
+    kernel_params: "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer"
     config_dirs:
       - "boot"
       - "pve"

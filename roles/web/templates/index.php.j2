@@ -191,9 +191,8 @@ function handle_boot_request(): void {
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         } elseif ($os_type === 'proxmox9') {
-            // Generate MAC-specific answer.toml URL for Proxmox auto-installer API
-            $answer_url = "http://" . SERVER_IP . "/api/answer.php?mac=" . $mac;
-            $kernel_params = "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer proxmox-fetch-answer=" . $answer_url;
+            // Use basic kernel params - ISO is pre-configured for HTTP fetch via proxmox-auto-install-assistant
+            $kernel_params = "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer";
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         }
@@ -207,14 +206,18 @@ function handle_boot_request(): void {
 }
 
 function handle_callback_request(): void {
-    $mac = strtolower($_GET['mac'] ?? '');
-    $status = strtoupper($_GET['status'] ?? '');
+    // Support both GET and POST methods
+    $mac = strtolower($_GET['mac'] ?? $_POST['mac'] ?? '');
+    $status = strtoupper($_GET['status'] ?? $_POST['status'] ?? '');
+    
+    // Normalize MAC address format (convert semicolons to colons)
+    $mac = str_replace(';', ':', $mac);
     
     // Validate MAC address
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
         echo "ERROR: Invalid MAC address format.";
-        error_log("Invalid MAC address in callback: " . ($_GET['mac'] ?? 'empty'));
+        error_log("Invalid MAC address in callback: " . ($_GET['mac'] ?? $_POST['mac'] ?? 'empty') . " (normalized: {$mac})");
         return;
     }
     
@@ -223,7 +226,7 @@ function handle_callback_request(): void {
     if (empty($status) || !in_array($status, $allowed_statuses, true)) {
         header("HTTP/1.1 400 Bad Request");
         echo "ERROR: Invalid status parameter.";
-        error_log("Invalid status in callback: " . ($_GET['status'] ?? 'empty'));
+        error_log("Invalid status in callback: " . ($_GET['status'] ?? $_POST['status'] ?? 'empty'));
         return;
     }
     

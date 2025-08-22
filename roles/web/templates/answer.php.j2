@@ -5,8 +5,33 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 // Get client IP for hostname determination
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 
-// Determine hostname based on IP or MAC (if provided)
-$mac = $_GET['mac'] ?? '';
+// Proxmox auto-installer sends POST data with system information
+// Parse POST data to extract MAC address
+$post_data = file_get_contents('php://input');
+$system_info = json_decode($post_data, true);
+
+// Extract MAC address from system info or fallback to GET parameter
+$mac = '';
+if ($system_info && isset($system_info['network_interfaces'])) {
+    foreach ($system_info['network_interfaces'] as $interface) {
+        if (isset($interface['mac']) && !empty($interface['mac'])) {
+            $mac = strtolower($interface['mac']);
+            break; // Use first available MAC address
+        }
+    }
+}
+
+// Fallback to GET parameter if available
+if (empty($mac)) {
+    $mac = $_GET['mac'] ?? '';
+}
+
+// Normalize MAC address format (convert semicolons to colons if needed)
+$mac = str_replace(';', ':', $mac);
+
+// Log the request for debugging
+error_log("Proxmox answer request - IP: {$client_ip}, MAC: {$mac}, POST data: " . substr($post_data, 0, 500));
+
 $hostname = 'node4'; // Default
 
 // Map IP addresses to hostnames if needed
