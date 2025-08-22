@@ -97,6 +97,7 @@
     group: root
     mode: '0600'
   notify: Apply netplan with verification
+  register: netplan_config_deployed
   tags:
     - network_infra
     - network_config_update
@@ -125,6 +126,20 @@
       
     - name: Flush handlers to apply netplan directly
       meta: flush_handlers
+      
+    - name: Apply netplan directly if handler didn't run
+      block:
+        - name: Check if netplan needs to be applied
+          command: netplan generate
+          changed_when: false
+          register: netplan_generate_check
+          
+        - name: Apply netplan configuration directly
+          command: netplan apply
+          when: netplan_config_deployed.changed
+          register: netplan_apply_direct
+          
+      when: netplan_config_deployed.changed
       
     - name: Wait for network interfaces to stabilize after netplan apply
       pause:
