@@ -96,8 +96,27 @@
     owner: root
     group: root
     mode: '0600'
-  notify: Apply netplan with verification
   register: netplan_config_deployed
+  tags:
+    - network_infra
+    - network_config_update
+    - maintenance
+
+- name: Apply netplan configuration when changed
+  block:
+    - name: Test netplan configuration before apply
+      ansible.builtin.command: netplan generate
+      changed_when: false
+      
+    - name: Apply netplan configuration
+      ansible.builtin.command: netplan apply
+      register: netplan_apply_result
+      
+    - name: Wait for network stabilization
+      ansible.builtin.pause:
+        seconds: 5
+        
+  when: netplan_config_deployed.changed
   tags:
     - network_infra
     - network_config_update
