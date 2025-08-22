@@ -5,13 +5,27 @@
 - name: Display supported operating systems
   ansible.builtin.debug:
     msg: "Preparing ISOs for: {{ supported_operating_systems.keys() | list }}"
+  tags:
+    - iso_download
+    - expensive
 
 - name: Process each supported operating system
   include_tasks: prepare_os.yml
   loop: "{{ supported_operating_systems | dict2items }}"
   loop_control:
     loop_var: os_item
+  when: download_iso_files | default(true)
+  tags:
+    - iso_download
+    - expensive
+    - iso_management
 
 - name: Legacy Ubuntu ISO preparation (for backward compatibility)
   include_tasks: prepare_legacy_ubuntu.yml
-  when: maintain_legacy_compatibility | default(true)
+  when: 
+    - maintain_legacy_compatibility | default(true)
+    - download_iso_files | default(true)
+  tags:
+    - iso_download
+    - expensive
+    - iso_management

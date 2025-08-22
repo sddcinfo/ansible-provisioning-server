@@ -41,22 +41,28 @@
     state: directory
     mode: '0755'
   tags:
-    - initial
-    - directory_setup
-    - quick
+    - foundation
+    - iso_management
 
-- name: "Download {{ os_config.name }} ISO"
+- name: "Check if {{ os_config.name }} ISO already exists"
+  stat:
+    path: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+  register: iso_exists
+  
+- name: "Download {{ os_config.name }} ISO (expensive operation)"
   ansible.builtin.get_url:
     url: "{{ os_config.iso_url }}"
     dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
     mode: '0644'
     timeout: 3600
+    force: no  # Don't re-download if file exists
   register: download_iso
-  when: not sentinel_file_stat.stat.exists
+  when: 
+    - not sentinel_file_stat.stat.exists
+    - not iso_exists.stat.exists or force_iso_download | default(false)
   tags:
     - expensive
     - iso_download
-    - bandwidth_intensive
 
 - name: "Use original Proxmox ISO for PXE extraction (not unattended ISO)"
   copy:
@@ -150,8 +156,7 @@
   ignore_errors: yes # Some directories might not exist on all ISOs
   tags:
     - expensive
-    - disk_intensive
-    - iso_extraction
+    - iso_management
 
 - name: "Copy necessary files from {{ os_config.name }} ISO to provisioning directory"
   ansible.builtin.copy:
@@ -210,9 +215,7 @@
   when: not sentinel_file_stat.stat.exists
   tags:
     - expensive
-    - disk_intensive
-    - iso_copy
-    - proxmox_prepare
+    - iso_management
 
 - name: "Create sentinel file to mark {{ os_config.name }} extraction as complete"
   ansible.builtin.file:

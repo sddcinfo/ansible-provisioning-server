@@ -5,21 +5,32 @@
     content: |
       nameserver 192.168.10.1
       nameserver 2606:4700:4700::1111
+  tags:
+    - foundation
+    - dns_config
 
 - name: Replace systemd-resolved with dnsmasq (Ubuntu 24.04 compatible)
   block:
+    - name: Check if systemd-resolved is active
+      systemd:
+        name: systemd-resolved
+      register: resolved_status
+      ignore_errors: true
+      
     - name: Stop and disable systemd-resolved socket (Ubuntu 24.04)
       systemd:
         name: systemd-resolved.socket
         state: stopped
         enabled: no
         masked: yes
+      when: resolved_status.status is defined and resolved_status.status.ActiveState == 'active'
       ignore_errors: yes
       
     - name: Stop systemd-resolved service
       systemd:
         name: systemd-resolved
         state: stopped
+      when: resolved_status.status is defined and resolved_status.status.ActiveState == 'active'
       ignore_errors: yes
       
     - name: Disable systemd-resolved service
@@ -42,6 +53,7 @@
         value: none
         create: yes
       ignore_errors: yes
+      
     - name: Remove /etc/resolv.conf symlink
       file:
         path: /etc/resolv.conf
@@ -54,7 +66,9 @@
           nameserver 192.168.10.1
           nameserver 2606:4700:4700::1111
   tags:
-    - netboot
+    - foundation
+    - dns_config
+    - services_install
 
 - name: Create tftpboot directory for dnsmasq TFTP service (before dnsmasq installation)
   file:
@@ -64,7 +78,8 @@
     group: root
     mode: "0755"
   tags:
-    - netboot
+    - foundation
+    - services_install
 
 - name: Install dnsmasq and tftp client (dnsmasq provides TFTP server natively)
   apt:
@@ -73,10 +88,9 @@
       - tftp-hpa
     state: present
   tags:
-    - netboot
-    - initial
+    - services_install
+    - foundation
     - packages
-    - dns_dhcp
 
 - name: Remove conflicting TFTP server packages
   apt:
@@ -86,7 +100,8 @@
       - tftpd
     state: absent
   tags:
-    - netboot
+    - foundation
+    - services_install
 
 - name: Copy dnsmasq config
   template:
@@ -94,17 +109,15 @@
     dest: /etc/dnsmasq.d/provisioning.conf
   notify: restart dnsmasq
   tags:
-    - netboot
-    - dnsmasq_template
-    - config
-    - dnsmasq_config
-    - dns_dhcp
+    - dns_config
+    - services_install
+    - maintenance
 
 - name: Flush handlers to restart dnsmasq
   meta: flush_handlers
 
 
-- name: Start and enable dnsmasq
+- name: Start and enable dnsmasq with validation
   block:
     - name: Test dnsmasq configuration
       command: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
@@ -137,11 +150,10 @@
         state: restarted
         enabled: yes
   tags:
-    - netboot
-    - service_restart
+    - services_install
+    - dns_config
+    - validation
     - quick
-    - dnsmasq_config
-    - maintenance
 
 - name: Verify dnsmasq DNS service is running
   wait_for:
@@ -150,7 +162,9 @@
     state: started
     timeout: 15
   tags:
-    - netboot
+    - validation
+    - quick
+    - dns_config
 
 - name: Configure final DNS resolution
   block:
@@ -194,7 +208,8 @@
           - "IPv6 DNS AAAA query: {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED (may be expected)' }}"
           - "IPv6 DNS server test: {{ 'PASSED' if ipv6_dns_test.rc == 0 else 'FAILED (may be expected)' }}"
   tags:
-    - netboot
+    - dns_config
+    - validation
 
 - name: Ensure no conflicting TFTP services are running
   block:
@@ -248,27 +263,28 @@
     - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
   register: ipxe_files
   tags:
-    - netboot
+    - services_install
+    - validation
 
-- name: Download iPXE bootloaders
+- name: Download iPXE bootloaders (expensive operation)
   get_url:
     url: "{{ item.item.url }}"
     dest: "{{ item.item.dest }}"
     owner: dnsmasq
     group: nogroup
     mode: '0644'
+    timeout: 60
+    force: no  # Don't re-download if file exists
   loop: "{{ ipxe_files.results }}"
-  when: not item.stat.exists
+  when: not item.stat.exists and download_ipxe_bootloaders | default(true)
   register: ipxe_download
   until: ipxe_download is succeeded
-  retries: 5
-  delay: 2
+  retries: 3
+  delay: 5
   tags:
-    - netboot
+    - services_install
     - expensive
-    - initial
-    - ipxe_download
-    - bootloader_setup
+    - foundation
 
 - name: Force correct permissions on all TFTP files after download
   shell: |
@@ -323,5 +339,6 @@
       debug:
         msg: "All DNS functionality tests passed successfully"
   tags:
-    - netboot
-    - dns_test
+    - validation
+    - quick
+    - dns_config

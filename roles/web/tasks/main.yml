@@ -7,20 +7,25 @@
       - php-json
     state: present
   tags:
-    - nginx
-    - php
-    - initial
+    - services_install
+    - foundation
     - packages
-    - web_services
 
 - name: Ensure php-fpm is running with verification
   block:
+    - name: Check php-fpm current status
+      systemd:
+        name: php8.3-fpm
+      register: php_fpm_current_status
+      ignore_errors: true
+      
     - name: Start and enable php-fpm
       service:
         name: php8.3-fpm
         state: started
         enabled: yes
       register: php_fpm_start_result
+      when: php_fpm_current_status.status is not defined or php_fpm_current_status.status.ActiveState != 'active'
       
     - name: Wait for php-fpm socket to be available
       ansible.builtin.wait_for:
@@ -38,7 +43,8 @@
       ansible.builtin.debug:
         msg: "PHP-FPM successfully started and socket is available"
   tags:
-    - php
+    - services_install
+    - validation
 
 - name: Configure php-fpm
   template:
@@ -46,7 +52,8 @@
     dest: /etc/php/8.3/fpm/pool.d/www.conf
   notify: restart php-fpm
   tags:
-    - php
+    - web_config
+    - maintenance
 
 - name: Remove default nginx site
   file:
@@ -54,7 +61,8 @@
     state: absent
   notify: restart nginx
   tags:
-    - nginx
+    - web_config
+    - services_install
 
 - name: Configure nginx with verification
   block:
@@ -80,11 +88,18 @@
         dest: /etc/nginx/sites-enabled/default
         state: link
       
-    - name: Force nginx restart to apply new configuration
+    - name: Restart nginx only if configuration changed
       service:
         name: nginx
         state: restarted
+      when: nginx_config_result.changed
       register: nginx_restart_result
+      
+    - name: Ensure nginx is running
+      service:
+        name: nginx
+        state: started
+        enabled: yes
       
     - name: Wait for nginx to be ready
       wait_for:
@@ -97,14 +112,16 @@
       debug:
         msg: "Nginx configuration deployed and service restarted successfully"
   tags:
-    - nginx
+    - web_config
+    - services_install
 
 - name: Remove default nginx page
   file:
     path: /var/www/html/index.nginx-debian.html
     state: absent
   tags:
-    - nginx
+    - web_config
+    - services_install
 
 - name: Ensure web directory has proper permissions
   file:
@@ -114,7 +131,9 @@
     mode: "0755"
     state: directory
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
 
 - name: Copy web root with verification
   block:
@@ -147,7 +166,9 @@
           - Mode: {{ index_php_check.stat.mode }}
           - Readable by nginx: {{ 'Yes' if nginx_read_test.rc == 0 else 'No' }}
   tags:
-    - www_content
+    - web_config
+    - templates
+    - permissions
 
 - name: Ensure sessions directory exists and has correct permissions
   file:
@@ -157,7 +178,9 @@
     group: www-data
     mode: "0775"
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
 
 - name: Ensure state file exists and has correct permissions
   file:
@@ -167,7 +190,9 @@
     group: www-data
     mode: "0664"
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
 
 - name: Create autoinstall templates base directory
   file:
@@ -177,7 +202,9 @@
     group: www-data
     mode: "0755"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - foundation
+    - permissions
 
 - name: Create node-specific autoinstall directories
   file:
@@ -212,10 +239,9 @@
     hostname: "{{ item.hostname }}"
     mac: "{{ item.mac }}"
   tags:
-    - autoinstall_configs
-    - config
-    - autoinstall
+    - autoinstall_config
     - templates
+    - maintenance
 
 - name: Template out meta-data for each node
   template:
@@ -228,7 +254,9 @@
   vars:
     hostname: "{{ item.hostname }}"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - templates
+    - maintenance
 
 - name: Template out user-data for default
   template:
@@ -241,7 +269,9 @@
     hostname: "{{ default_autoinstall_node.hostname }}"
     mac: "{{ default_autoinstall_node.mac }}"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - templates
+    - foundation
 
 - name: Template out meta-data for default
   template:
@@ -269,7 +299,9 @@
   vars:
     os_key: "{{ os_item.key }}"
   tags:
-    - multi_os_configs
+    - autoinstall_config
+    - foundation
+    - permissions
 
 - name: Template out Ubuntu default configurations (for backward compatibility)
   template:
@@ -285,7 +317,9 @@
     hostname: "{{ default_autoinstall_nodes.ubuntu2404.hostname }}"
     mac: "{{ default_autoinstall_nodes.ubuntu2404.mac }}"
   tags:
-    - multi_os_configs
+    - autoinstall_config
+    - templates
+    - foundation
 
 - name: Template out Proxmox default configurations
   template:
@@ -301,11 +335,9 @@
     hostname: "{{ default_autoinstall_nodes.proxmox9.hostname }}"
     mac: "{{ default_autoinstall_nodes.proxmox9.mac }}"
   tags:
-    - multi_os_configs
-    - config
-    - autoinstall
-    - proxmox_config
+    - autoinstall_config
     - templates
+    - foundation
 
 - name: Generate redfish script
   template:
@@ -315,7 +347,9 @@
     group: sysadmin
     mode: "0755"
   tags:
-    - redfish_script
+    - templates
+    - foundation
+    - permissions
 
 - name: Generate verification script with error handling
   block:
@@ -374,4 +408,5 @@
           5. File permissions: ls -la /var/www/html/index.php
       when: (final_web_test.status | default(0)) != 200
   tags:
-    - web_validation
+    - validation
+    - quick

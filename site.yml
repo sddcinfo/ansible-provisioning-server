@@ -13,64 +13,70 @@
         - ssh_setup  
         - network_setup
         - docker_setup
-        # New granular tags
-        - initial
+        # Optimized infrastructure tags
+        - foundation
+        - services_install
         - system_config
-        - expensive
+        # Operation-specific tags
+        - package_upgrade
         - maintenance
 
     - role: network_config
       tags:
-        # Legacy tags
+        # Legacy tags (backward compatibility)
         - network_config
         - network_setup
-        # New granular tags
-        - initial
-        - network
-        - config
+        # Optimized infrastructure tags
+        - network_infra
+        - foundation
+        # Configuration tags
+        - network_config_update
         - maintenance
 
     - role: netboot  
       tags:
-        # Legacy tags
+        # Legacy tags (backward compatibility)
         - netboot
         - pxe_setup
-        # New granular tags
-        - initial
-        - config
+        # Optimized service tags
+        - services_install
+        - dns_config
         - dns_dhcp
-        - maintenance
+        # Operation-specific tags
+        - validation
         - quick
 
     - role: web
       tags:
-        # Legacy tags  
+        # Legacy tags (backward compatibility)
         - web
         - web_setup
         - autoinstall_templates
-        # New granular tags
-        - initial
-        - config
-        - web_services
-        - autoinstall
-        - maintenance
+        # Optimized service tags
+        - services_install
+        - web_config
+        - autoinstall_config
+        # Operation-specific tags
+        - templates
+        - permissions
+        - validation
         - quick
 
     - role: iso_preparation
       tags:
-        # Legacy tags
+        # Legacy tags (backward compatibility)
         - iso_preparation
         - iso_processing  
-        # New granular tags
-        - expensive
+        # Optimized operation tags
+        - iso_download
         - iso_management
-        - maintenance
+        - expensive
 
     - role: validation
       tags:
-        # Legacy tags
+        # Legacy tags (backward compatibility)
         - validation
-        # New granular tags
-        - maintenance
+        # Optimized operation tags
+        - validation
         - quick
-        - validation
+        - health_check

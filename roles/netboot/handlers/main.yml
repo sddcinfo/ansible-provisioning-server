@@ -1,5 +1,47 @@
 ---
 - name: restart dnsmasq
-  service:
-    name: dnsmasq
-    state: restarted
+  block:
+    - name: Test dnsmasq configuration before restart
+      command: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
+      changed_when: false
+      register: dnsmasq_config_test
+      
+    - name: Restart dnsmasq service
+      service:
+        name: dnsmasq
+        state: restarted
+      register: dnsmasq_restart_result
+      when: dnsmasq_config_test.rc == 0
+      
+    - name: Wait for dnsmasq DNS service to be ready
+      wait_for:
+        port: 53
+        host: "{{ dnsmasq_listen_address | default('10.10.1.1') }}"
+        state: started
+        timeout: 15
+        
+    - name: Verify dnsmasq DNS resolution works
+      command: "dig @{{ dnsmasq_listen_address | default('10.10.1.1') }} google.com A +short +time=3"
+      changed_when: false
+      register: dns_test_after_restart
+      failed_when: dns_test_after_restart.rc != 0 or dns_test_after_restart.stdout == ""
+      
+  rescue:
+    - name: Log dnsmasq restart failure
+      debug:
+        msg: "Dnsmasq restart failed - configuration error: {{ dnsmasq_config_test.stderr | default('Unknown error') }}"
+        
+    - name: Attempt to start dnsmasq if configuration is valid
+      service:
+        name: dnsmasq
+        state: started
+      when: dnsmasq_config_test.rc == 0
+      ignore_errors: true
+      
+    - name: Display dnsmasq troubleshooting info
+      debug:
+        msg: |
+          Dnsmasq restart failed. Check:
+          1. Configuration: dnsmasq --test --conf-file=/etc/dnsmasq.d/provisioning.conf
+          2. Service status: systemctl status dnsmasq
+          3. Logs: journalctl -u dnsmasq -n 50

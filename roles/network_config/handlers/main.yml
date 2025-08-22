@@ -1,9 +1,57 @@
 ---
 - name: Apply netplan with verification
-  ansible.builtin.command: netplan apply
-  changed_when: true
+  block:
+    - name: Test netplan configuration before apply
+      ansible.builtin.command: netplan generate
+      changed_when: false
+      
+    - name: Apply netplan configuration
+      ansible.builtin.command: netplan apply
+      register: netplan_apply_result
+      
+    - name: Wait for network stabilization
+      ansible.builtin.pause:
+        seconds: 5
+        
+    - name: Verify network configuration is working
+      ansible.builtin.command: ip route show
+      changed_when: false
+      register: route_check
+      failed_when: route_check.stdout == ""
+      
+  rescue:
+    - name: Log netplan apply failure
+      ansible.builtin.debug:
+        msg: "Netplan apply failed - network configuration may need manual intervention"
+      
+    - name: Attempt to restore networking
+      ansible.builtin.systemd:
+        name: systemd-networkd
+        state: restarted
+      ignore_errors: true
 
 - name: Restart systemd-networkd
   ansible.builtin.systemd:
     name: systemd-networkd
     state: restarted
+    enabled: yes
+  register: networkd_restart
+  
+- name: Restart systemd-networkd with verification
+  block:
+    - name: Restart systemd-networkd service
+      ansible.builtin.systemd:
+        name: systemd-networkd
+        state: restarted
+        enabled: yes
+      register: networkd_restart
+      
+    - name: Wait for systemd-networkd to stabilize
+      ansible.builtin.pause:
+        seconds: 3
+        
+    - name: Verify systemd-networkd is active
+      ansible.builtin.command: systemctl is-active systemd-networkd
+      changed_when: false
+      register: networkd_status
+      failed_when: networkd_status.stdout != "active"
