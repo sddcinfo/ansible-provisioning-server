@@ -68,6 +68,17 @@ def format_output(data, as_json=False, name_filter=None):
     # Simple human-readable format for success messages
     if "Success" in data:
         return f"Success: {data['Success']['Message']}"
+
+    # Format for get-boot-options
+    if "Boot" in data and isinstance(data["Boot"], dict):
+        boot_info = data["Boot"]
+        output = ["Boot Options:"]
+        output.append(f"  - Boot Source Override Enabled: {boot_info.get('BootSourceOverrideEnabled')}")
+        output.append(f"  - Boot Source Override Target: {boot_info.get('BootSourceOverrideTarget')}")
+        output.append(f"  - Persistent Boot Order:")
+        for i, device in enumerate(boot_info.get('BootOrder', [])):
+            output.append(f"    {i+1}. {device}")
+        return "\n".join(output)
     
     # Simple human-readable format for sensor data
     if "Temperatures" in data or "Fans" in data:
@@ -93,6 +104,18 @@ def main():
     parser_sensors.add_argument("--filter", help="Filter sensors by name (case-insensitive substring).")
     parser_sensors.add_argument("--json", action="store_true", help="Output the result in JSON format.")
     
+    # Boot parsers
+    parser_get_boot = subparsers.add_parser("get-boot-options", help="Get boot options.")
+    parser_get_boot.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    parser_set_boot = subparsers.add_parser("set-boot-next", help="Set the boot device for the next boot.")
+    parser_set_boot.add_argument("device", help="The boot device to use (e.g., Pxe, Hdd, UefiShell). Use 'get-boot-options' to see available devices.")
+    parser_set_boot.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
+    parser_get = subparsers.add_parser("get", help="Perform a GET request on an arbitrary Redfish path.")
+    parser_get.add_argument("path", help="The Redfish API path to get (e.g., /redfish/v1/Systems/1).")
+    parser_get.add_argument("--json", action="store_true", help="Output the result in JSON format.")
+
     # Other actions
     parser_boot = subparsers.add_parser("set-boot-to-bios", help="Set the server to boot into BIOS setup on next restart.")
     parser_boot.add_argument("--json", action="store_true", help="Output the result in JSON format.")
@@ -123,10 +146,25 @@ def main():
             "method": "GET",
             "payload": None
         },
+        "get-boot-options": {
+            "path": "/redfish/v1/Systems/1",
+            "method": "GET",
+            "payload": None
+        },
+        "set-boot-next": {
+            "path": "/redfish/v1/Systems/1",
+            "method": "PATCH",
+            "payload": {"Boot": {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": args.device if args.action == "set-boot-next" else None}}
+        },
+        "get": {
+            "path": args.path if args.action == "get" else None,
+            "method": "GET",
+            "payload": None
+        },
         "set-boot-to-bios": {
             "path": "/redfish/v1/Systems/1",
             "method": "PATCH",
-            "payload": {"Boot": {"BootSourceOverrideTarget": "BiosSetup"}}
+            "payload": {"Boot": {"BootSourceOverrideEnabled": "Once", "BootSourceOverrideTarget": "BiosSetup"}}
         },
         "power-on": {
             "path": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
