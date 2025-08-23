@@ -1,143 +1,164 @@
 #!/bin/bash
-# Comprehensive Proxmox iPXE Configuration Verification Script
-# This script verifies all components needed for successful Proxmox 9.0 iPXE installation
+# Proxmox answer.php Validation Script
+# Usage: ./verify_proxmox_config.sh <node_name>
+# Example: ./verify_proxmox_config.sh node1
 
 set -e
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${YELLOW}=== Proxmox VE 9.0 iPXE Configuration Verification ===${NC}"
+# Configuration
+SERVER_IP="10.10.1.1"
+API_URL="http://${SERVER_IP}/api/answer.php"
+NODES_FILE="/var/www/html/nodes.json"
+
+# Check if node name was provided
+if [ $# -eq 0 ]; then
+    echo -e "${RED}Error: No node name provided${NC}"
+    echo "Usage: $0 <node_name>"
+    echo "Example: $0 node1"
+    echo
+    echo "Available nodes:"
+    if [ -f "$NODES_FILE" ]; then
+        jq -r '.nodes[] | "\t- \(.os_hostname) (MAC: \(.os_mac), IP: \(.os_ip))"' "$NODES_FILE" 2>/dev/null || \
+        echo "  Unable to parse nodes.json"
+    else
+        echo "  nodes.json not found"
+    fi
+    exit 1
+fi
+
+NODE_NAME="$1"
+
+echo -e "${BLUE}=== Proxmox answer.php Validation for ${NODE_NAME} ===${NC}"
 echo
+
+# Get node information from nodes.json
+if [ ! -f "$NODES_FILE" ]; then
+    echo -e "${RED}Error: nodes.json not found at $NODES_FILE${NC}"
+    exit 1
+fi
+
+# Extract node data using jq
+NODE_DATA=$(jq -r ".nodes[] | select(.os_hostname == \"${NODE_NAME}\")" "$NODES_FILE" 2>/dev/null)
+
+if [ -z "$NODE_DATA" ]; then
+    echo -e "${RED}Error: Node '${NODE_NAME}' not found in nodes.json${NC}"
+    echo "Available nodes:"
+    jq -r '.nodes[] | "\t- \(.os_hostname) (MAC: \(.os_mac), IP: \(.os_ip))"' "$NODES_FILE"
+    exit 1
+fi
+
+# Extract node details
+OS_MAC=$(echo "$NODE_DATA" | jq -r '.os_mac')
+OS_IP=$(echo "$NODE_DATA" | jq -r '.os_ip')
+OS_HOSTNAME=$(echo "$NODE_DATA" | jq -r '.os_hostname')
+CONSOLE_HOSTNAME=$(echo "$NODE_DATA" | jq -r '.hostname')
+
+echo -e "${YELLOW}Node Information:${NC}"
+echo "  Hostname: $OS_HOSTNAME"
+echo "  MAC Address: $OS_MAC"
+echo "  IP Address: $OS_IP"
+echo "  Console Hostname: $CONSOLE_HOSTNAME"
+echo
+
+# Prepare POST data for answer.php
+POST_DATA=$(cat <<EOF
+{
+  "network_interfaces": [
+    {
+      "link": "eno1",
+      "mac": "${OS_MAC}"
+    }
+  ]
+}
+EOF
+)
+
+echo -e "${YELLOW}Testing answer.php endpoint...${NC}"
+echo
+
+# Make the request and capture response
+RESPONSE=$(curl -s -X POST -H "Content-Type: application/json" -d "${POST_DATA}" "${API_URL}")
+
+if [ -z "$RESPONSE" ]; then
+    echo -e "${RED}Error: Empty response from answer.php${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Response received!${NC}"
+echo
+echo "=== Full Response ==="
+echo "$RESPONSE"
+echo
+echo "=== Validation Checks ==="
 
 ERRORS=0
 
-# Function to check and report
-check_and_report() {
+# Function to check and validate
+check_value() {
     local description="$1"
-    local check_command="$2"
-    local expected_output="$3"
+    local pattern="$2"
+    local expected="$3"
     
-    echo -n "Checking $description... "
+    echo -n "  $description: "
     
-    if eval "$check_command" > /dev/null 2>&1; then
-        echo -e "${GREEN}OK${NC}"
-        return 0
-    else
-        echo -e "${RED}FAILED${NC}"
-        if [ -n "$expected_output" ]; then
-            echo "  Expected: $expected_output"
+    if echo "$RESPONSE" | grep -q "$pattern"; then
+        actual=$(echo "$RESPONSE" | grep "$pattern" | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' | xargs)
+        if [ "$actual" = "$expected" ]; then
+            echo -e "${GREEN}✓${NC} $actual"
+        else
+            echo -e "${YELLOW}⚠${NC} Found: '$actual', Expected: '$expected'"
+            ERRORS=$((ERRORS + 1))
         fi
-        ERRORS=$((ERRORS + 1))
-        return 1
-    fi
-}
-
-# Function to check file content
-check_file_content() {
-    local description="$1"
-    local file_path="$2"
-    local pattern="$3"
-    
-    echo -n "Checking $description... "
-    
-    if [ -f "$file_path" ] && grep -q "$pattern" "$file_path"; then
-        echo -e "${GREEN}OK${NC}"
-        return 0
     else
-        echo -e "${RED}FAILED${NC}"
-        echo "  File: $file_path"
-        echo "  Pattern: $pattern"
+        echo -e "${RED}✗${NC} Not found (Expected: $expected)"
         ERRORS=$((ERRORS + 1))
-        return 1
     fi
 }
 
-echo "=== Network Services ==="
-check_and_report "dnsmasq service" "systemctl is-active dnsmasq"
-check_and_report "nginx service" "systemctl is-active nginx"
+# Validate critical fields
+echo -e "${BLUE}Network Configuration:${NC}"
+check_value "Network source" "^source = " "from-answer"
+check_value "IP address (CIDR)" "^cidr = " "${OS_IP}/24"
+check_value "Gateway" "^gateway = " "10.10.1.1"
+check_value "DNS server" "^dns = " "10.10.1.1"
+check_value "Network interface" "^filter.name = " "eno1"
+
 echo
+echo -e "${BLUE}System Configuration:${NC}"
+check_value "Hostname (FQDN)" "^fqdn = " "${OS_HOSTNAME}.sddc.info"
+check_value "Country" "^country = " "jp"
+check_value "Timezone" "^timezone = " "UTC"
 
-echo "=== DHCP Configuration ==="
-check_file_content "DHCP option 250 configured" "/etc/dnsmasq.d/provisioning.conf" "dhcp-option=250,http://10.10.1.1/autoinstall_configs/proxmox9_default/answer.toml"
 echo
+echo -e "${BLUE}Storage Configuration:${NC}"
+check_value "Filesystem" "^filesystem = " "zfs"
+check_value "RAID level" "^zfs.raid = " "raid0"
 
-echo "=== File Structure ==="
-check_and_report "Proxmox kernel exists" "test -f /var/www/html/provisioning/proxmox9/boot/linux26"
-check_and_report "Proxmox initrd exists" "test -f /var/www/html/provisioning/proxmox9/boot/initrd.img"
-check_and_report "Proxmox ISO exists" "test -f /var/www/html/provisioning/proxmox9/proxmox-ve_9.0-1.iso"
-check_and_report "answer.toml exists" "test -f /var/www/html/autoinstall_configs/proxmox9_default/answer.toml"
 echo
-
-echo "=== Web Server Configuration ==="
-check_and_report "index.php accessible" "curl -s -o /dev/null -w '%{http_code}' http://10.10.1.1/index.php?mac=ac:1f:6b:6c:5a:28 | grep -q 200"
-check_and_report "answer.toml accessible" "curl -s -o /dev/null -w '%{http_code}' http://10.10.1.1/autoinstall_configs/proxmox9_default/answer.toml | grep -q 200"
-check_and_report "kernel accessible" "curl -s -o /dev/null -w '%{http_code}' http://10.10.1.1/provisioning/proxmox9/boot/linux26 | grep -q 200"
-check_and_report "initrd accessible" "curl -s -o /dev/null -w '%{http_code}' http://10.10.1.1/provisioning/proxmox9/boot/initrd.img | grep -q 200"
-echo
-
-echo "=== PHP Configuration ==="
-check_file_content "correct kernel parameters in PHP" "/var/www/html/index.php" "proxmox-start-auto-installer"
-check_file_content "HTTP fetch parameter in PHP" "/var/www/html/index.php" "proxmox-fetch-answer"
-echo
-
-echo "=== Answer File Configuration ==="
-check_file_content "correct TOML format (root-password)" "/var/www/html/autoinstall_configs/proxmox9_default/answer.toml" "root-password"
-check_file_content "ZFS configuration" "/var/www/html/autoinstall_configs/proxmox9_default/answer.toml" "filesystem = \"zfs\""
-check_file_content "DHCP networking" "/var/www/html/autoinstall_configs/proxmox9_default/answer.toml" "source = \"from-dhcp\""
-check_and_report "answer.toml HTTP accessible" "curl -s -o /dev/null -w '%{http_code}' http://10.10.1.1/autoinstall_configs/proxmox9_default/answer.toml | grep -q 200"
-echo
-
-echo "=== HTTP Fetch Configuration Verification ==="
-echo -n "Checking if ISO was prepared with HTTP fetch method... "
-if [ -f "/var/www/html/provisioning/proxmox9/proxmox-ve_9.0-1.iso" ]; then
-    # Check if the ISO was prepared with the auto-install-assistant
-    echo -e "${GREEN}OK${NC}"
-    echo "  Proxmox ISO prepared with auto-install-assistant (HTTP fetch method)"
-else
-    echo -e "${RED}FAILED${NC}"
-    echo "  Proxmox ISO not found or not prepared with auto-install-assistant"
-    ERRORS=$((ERRORS + 1))
-fi
-
-echo -n "Checking HTTP fetch configuration... "
-if curl -s "http://10.10.1.1/autoinstall_configs/proxmox9_default/answer.toml" | grep -q "root-password"; then
-    echo -e "${GREEN}OK${NC}"
-    echo "  Answer file accessible via HTTP and properly formatted"
-else
-    echo -e "${RED}FAILED${NC}"
-    echo "  Answer file not accessible via HTTP or improperly formatted"
-    ERRORS=$((ERRORS + 1))
-fi
-echo
-
-echo "=== iPXE Boot Test ==="
-echo -n "Testing iPXE response... "
-IPXE_RESPONSE=$(curl -s "http://10.10.1.1/index.php?mac=ac:1f:6b:6c:5a:28")
-if echo "$IPXE_RESPONSE" | grep -q "#!ipxe" && echo "$IPXE_RESPONSE" | grep -q "proxmox-start-auto-installer" && echo "$IPXE_RESPONSE" | grep -q "proxmox-fetch-answer"; then
-    echo -e "${GREEN}OK${NC}"
-    echo "  iPXE script contains correct parameters (HTTP fetch method)"
-else
-    echo -e "${RED}FAILED${NC}"
-    echo "  iPXE response malformed or missing HTTP fetch parameters"
-    ERRORS=$((ERRORS + 1))
-fi
-echo
-
 echo "=== Summary ==="
+
 if [ $ERRORS -eq 0 ]; then
-    echo -e "${GREEN} All checks passed! Proxmox iPXE configuration is ready.${NC}"
+    echo -e "${GREEN}✓ All validation checks passed!${NC}"
     echo
-    echo "The configuration includes all critical fixes:"
-    echo "- Correct kernel parameters with proxmox-start-auto-installer"
-    echo "- HTTP fetch method with proxmox-fetch-answer parameter"
-    echo "- Official proxmox-auto-install-assistant prepare-iso tool usage"
-    echo "- Correct TOML format with root-password (kebab-case)"
-    echo "- DHCP option 250 for additional answer file discovery"
-    echo "- HTTP-served answer file with proper accessibility"
+    echo "The answer.php correctly generates configuration for ${NODE_NAME}:"
+    echo "  - Hostname: ${OS_HOSTNAME} (not ${CONSOLE_HOSTNAME})"
+    echo "  - Static IP: ${OS_IP}/24"
+    echo "  - Network interface: eno1"
+    echo "  - Gateway: 10.10.1.1"
+    echo "  - DNS: 10.10.1.1"
+    exit 0
 else
-    echo -e "${RED} $ERRORS check(s) failed. Please review the issues above.${NC}"
+    echo -e "${RED}✗ $ERRORS validation check(s) failed${NC}"
+    echo
+    echo "Please review the issues above and check:"
+    echo "  1. answer.php template is correctly configured"
+    echo "  2. nodes.json has the correct data"
+    echo "  3. PHP templates are properly deployed"
     exit 1
 fi
