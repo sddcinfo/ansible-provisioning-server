@@ -166,6 +166,7 @@
   tags:
     - web_config
     - templates
+    - web_files_only
 
 - name: Create lib directory for PHP libraries
   file:
@@ -189,6 +190,7 @@
   tags:
     - web_config
     - templates
+    - web_files_only
 
 - name: Copy web root with verification
   block:
@@ -224,6 +226,7 @@
     - web_config
     - templates
     - permissions
+    - web_files_only
 
 - name: Ensure sessions directory exists and has correct permissions
   file:
@@ -297,6 +300,7 @@
     - autoinstall_config
     - templates
     - maintenance
+    - web_files_only
 
 - name: Template out meta-data for each node
   template:
@@ -312,6 +316,7 @@
     - autoinstall_config
     - templates
     - maintenance
+    - web_files_only
 
 - name: Template out user-data for default
   template:
@@ -339,6 +344,7 @@
     hostname: "{{ default_autoinstall_node.hostname }}"
   tags:
     - autoinstall_configs
+    - web_files_only
 
 # Multi-OS configuration support
 - name: Create multi-OS default configuration directories
@@ -357,6 +363,7 @@
     - autoinstall_config
     - foundation
     - permissions
+    - web_files_only
 
 - name: Template out Ubuntu default configurations (for backward compatibility)
   template:
@@ -375,6 +382,7 @@
     - autoinstall_config
     - templates
     - foundation
+    - web_files_only
 
 - name: Template out Proxmox default configurations
   template:
@@ -393,6 +401,7 @@
     - autoinstall_config
     - templates
     - foundation
+    - web_files_only
 
 - name: Create API directory
   file:
@@ -405,6 +414,7 @@
     - web_config
     - foundation
     - permissions
+    - web_files_only
 
 - name: Generate Proxmox answer API endpoint
   template:
@@ -416,6 +426,7 @@
   tags:
     - templates
     - web_config
+    - web_files_only
     - foundation
 
 - name: Generate redfish script for sysadmin user
@@ -441,6 +452,7 @@
     - web_config
     - templates
     - permissions
+    - web_files_only
 
 - name: Generate verification script with error handling
   block:

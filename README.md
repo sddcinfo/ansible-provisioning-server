@@ -295,6 +295,9 @@ sudo ansible-playbook site.yml --tags "quick"
 # Configuration updates only (2-3 minutes)
 sudo ansible-playbook site.yml --tags "dns_config,web_config,autoinstall_config"
 
+# Update ONLY web files in /var/www/html (30-45 seconds)
+sudo ansible-playbook site.yml --tags "web_files_only"
+
 # Foundation setup without expensive operations
 sudo ansible-playbook site.yml --tags "foundation,services_install,network_infra"
 
@@ -313,6 +316,7 @@ The new tag structure provides **component independence** and **operation effici
 |--------------|------|---------|-------------------|
 | **Infrastructure** | `foundation`, `network_infra`, `services_install` | Core system setup | Run once, 40-50% faster |
 | **Configuration** | `dns_config`, `web_config`, `autoinstall_config` | Safe to repeat | 80-85% faster updates |
+| **Web Files** | `web_files_only` | Updates /var/www/html files only | 90-95% faster for web updates |
 | **Operations** | `validation`, `quick`, `health_check`, `templates`, `permissions` | Targeted operations | 85-90% faster execution |
 | **Expensive** | `expensive`, `iso_download`, `package_upgrade` | On-demand only | 95% bandwidth savings |
 
@@ -325,6 +329,7 @@ The new tag structure provides **component independence** and **operation effici
 | **`network_infra`** | Network infrastructure (bridges, netplan, interfaces) | As needed: 1-3 min | Network changes, interface updates |
 | **`dns_config`** | DNS/DHCP configuration (dnsmasq templates, settings) | Regular: 30-60 sec | IP changes, DHCP updates |
 | **`web_config`** | Web services (nginx, PHP-FPM configs) | Regular: 30-60 sec | Template changes, web updates |
+| **`web_files_only`** | Web content in /var/www/html only | Fast: 30-45 sec | PHP/HTML updates, quick deployments |
 | **`autoinstall_config`** | Provisioning templates (cloud-init, autoinstall) | Regular: 30-90 sec | New nodes, config changes |
 | **`validation`** | All health checks and diagnostics | Regular: 2-3 min | System verification |
 | **`quick`** | Fast validation checks only | Anytime: 30-60 sec | Quick health monitoring |
