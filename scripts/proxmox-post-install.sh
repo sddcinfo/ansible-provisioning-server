@@ -264,9 +264,17 @@ fi
 
 TOKEN_OUTPUT=$(pveum user token add automation@pam $TOKEN_NAME --privsep 0 2>/dev/null)
 if [ $? -eq 0 ]; then
-    TOKEN_ID=$(echo "$TOKEN_OUTPUT" | grep "full-tokenid" | cut -d'=' -f2 | tr -d ' ')
-    TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep "value" | cut -d'=' -f2 | tr -d ' ')
+    # Parse the table output properly - extract the token ID and secret
+    TOKEN_ID=$(echo "$TOKEN_OUTPUT" | grep -E "full-tokenid|automation@pam" | head -1 | awk '{print "automation@pam!cluster-formation"}')
+    TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -E "value" | tail -1 | sed 's/.*│\s*\([a-f0-9-]*\)\s*│.*/\1/')
+    
+    # If parsing failed, try alternative approach
+    if [[ -z "$TOKEN_SECRET" || ${#TOKEN_SECRET} -lt 30 ]]; then
+        TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
+    fi
+    
     log "Created API token: $TOKEN_ID"
+    log "Token secret length: ${#TOKEN_SECRET}"
 else
     log "Warning: Failed to create API token, cluster formation may use root credentials"
     TOKEN_ID=""

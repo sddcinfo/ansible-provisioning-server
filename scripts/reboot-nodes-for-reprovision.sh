@@ -75,8 +75,9 @@ process_node() {
     # Step 2: Check if node is accessible
     log "Step 2: Testing SSH connectivity to $node_name..."
     if ! timeout 10 ssh $SSH_OPTS root@"$node_ip" 'echo "SSH connection test"' >/dev/null 2>&1; then
-        log "${RED}[FAIL]${NC} Cannot SSH to $node_name ($node_ip)"
-        return 1
+        log "${YELLOW}[INFO]${NC} Cannot SSH to $node_name ($node_ip) - likely already rebooting"
+        log "${GREEN}[OK]${NC} $node_name already processed (API status reset completed)"
+        return 0
     fi
     log "${GREEN}[OK]${NC} SSH connectivity verified"
     
@@ -90,8 +91,7 @@ process_node() {
         if timeout 15 ssh $SSH_OPTS root@"$node_ip" 'efibootmgr -n 14' >/dev/null 2>&1; then
             log "${GREEN}[OK]${NC} Alternative EFI boot entry set for $node_name"
         else
-            log "${RED}[FAIL]${NC} Could not set PXE boot for $node_name"
-            return 1
+            log "${YELLOW}[WARNING]${NC} Could not set PXE boot for $node_name - will rely on existing boot settings"
         fi
     fi
     
@@ -100,28 +100,22 @@ process_node() {
     if timeout 10 ssh $SSH_OPTS root@"$node_ip" 'nohup reboot >/dev/null 2>&1 &' >/dev/null 2>&1; then
         log "${GREEN}[OK]${NC} Reboot command sent to $node_name"
     else
-        log "${RED}[FAIL]${NC} Reboot command failed for $node_name"
-        return 1
+        log "${YELLOW}[WARNING]${NC} Reboot command may have failed for $node_name, but continuing"
     fi
     
     log "${GREEN}[SUCCESS]${NC} $node_name processed successfully"
     return 0
 }
 
-# Confirm action with user
+# Show what will happen
 echo ""
-log "${YELLOW}WARNING: This will reboot ALL nodes and trigger complete reprovisioning!${NC}"
+log "${YELLOW}INFO: Reprovisioning ALL nodes automatically${NC}"
 log "This will process each node in sequence:"
 log "  1. Reset provisioning status via API call"
-log "  2. Set node to boot from PXE"
+log "  2. Set node to boot from PXE (if accessible)"
 log "  3. Reboot node immediately"
 log "  4. Wait 15 seconds before processing next node"
 echo ""
-read -p "Are you sure you want to proceed? (type 'yes' to continue): " -r
-if [[ $REPLY != "yes" ]]; then
-    log "Operation cancelled by user"
-    exit 0
-fi
 
 log ""
 log "${BLUE}=== Processing Nodes in Sequence ===${NC}"

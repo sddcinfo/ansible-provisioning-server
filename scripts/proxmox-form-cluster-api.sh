@@ -41,16 +41,18 @@ api_call() {
         return 1
     fi
     
-    source "$token_file"
+    # Parse token file more robustly
+    local TOKEN_ID TOKEN_SECRET
+    TOKEN_ID=$(grep "^TOKEN_ID=" "$token_file" | cut -d'=' -f2- | tr -d '\r\n')
+    TOKEN_SECRET=$(grep "^TOKEN_SECRET=" "$token_file" | cut -d'=' -f2- | tr -d '\r\n')
     rm -f "$token_file"
     
-    local auth_header=""
-    if [ -n "$TOKEN_ID" ] && [ -n "$TOKEN_SECRET" ]; then
-        auth_header="Authorization: PVEAPIToken=$TOKEN_ID=$TOKEN_SECRET"
-    else
-        log "Warning: No valid token found for $node_ip"
+    if [ -z "$TOKEN_ID" ] || [ -z "$TOKEN_SECRET" ]; then
+        log "Warning: No valid token found for $node_ip (ID='$TOKEN_ID', SECRET='${TOKEN_SECRET:0:8}...')"
         return 1
     fi
+    
+    local auth_header="Authorization: PVEAPIToken=$TOKEN_ID=$TOKEN_SECRET"
     
     local curl_args=(
         -k -s
