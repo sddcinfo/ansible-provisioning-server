@@ -255,30 +255,60 @@ else
     log "automation@pam user already exists"
 fi
 
-# Create API token for the automation user
+# Create API token for the automation user with robust parsing
 TOKEN_NAME="cluster-formation"
 if pveum user token list automation@pam | grep -q "$TOKEN_NAME"; then
     log "API token $TOKEN_NAME already exists, removing old token"
-    pveum user token remove automation@pam $TOKEN_NAME || true
+    pveum user token remove automation@pam $TOKEN_NAME 2>/dev/null || true
+    sleep 2  # Wait for token removal to propagate
 fi
 
-TOKEN_OUTPUT=$(pveum user token add automation@pam $TOKEN_NAME --privsep 0 2>/dev/null)
-if [ $? -eq 0 ]; then
-    # Parse the table output properly - extract the token ID and secret
-    TOKEN_ID=$(echo "$TOKEN_OUTPUT" | grep -E "full-tokenid|automation@pam" | head -1 | awk '{print "automation@pam!cluster-formation"}')
-    TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -E "value" | tail -1 | sed 's/.*│\s*\([a-f0-9-]*\)\s*│.*/\1/')
+# Create token with multiple retry attempts
+TOKEN_ID="automation@pam!cluster-formation"
+TOKEN_SECRET=""
+for attempt in 1 2 3; do
+    log "Creating API token (attempt $attempt/3)..."
+    TOKEN_OUTPUT=$(pveum user token add automation@pam $TOKEN_NAME --privsep 0 --expire 0 2>&1)
     
-    # If parsing failed, try alternative approach
-    if [[ -z "$TOKEN_SECRET" || ${#TOKEN_SECRET} -lt 30 ]]; then
-        TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}')
+    if [ $? -eq 0 ]; then
+        # Multiple parsing strategies for robust token extraction
+        TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
+        
+        # Validate token secret format
+        if [[ -n "$TOKEN_SECRET" && ${#TOKEN_SECRET} -eq 36 && "$TOKEN_SECRET" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
+            log "✅ Created API token successfully"
+            log "Token ID: $TOKEN_ID"
+            log "Token secret format: ${TOKEN_SECRET:0:8}-****-****-****-${TOKEN_SECRET:32:4}"
+            break
+        else
+            log "⚠️  Token parsing failed, extracted: '$TOKEN_SECRET' (length: ${#TOKEN_SECRET})"
+            if [ $attempt -lt 3 ]; then
+                sleep 2
+                continue
+            fi
+        fi
+    else
+        log "⚠️  Token creation failed: $TOKEN_OUTPUT"
     fi
-    
-    log "Created API token: $TOKEN_ID"
-    log "Token secret length: ${#TOKEN_SECRET}"
-else
-    log "Warning: Failed to create API token, cluster formation may use root credentials"
+done
+
+# Final validation
+if [[ -z "$TOKEN_SECRET" || ${#TOKEN_SECRET} -ne 36 ]]; then
+    log "❌ Failed to create valid API token after 3 attempts"
+    log "Cluster formation will rely on root@pam authentication"
     TOKEN_ID=""
     TOKEN_SECRET=""
+else
+    # Test the token immediately to ensure it works
+    log "🔍 Testing API token functionality..."
+    TEST_RESULT=$(curl -k -s -H "Authorization: PVEAPIToken=$TOKEN_ID=$TOKEN_SECRET" \
+        "https://localhost:8006/api2/json/version" 2>/dev/null | grep -o '"version"' | head -1)
+    
+    if [ "$TEST_RESULT" = '"version"' ]; then
+        log "✅ API token validation successful"
+    else
+        log "⚠️  API token validation failed, cluster formation may use root authentication"
+    fi
 fi
 
 # Grant necessary permissions for cluster operations
@@ -292,9 +322,22 @@ TOKEN_SECRET=$TOKEN_SECRET
 CREATED_AT=$(date -Iseconds)
 HOSTNAME=$HOSTNAME
 NODE_IP=$IP_ADDRESS
+STATUS=$([ -n "$TOKEN_SECRET" ] && echo "valid" || echo "fallback_to_root")
+VALIDATION_DATE=$(date -Iseconds)
 EOF
 chmod 600 /etc/proxmox-cluster-token
-log "Stored API token configuration in /etc/proxmox-cluster-token"
+
+# Verify token file was created correctly
+if [ -f /etc/proxmox-cluster-token ]; then
+    log "✅ Stored API token configuration in /etc/proxmox-cluster-token"
+    # Log file contents for debugging (without revealing the full secret)
+    log "Token file contents:"
+    sed 's/TOKEN_SECRET=.*/TOKEN_SECRET=[REDACTED]/' /etc/proxmox-cluster-token | while read line; do
+        log "  $line"
+    done
+else
+    log "❌ Failed to create token file"
+fi
 
 # Basic SSH setup for management server access only (no inter-node keys)
 mkdir -p /root/.ssh
