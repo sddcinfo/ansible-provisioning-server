@@ -14,7 +14,9 @@ source = "from-answer"
 cidr = "{{ os_ip | default('10.10.1.24') }}/24"
 gateway = "{{ gateway_ip | default('10.10.1.1') }}"
 dns = "{{ dns_servers | default('10.10.1.1') }}"
-filter.name = "eno1"
+# For default configuration, match any network interface
+# In production, use filter.ID_NET_NAME_MAC = "*suffix" for specific MAC
+filter = "*"
 
 [disk-setup]
 filesystem = "zfs"

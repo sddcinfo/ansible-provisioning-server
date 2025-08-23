@@ -47,6 +47,11 @@ $gateway = '{{ gateway_ip | default("10.10.1.1") }}';
 $dns = '{{ dns_servers | default("10.10.1.1") }}';
 $netmask = '24'; // /24 network
 
+// Extract last 8 characters of MAC for filter (e.g., "6c:5a:76" from "ac:1f:6b:6c:5a:76")
+// This provides enough uniqueness while keeping the filter simple
+$mac_parts = explode(':', $mac);
+$mac_suffix = implode('', array_slice($mac_parts, -3)); // Last 3 octets without colons
+
 // Generate dynamic answer file
 $config = <<<TOML
 # Proxmox VE 9.0 Auto-Installer Configuration (answer.toml format)
@@ -65,7 +70,9 @@ source = "from-answer"
 cidr = "{$os_ip}/{$netmask}"
 gateway = "{$gateway}"
 dns = "{$dns}"
-filter.name = "eno1"
+# Match network interface by MAC address (most reliable method)
+# The MAC address is specific to each node's OS network interface
+filter.ID_NET_NAME_MAC = "*{$mac_suffix}"
 
 [disk-setup]
 filesystem = "zfs"

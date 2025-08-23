@@ -127,7 +127,9 @@ check_value "Network source" "^source = " "from-answer"
 check_value "IP address (CIDR)" "^cidr = " "${OS_IP}/24"
 check_value "Gateway" "^gateway = " "10.10.1.1"
 check_value "DNS server" "^dns = " "10.10.1.1"
-check_value "Network interface" "^filter.name = " "eno1"
+# Extract MAC suffix for validation (last 3 octets without colons)
+MAC_SUFFIX=$(echo "$OS_MAC" | cut -d: -f4-6 | tr -d ':')
+check_value "Network filter (MAC)" "^filter.ID_NET_NAME_MAC = " "*${MAC_SUFFIX}"
 
 echo
 echo -e "${BLUE}System Configuration:${NC}"
@@ -149,7 +151,7 @@ if [ $ERRORS -eq 0 ]; then
     echo "The answer.php correctly generates configuration for ${NODE_NAME}:"
     echo "  - Hostname: ${OS_HOSTNAME} (not ${CONSOLE_HOSTNAME})"
     echo "  - Static IP: ${OS_IP}/24"
-    echo "  - Network interface: eno1"
+    echo "  - Network filter: MAC-based (*${MAC_SUFFIX})"
     echo "  - Gateway: 10.10.1.1"
     echo "  - DNS: 10.10.1.1"
     exit 0
