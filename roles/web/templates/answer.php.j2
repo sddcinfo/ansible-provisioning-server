@@ -4,6 +4,10 @@ header('Cache-Control: no-cache, no-store, must-revalidate');
 
 require_once __DIR__ . '/../lib/nodes.php';
 
+// Also load nodes.json directly for SSH keys
+$nodes_json_path = __DIR__ . '/../nodes.json';
+$nodes_full_data = json_decode(file_get_contents($nodes_json_path), true);
+
 // Get client IP for hostname determination
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 
@@ -47,6 +51,9 @@ $gateway = '{{ gateway_ip | default("10.10.1.1") }}';
 $dns = '{{ dns_servers | default("10.10.1.1") }}';
 $netmask = '24'; // /24 network
 
+// Get SSH key from the loaded nodes data
+$ssh_key = $nodes_full_data['ssh_keys']['root'] ?? '';
+
 // Extract last 8 characters of MAC for filter (e.g., "6c:5a:76" from "ac:1f:6b:6c:5a:76")
 // This provides enough uniqueness while keeping the filter simple
 $mac_parts = explode(':', $mac);
@@ -64,6 +71,9 @@ fqdn = "{$hostname}.{{ domain | default('local') }}"
 mailto = "{{ mailto | default('admin@' + domain) }}"
 timezone = "{{ timezone | default('UTC') }}"
 root-password = "{{ root_password }}"
+root-ssh-keys = [
+    "{$ssh_key}"
+]
 
 [network]
 source = "from-answer"

@@ -175,12 +175,14 @@ The `nodes.json` file serves as the single source of truth for infrastructure to
 
 ```json
 {
-  "console_nodes": [
+  "nodes": [
     {
       "hostname": "console-node1",
       "ip": "10.10.1.11",
       "mac": "aa:bb:cc:dd:ee:ff",
-      "k8s_ip": "10.10.1.21",
+      "os_hostname": "node1",
+      "os_ip": "10.10.1.21",
+      "os_mac": "ac:1f:6b:6c:58:2c",
       "ceph_ip": "10.10.2.21"
     }
   ]
@@ -191,10 +193,12 @@ The `nodes.json` file serves as the single source of truth for infrastructure to
 
 | Field | Type | Description | Validation |
 |-------|------|-------------|------------|
-| `hostname` | string | Unique node identifier | Must match Ansible inventory |
-| `ip` | IPv4 | Management network address | Within provisioning subnet |
-| `mac` | MAC | Network interface identifier | Lowercase, colon-separated |
-| `k8s_ip` | IPv4 | Kubernetes cluster address | Unique within cluster subnet |
+| `hostname` | string | Console management identifier | Must match Ansible inventory |
+| `ip` | IPv4 | Console network address | Within management subnet |
+| `mac` | MAC | Console interface MAC | Lowercase, colon-separated |
+| `os_hostname` | string | OS provisioning hostname | Used in Proxmox/Ubuntu installs |
+| `os_ip` | IPv4 | OS network address | Within provisioning subnet |
+| `os_mac` | MAC | OS interface MAC | For PXE boot and filtering |
 | `ceph_ip` | IPv4 | Storage network address | Unique within storage subnet |
 
 ### Credential Management
@@ -564,7 +568,11 @@ timezone = "UTC"
 root-password = "proxmox123"
 
 [network]
-source = "from-dhcp"
+source = "from-answer"
+cidr = "10.10.1.21/24"
+gateway = "10.10.1.1"
+dns = "10.10.1.1"
+filter.ID_NET_NAME_MAC = "*6c5a76"  # MAC-based interface selection
 
 [disk-setup]
 filesystem = "zfs"
@@ -604,10 +612,14 @@ The autoinstaller sends HTTP POST requests with system information:
 
 **API Response:**
 The `/api/answer.php` endpoint:
-1. Parses JSON POST data
+1. Parses JSON POST data from Proxmox installer
 2. Extracts MAC address from `network_interfaces` array
-3. Generates dynamic TOML configuration
-4. Returns MAC-specific answer file with callback URL
+3. Maps MAC to node using nodes.json (uses `os_hostname` like node1, not console-node1)
+4. Generates dynamic TOML configuration with:
+   - Static IP configuration from nodes.json
+   - MAC-based network filter (`filter.ID_NET_NAME_MAC = "*suffix"`)
+   - Correct hostname (os_hostname) and network settings (os_ip)
+5. Returns node-specific answer file with callback URL
 
 #### ISO Preparation Process
 
@@ -865,8 +877,11 @@ The web interface now includes integrated Redfish-based hardware management capa
 # Multi-OS provisioning validation
 ./test-multi-os.sh
 
-# Proxmox iPXE configuration verification
-/mnt/verify_proxmox_config.sh
+# Proxmox answer.php validation for specific nodes (uses node name parameter)
+./verify_proxmox_config.sh node1  # Validates answer.php response for node1
+./verify_proxmox_config.sh node2  # Tests MAC-based filtering for node2
+./verify_proxmox_config.sh node3  # Checks static IP configuration
+./verify_proxmox_config.sh node4  # Verifies hostname and network settings
 
 # Python script validation
 cd test

@@ -1,4 +1,7 @@
 {
+  "ssh_keys": {
+    "root": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPBG18KoYrX7WQA9FQGOZhLgsgpALC2TNGnWxswPJgYZ root@mgmt"
+  },
   "nodes": [
     {
       "hostname": "console-node1",
