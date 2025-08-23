@@ -30,10 +30,10 @@ class bcolors:
 
 def get_node_ip(node_name):
     with open(NODES_FILE) as f:
-        nodes = json.load(f)["console_nodes"]
+        nodes = json.load(f)["nodes"]
     for node in nodes:
         if node.get("hostname") == node_name:
-            return node.get("ip")
+            return node.get("console_ip")
     return None
 
 def run_command(command, description, timeout=300):

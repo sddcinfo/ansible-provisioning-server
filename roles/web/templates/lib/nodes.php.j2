@@ -1,0 +1,78 @@
+<?php
+// lib/nodes.php
+
+function get_nodes_data(): array {
+    $nodes_file = __DIR__ . '/../nodes.json';
+    if (!file_exists($nodes_file)) {
+        return [];
+    }
+    $json_data = file_get_contents($nodes_file);
+    $data = json_decode($json_data, true);
+    return $data['nodes'] ?? [];
+}
+
+function get_node_by_mac(string $mac): ?array {
+    $nodes = get_nodes_data();
+    $mac = strtolower($mac);
+    foreach ($nodes as $node) {
+        // Check both console MAC and OS MAC
+        if ((isset($node['console_mac']) && strtolower($node['console_mac']) === $mac) ||
+            (isset($node['os_mac']) && strtolower($node['os_mac']) === $mac)) {
+            return $node;
+        }
+        
+        // Legacy support for old 'mac' field
+        if (isset($node['mac']) && strtolower($node['mac']) === $mac) {
+            return $node;
+        }
+    }
+    return null;
+}
+
+function get_node_by_ip(string $ip): ?array {
+    $nodes = get_nodes_data();
+    foreach ($nodes as $node) {
+        // Check both console IP and OS IP
+        if ((isset($node['console_ip']) && $node['console_ip'] === $ip) ||
+            (isset($node['os_ip']) && $node['os_ip'] === $ip)) {
+            return $node;
+        }
+        
+        // Legacy support for old 'ip' field
+        if (isset($node['ip']) && $node['ip'] === $ip) {
+            return $node;
+        }
+    }
+    return null;
+}
+
+function get_console_hostname_by_mac(string $mac): ?string {
+    $node = get_node_by_mac($mac);
+    if ($node) {
+        // For console MAC, return the console hostname
+        if (isset($node['console_mac']) && strtolower($node['console_mac']) === strtolower($mac)) {
+            return $node['hostname'];
+        }
+        // For OS MAC, we need to map it to console hostname for hardware management
+        if (isset($node['os_mac']) && strtolower($node['os_mac']) === strtolower($mac)) {
+            return $node['hostname']; // console-nodeX hostname for hardware management
+        }
+    }
+    return null;
+}
+
+function get_os_hostname_by_mac(string $mac): ?string {
+    $node = get_node_by_mac($mac);
+    if ($node) {
+        // For OS MAC, return the OS hostname
+        if (isset($node['os_mac']) && strtolower($node['os_mac']) === strtolower($mac)) {
+            return $node['os_hostname'];
+        }
+        // For console MAC, return the OS hostname if needed
+        if (isset($node['console_mac']) && strtolower($node['console_mac']) === strtolower($mac)) {
+            return $node['os_hostname'];
+        }
+    }
+    return null;
+}
+?>

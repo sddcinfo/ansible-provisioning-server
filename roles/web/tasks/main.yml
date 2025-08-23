@@ -156,6 +156,40 @@
     - permissions
     - foundation
 
+- name: Copy nodes.json to the web root
+  copy:
+    src: "{{ playbook_dir }}/nodes.json"
+    dest: "/var/www/html/nodes.json"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+  tags:
+    - web_config
+    - templates
+
+- name: Create lib directory for PHP libraries
+  file:
+    path: /var/www/html/lib
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - foundation
+    - permissions
+
+- name: Copy shared PHP node library
+  template:
+    src: lib/nodes.php.j2
+    dest: /var/www/html/lib/nodes.php
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - web_config
+    - templates
+
 - name: Copy web root with verification
   block:
     - name: Template index.php file
@@ -384,7 +418,7 @@
     - web_config
     - foundation
 
-- name: Generate redfish script
+- name: Generate redfish script for sysadmin user
   template:
     src: ../../templates/redfish.py.j2
     dest: /home/sysadmin/redfish.py
@@ -394,6 +428,18 @@
   tags:
     - templates
     - foundation
+    - permissions
+
+- name: Deploy redfish script for web interface
+  template:
+    src: redfish.py.j2
+    dest: /var/www/html/redfish.py
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - templates
     - permissions
 
 - name: Generate verification script with error handling

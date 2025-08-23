@@ -2,6 +2,8 @@
 header('Content-Type: text/plain');
 header('Cache-Control: no-cache, no-store, must-revalidate');
 
+require_once __DIR__ . '/../lib/nodes.php';
+
 // Get client IP for hostname determination
 $client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
 
@@ -32,19 +34,8 @@ $mac = str_replace(';', ':', $mac);
 // Log the request for debugging
 error_log("Proxmox answer request - IP: {$client_ip}, MAC: {$mac}, POST data: " . substr($post_data, 0, 500));
 
-$hostname = 'node4'; // Default
-
-// Map IP addresses to hostnames if needed
-$ip_to_hostname = [
-    '10.10.1.21' => 'node1',
-    '10.10.1.22' => 'node2', 
-    '10.10.1.23' => 'node3',
-    '10.10.1.24' => 'node4'
-];
-
-if (isset($ip_to_hostname[$client_ip])) {
-    $hostname = $ip_to_hostname[$client_ip];
-}
+$node = get_node_by_mac($mac);
+$hostname = $node['hostname'] ?? 'unknown-node'; // Default
 
 // Generate dynamic answer file
 $config = <<<TOML
@@ -61,6 +52,7 @@ root-password = "{{ root_password }}"
 
 [network]
 source = "from-dhcp"
+filter = "net.ifnames.mac == '{$mac}'"
 
 [disk-setup]
 filesystem = "zfs"
