@@ -786,10 +786,18 @@ This provisioning server works with the separate `ansible-kubernetes-nodes` proj
 ./redfish.py <hostname> sensors [--filter cpu] [--json]
 
 # Power management
-./redfish.py <hostname> power-on|power-off|power-cycle|power-reboot
+./redfish.py <hostname> power-on         # Power on the server
+./redfish.py <hostname> power-off        # Gracefully shut down
+./redfish.py <hostname> power-cycle      # Force restart
+./redfish.py <hostname> power-reboot     # Graceful restart
 
 # Boot configuration
-./redfish.py <hostname> set-boot-to-bios
+./redfish.py <hostname> set-boot-to-bios      # Boot to BIOS on next restart
+./redfish.py <hostname> get-boot-options      # Display current boot settings
+./redfish.py <hostname> set-boot-next <device> # Set next boot device (Pxe, Hdd, etc.)
+
+# Generic Redfish queries
+./redfish.py <hostname> get <path> [--json]   # Query any Redfish endpoint
 ```
 
 #### Provisioning Operations
@@ -812,15 +820,38 @@ Navigate to `http://<provisioning-server-ip>` for the management interface.
 |---------|-------------|------------|
 | **Status Monitoring** | Real-time node state tracking | `NEW`, `INSTALLING`, `DONE`, `FAILED` |
 | **Provisioning Control** | One-click reprovisioning | State reset and reinstallation trigger |
+| **Hardware Management** | Remote server control via Redfish | Power control, BIOS access, system reboot |
+| **Multi-OS Support** | OS selection per node | Ubuntu 24.04 LTS, Proxmox VE 9 |
 | **Configuration Access** | Direct autoinstall links | Per-node cloud-init configurations |
 | **Timestamp Tracking** | Last update monitoring | Activity auditing and debugging |
+
+### Hardware Management Features
+
+The web interface now includes integrated Redfish-based hardware management capabilities:
+
+#### Available Controls
+- **Boot to BIOS**: Configure server to enter BIOS setup on next restart
+- **System Reboot**: Gracefully restart servers remotely
+- **Power Management**: Control server power states (via redfish.py CLI)
+
+#### Security Implementation
+- **Secure Wrapper Script**: All Redfish commands execute through `/usr/local/bin/redfish-web-wrapper.sh`
+- **Command Validation**: Only whitelisted commands are permitted
+- **Sudo Configuration**: Granular permissions via `/etc/sudoers.d/redfish-web`
+- **Input Sanitization**: Hostname and parameter validation prevents injection attacks
 
 ### API Endpoints
 
 - `GET /` - Main dashboard interface
 - `GET /autoinstall_configs/<mac>/user-data` - Node-specific autoinstall configuration
 - `GET /autoinstall_configs/<mac>/meta-data` - Cloud-init metadata
-- `POST /api/reprovision` - Trigger node reprovisioning
+- `GET /?action=boot&mac=<mac>` - iPXE boot script generation
+- `GET /?action=callback&mac=<mac>&status=<status>` - Installation status update
+- `GET /?action=reprovision&mac=<mac>` - Trigger node reprovisioning
+- `GET /?action=boot_to_bios&mac=<mac>` - Set server to boot to BIOS
+- `GET /?action=reboot&mac=<mac>` - Gracefully reboot server
+- `GET /?action=set_os&mac=<mac>&os_type=<os>` - Set OS type for node
+- `POST /api/answer.php` - Proxmox autoinstaller answer endpoint
 
 ## Testing & Validation
 
