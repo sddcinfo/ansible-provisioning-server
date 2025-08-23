@@ -403,10 +403,15 @@ policy_in: DROP
 policy_out: ACCEPT
 
 [RULES]
-# Management access
+# Management access - internal management network
 IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 22    # SSH
 IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 8006  # Web GUI
 IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 5900:5999  # VNC/SPICE
+
+# Management access - external network (for remote access)
+IN ACCEPT -source 192.168.10.0/24 -p tcp -dport 22    # SSH
+IN ACCEPT -source 192.168.10.0/24 -p tcp -dport 8006  # Web GUI
+IN ACCEPT -source 192.168.10.0/24 -p tcp -dport 5900:5999  # VNC/SPICE
 
 # Cluster communication
 IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 5404:5405  # Corosync
@@ -525,8 +530,10 @@ log "Step 15: Performing cleanup..."
 apt-get autoremove -y
 apt-get autoclean
 
-# Create completion marker
+# Create completion markers
 touch /var/lib/proxmox-post-install.done
+touch /var/lib/proxmox-node-prepared.done
+log "[OK] Node preparation markers created"
 echo "$HOSTNAME:$(date -Iseconds)" > /var/lib/proxmox-post-install.done
 
 # 16. Summary and Next Steps

@@ -1,7 +1,16 @@
 #!/bin/bash
 # Proxmox Cluster Formation Script - Stage 2  
 # Run this AFTER all nodes have been prepared with Stage 1
-# This script forms the cluster using the Ceph network for redundancy
+# This script:
+# - Fixes SSH authentication between all cluster nodes
+# - Forms the cluster using the Ceph network for redundancy
+# - Includes robust SSH connectivity testing with timeout protection
+# 
+# Integrated functionality from:
+# - fix-cluster-ssh.sh
+# - test-ssh-robust.sh
+# - test-ssh-timeout.sh
+# - test-timeout-protection.sh
 
 set -e
 
@@ -69,7 +78,117 @@ test_ssh_robust() {
     return $result
 }
 
+# Function to fix SSH authentication between cluster nodes
+fix_cluster_ssh() {
+    log "=== Fixing SSH Authentication Between Cluster Nodes ==="
+    
+    # Node IPs extracted from NODES array
+    local NODE_IPS=()
+    local NODE_NAMES=()
+    
+    for node in "${!NODES[@]}"; do
+        IFS=':' read -r mgmt_ip ceph_ip <<< "${NODES[$node]}"
+        NODE_IPS+=("$mgmt_ip")
+        NODE_NAMES+=("$node")
+    done
+    
+    # Collect all public keys
+    local ALL_KEYS=""
+    local MGMT_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPBG18KoYrX7WQA9FQGOZhLgsgpALC2TNGnWxswPJgYZ root@mgmt"
+    
+    # Add management server key
+    ALL_KEYS="$MGMT_KEY"$'\n'
+    
+    log "Collecting public keys from all nodes..."
+    for i in "${!NODE_IPS[@]}"; do
+        local node_ip="${NODE_IPS[i]}"
+        local node_name="${NODE_NAMES[i]}"
+        
+        log "Getting public key from $node_name ($node_ip)..."
+        if node_key=$(timeout 10 ssh $SSH_OPTS root@"$node_ip" 'cat /root/.ssh/id_rsa.pub' 2>/dev/null); then
+            ALL_KEYS="$ALL_KEYS$node_key"$'\n'
+            log "[OK] Got key from $node_name"
+        else
+            log "[WARNING] Could not get key from $node_name - will try to fix"
+            # Try using password authentication as fallback
+            if orig_key=$(timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@"$node_ip" 'cat /root/.ssh/id_rsa.pub' 2>/dev/null); then
+                ALL_KEYS="$ALL_KEYS$orig_key"$'\n'
+                log "[OK] Got key from $node_name using fallback method"
+            else
+                log "[ERROR] Could not get key from $node_name at all"
+            fi
+        fi
+    done
+    
+    log "Distributing all keys to all nodes..."
+    for i in "${!NODE_IPS[@]}"; do
+        local node_ip="${NODE_IPS[i]}"
+        local node_name="${NODE_NAMES[i]}"
+        
+        log "Updating authorized_keys on $node_name ($node_ip)..."
+        
+        # Create a temporary authorized_keys file
+        local temp_keys_file="/tmp/authorized_keys_$node_name"
+        echo "$ALL_KEYS" > "$temp_keys_file"
+        
+        # Copy to node and set up
+        if timeout 15 scp -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes "$temp_keys_file" root@"$node_ip":/tmp/new_authorized_keys 2>/dev/null; then
+            # Set up the keys
+            timeout 15 ssh $SSH_OPTS root@"$node_ip" '
+                # Backup current authorized_keys
+                cp /root/.ssh/authorized_keys /root/.ssh/authorized_keys.backup 2>/dev/null || true
+                
+                # Install new keys
+                mkdir -p /root/.ssh
+                chmod 700 /root/.ssh
+                mv /tmp/new_authorized_keys /root/.ssh/authorized_keys
+                chmod 600 /root/.ssh/authorized_keys
+                chown root:root /root/.ssh/authorized_keys
+                
+                # Remove symlink if it exists and create real file
+                if [ -L /root/.ssh/authorized_keys ]; then
+                    rm /root/.ssh/authorized_keys
+                    mv /tmp/new_authorized_keys /root/.ssh/authorized_keys
+                    chmod 600 /root/.ssh/authorized_keys
+                fi
+                
+                echo "SSH keys updated successfully"
+            ' 2>/dev/null && log "[OK] Updated $node_name successfully"
+        else
+            log "[ERROR] Could not update $node_name"
+        fi
+        
+        # Clean up temp file
+        rm -f "$temp_keys_file"
+    done
+    
+    log "Testing SSH connectivity between all nodes..."
+    for i in "${!NODE_IPS[@]}"; do
+        local src_ip="${NODE_IPS[i]}"
+        local src_name="${NODE_NAMES[i]}"
+        
+        log "Testing SSH from $src_name..."
+        for j in "${!NODE_IPS[@]}"; do
+            if [ $i -ne $j ]; then
+                local dst_ip="${NODE_IPS[j]}"
+                local dst_name="${NODE_NAMES[j]}"
+                
+                if timeout 10 ssh $SSH_OPTS root@"$src_ip" "ssh -o ConnectTimeout=3 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes root@$dst_ip 'echo SSH-OK'" >/dev/null 2>&1; then
+                    log "[OK] $src_name → $dst_name works"
+                else
+                    log "[FAIL] $src_name → $dst_name failed"
+                fi
+            fi
+        done
+    done
+    
+    log "=== SSH Fix Complete ==="
+}
+
 log "=== Starting Proxmox Cluster Formation ==="
+
+# 0. Fix SSH authentication between all nodes first
+fix_cluster_ssh
 
 # 1. Check all nodes are prepared and accessible
 # This is where all SSH connectivity testing happens - post-install script only sets up keys
