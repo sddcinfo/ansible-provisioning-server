@@ -244,150 +244,113 @@ mkdir -p /var/lib/vz/template/iso
 mkdir -p /var/lib/vz/template/cache
 mkdir -p /var/lib/vz/dump
 
-# 7. Generate and Manage SSH Keys
-log "Step 7: Setting up SSH keys..."
+# 7. Set up API user for cluster management
+log "Step 7: Setting up API user for cluster management..."
 
-# Helper function to get hostname by IP
-get_hostname_by_ip() {
-    local ip=$1
-    for node in "${!NODE_IPS[@]}"; do
-        if [ "${NODE_IPS[$node]}" = "$ip" ]; then
-            echo "$node"
-            return
-        fi
-    done
-    echo "unknown"
-}
+# Create a dedicated user for cluster formation operations
+if ! pveum user list | grep -q "automation@pam"; then
+    pveum user add automation@pam --comment "Automated cluster formation user"
+    log "Created automation@pam user"
+else
+    log "automation@pam user already exists"
+fi
 
-# Download and install the provisioning server's SSH keys
-log "Retrieving provisioning server SSH keys for unified access..."
+# Create API token for the automation user
+TOKEN_NAME="cluster-formation"
+if pveum user token list automation@pam | grep -q "$TOKEN_NAME"; then
+    log "API token $TOKEN_NAME already exists, removing old token"
+    pveum user token remove automation@pam $TOKEN_NAME || true
+fi
+
+TOKEN_OUTPUT=$(pveum user token add automation@pam $TOKEN_NAME --privsep 0 2>/dev/null)
+if [ $? -eq 0 ]; then
+    TOKEN_ID=$(echo "$TOKEN_OUTPUT" | grep "full-tokenid" | cut -d'=' -f2 | tr -d ' ')
+    TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep "value" | cut -d'=' -f2 | tr -d ' ')
+    log "Created API token: $TOKEN_ID"
+else
+    log "Warning: Failed to create API token, cluster formation may use root credentials"
+    TOKEN_ID=""
+    TOKEN_SECRET=""
+fi
+
+# Grant necessary permissions for cluster operations
+pveum acl modify / --users automation@pam --roles Administrator
+log "Granted Administrator role to automation@pam user"
+
+# Store token information for cluster formation script
+cat > /etc/proxmox-cluster-token <<EOF
+TOKEN_ID=$TOKEN_ID
+TOKEN_SECRET=$TOKEN_SECRET
+CREATED_AT=$(date -Iseconds)
+HOSTNAME=$HOSTNAME
+NODE_IP=$IP_ADDRESS
+EOF
+chmod 600 /etc/proxmox-cluster-token
+log "Stored API token configuration in /etc/proxmox-cluster-token"
+
+# Basic SSH setup for management server access only (no inter-node keys)
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
-
-# Get the sysadmin_automation SSH keys from provisioning server
-for attempt in {1..3}; do
-    log "Downloading SSH keys from provisioning server (attempt $attempt/3)"
-    
-    # Download private key
-    if curl -s "http://$PROVISION_SERVER/api/get-ssh-keys.php?type=management&key=private" -o /root/.ssh/id_ed25519; then
-        chmod 600 /root/.ssh/id_ed25519
-        log "Downloaded private SSH key"
-        
-        # Download public key  
-        if curl -s "http://$PROVISION_SERVER/api/get-ssh-keys.php?type=management&key=public" -o /root/.ssh/id_ed25519.pub; then
-            chmod 644 /root/.ssh/id_ed25519.pub
-            log "Downloaded public SSH key"
-            
-            # Verify keys are valid
-            if ssh-keygen -y -f /root/.ssh/id_ed25519 >/dev/null 2>&1; then
-                log "[OK] SSH keys validated successfully"
-                break
-            else
-                log "Downloaded SSH keys are invalid, retrying..."
-            fi
-        else
-            log "Failed to download public key"
-        fi
-    else
-        log "Failed to download private key"
-    fi
-    
-    if [ $attempt -eq 3 ]; then
-        log "Warning: Failed to download SSH keys after 3 attempts - generating local keys as fallback"
-        # Fallback: generate local keys
-        if [ ! -f /root/.ssh/id_ed25519 ]; then
-            ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -C "root@${HOSTNAME}-fallback"
-            log "Generated fallback SSH key for ${HOSTNAME}"
-        fi
-    else
-        sleep 2
-    fi
-done
-
-# Ensure authorized_keys file exists and has correct permissions
 touch /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
 
-# Add the provisioning server's public key to authorized_keys
-PUBLIC_KEY=$(cat /root/.ssh/id_ed25519.pub)
-if ! grep -Fxq "$PUBLIC_KEY" /root/.ssh/authorized_keys; then
-    echo "$PUBLIC_KEY" >> /root/.ssh/authorized_keys
-    log "Added provisioning server public key to authorized_keys"
+# Download management server public key for basic management access
+if curl -s "http://$PROVISION_SERVER/api/get-ssh-keys.php?type=management&key=public" >> /tmp/mgmt_key 2>/dev/null; then
+    if [ -s /tmp/mgmt_key ]; then
+        cat /tmp/mgmt_key >> /root/.ssh/authorized_keys
+        log "Added management server SSH key for basic access"
+    fi
+    rm -f /tmp/mgmt_key
+else
+    log "Warning: Could not download management server SSH key"
 fi
 
-log "[OK] SSH keys configured - cluster formation script will handle connectivity testing"
+log "[OK] API user configured - cluster formation will use Proxmox API"
 
-# 8. Cluster Configuration (Node-specific behavior)
-log "Step 8: Cluster configuration..."
+# 8. Cluster Preparation (API-ready state)
+log "Step 8: Preparing node for API-based cluster formation..."
 
-if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
-    # NODE1: Create the cluster
-    log "This is the primary node ($CLUSTER_PRIMARY) - checking cluster status..."
-    
-    if ! pvecm status >/dev/null 2>&1; then
-        log "Creating new cluster: $CLUSTER_NAME"
-        # Create cluster with dual links (management + Ceph)
-        pvecm create "$CLUSTER_NAME" \
-            --link0 "$IP_ADDRESS" \
-            --link1 "${CEPH_IPS[$HOSTNAME]}" \
-            || pvecm create "$CLUSTER_NAME" --link0 "$IP_ADDRESS" \
-            || error_exit "Failed to create cluster"
-        
-        log "[OK] Cluster '$CLUSTER_NAME' created successfully"
-        
-        # Wait for cluster to stabilize
-        sleep 5
-        
-        # Verify cluster creation
-        if pvecm status | grep -q "Quorum provider"; then
-            log "[OK] Cluster is operational and has quorum"
+# Test basic network connectivity to other nodes
+log "Testing network connectivity to cluster nodes..."
+for node in "${!NODE_IPS[@]}"; do
+    if [ "$node" != "$HOSTNAME" ]; then
+        node_ip="${NODE_IPS[$node]}"
+        if ping -c 1 -W 2 "$node_ip" >/dev/null 2>&1; then
+            log "[OK] Can reach $node ($node_ip)"
         else
-            log "Warning: Cluster created but quorum not detected"
+            log "[FAIL] Cannot reach $node ($node_ip)"
         fi
-    else
-        log "Node is already part of a cluster"
-        pvecm status || true
     fi
-    
+done
+
+# Test Ceph network connectivity
+log "Testing Ceph network connectivity..."
+for node in "${!CEPH_IPS[@]}"; do
+    if [ "$node" != "$HOSTNAME" ]; then
+        ceph_ip="${CEPH_IPS[$node]}"
+        if ping -c 1 -W 2 "$ceph_ip" >/dev/null 2>&1; then
+            log "[OK] Can reach $node Ceph network ($ceph_ip)"
+        else
+            log "[FAIL] Cannot reach $node Ceph network ($ceph_ip)"
+        fi
+    fi
+done
+
+# Check if already in cluster
+if pvecm status >/dev/null 2>&1; then
+    log "[OK] Node is already part of a cluster"
+    pvecm status || true
 else
-    # NODES 2-4: Prepare for joining (but don't join yet)
-    log "This is a secondary node ($HOSTNAME) - preparing for cluster join..."
-    
-    # Check if already in cluster
-    if pvecm status >/dev/null 2>&1; then
-        log "Node is already part of a cluster"
-    else
-        log "Node is NOT in a cluster yet"
-        log "Prerequisites for joining cluster:"
-        
-        # Test connectivity to primary node
-        if ping -c 1 -W 2 "$CLUSTER_PRIMARY_IP" >/dev/null 2>&1; then
-            log "[OK] Can reach primary node ($CLUSTER_PRIMARY_IP)"
-        else
-            log "[FAIL] Cannot reach primary node ($CLUSTER_PRIMARY_IP)"
-        fi
-        
-        # Test Ceph network connectivity
-        if ping -c 1 -W 2 "${CEPH_IPS[$CLUSTER_PRIMARY]}" >/dev/null 2>&1; then
-            log "[OK] Can reach primary node Ceph network (${CEPH_IPS[$CLUSTER_PRIMARY]})"
-        else
-            log "[FAIL] Cannot reach primary node Ceph network"
-        fi
-        
-        # SSH connectivity will be tested during cluster formation
-        
-        log ""
-        log "TO JOIN THIS NODE TO THE CLUSTER:"
-        log "Option 1: Run from $CLUSTER_PRIMARY:"
-        log "  ssh root@$CLUSTER_PRIMARY_IP"
-        log "  pvecm add $IP_ADDRESS --link0 $IP_ADDRESS --link1 ${CEPH_IPS[$HOSTNAME]}"
-        log ""
-        log "Option 2: Run from this node ($HOSTNAME):"
-        log "  pvecm add $CLUSTER_PRIMARY_IP --use_ssh"
-        log ""
-        log "Option 3: Use the cluster formation script:"
-        log "  /root/proxmox-form-cluster.sh"
-    fi
+    log "[OK] Node is ready for cluster formation via API"
+    log ""
+    log "TO FORM THE CLUSTER:"
+    log "Run the API-based cluster formation script from the management server:"
+    log "  ./scripts/proxmox-form-cluster.sh"
+    log ""
+    log "This will use the Proxmox API (not SSH) to:"
+    log "- Create cluster on node1 if it doesn't exist"
+    log "- Join all nodes using API tokens"
+    log "- Verify cluster health and connectivity"
 fi
 
 # 9. Configure Firewall
