@@ -4,11 +4,9 @@
 [![Ansible](https://img.shields.io/badge/ansible-%3E%3D2.9-blue.svg)](https://www.ansible.com/)
 [![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%20%7C%2022.04%20%7C%2024.04-orange.svg)](https://ubuntu.com/)
 
-> **Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers**
+Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE clusters.
 
-An Ansible-based automation solution that deploys and manages a comprehensive provisioning infrastructure for zero-touch deployment of Ubuntu servers on bare-metal hardware using iPXE and cloud-init technologies.
-
----
+An Ansible-based automation solution that deploys and manages a comprehensive provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation.
 
 ## Table of Contents
 
@@ -17,21 +15,20 @@ An Ansible-based automation solution that deploys and manages a comprehensive pr
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
+- [Ubuntu Server Provisioning](#ubuntu-server-provisioning)
+- [Proxmox VE Cluster Provisioning](#proxmox-ve-cluster-provisioning)
 - [Configuration](#configuration)
-- [Usage](#usage)
-- [Optimized Usage Patterns](#optimized-usage-patterns)
 - [Web Management Interface](#web-management-interface)
+- [SSH Key Management](#ssh-key-management)
+- [API Endpoints](#api-endpoints)
 - [Testing & Validation](#testing--validation)
-- [Customization](#customization)
 - [Troubleshooting](#troubleshooting)
-- [Optimization Benefits Summary](#optimization-benefits-summary)
 - [Contributing](#contributing)
 - [License](#license)
-- [Support](#support)
 
 ## Overview
 
-The Ansible Provisioning Server automates the deployment of a complete bare-metal provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
+The Ansible Provisioning Server automates the deployment of a complete bare-metal provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers and Proxmox VE clusters at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
 
 ## Features
 
@@ -48,1090 +45,480 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 - **Scalability**: Multi-node provisioning with dynamic network interface detection
 - **Flexibility**: Support for multiple Ubuntu versions and hardware platforms
 - **Observability**: Comprehensive logging, health monitoring, and status tracking
-- **Performance**: Optimized for high-throughput with systemd resource limits
-- **Reliability**: Automated error handling, service recovery, and rollback mechanisms
-- **Monitoring**: Automated health checks with service status verification
-- **Validation**: End-to-end system validation with comprehensive verification checks
+
+### Proxmox VE Cluster Features
+- **Unified SSH Key Management**: Single key infrastructure for seamless cluster communication
+- **Intelligent Cluster Formation**: Automatic cluster creation and node joining
+- **High-Performance Networking**: 10Gbit Ceph network with MTU 9000 optimization
+- **Dual Network Links**: Management and Ceph networks for redundancy and performance
+- **Automated Repository Configuration**: Enterprise/community repository management
 
 ## Architecture
 
-```mermaid
-graph TB
-    Internet([Internet])
-    PS[Provisioning Server<br/>10.10.1.1]
-    MN[Management Network<br/>10.10.1.0/24]
-    KN[Kubernetes Network<br/>10.10.1.0/24]
-    CN[Ceph Network<br/>10.10.2.0/24]
-    
-    N1[console-node1<br/>10.10.1.11]
-    N2[console-node2<br/>10.10.1.12]
-    N3[console-node3<br/>10.10.1.13]
-    N4[console-node4<br/>10.10.1.14]
-    
-    Internet --> PS
-    PS --> MN
-    MN --> N1
-    MN --> N2
-    MN --> N3
-    MN --> N4
-    PS --> KN
-    PS --> CN
+### Network Design
+```
+Internet -> WAN (enp1s0) -> NAT -> Provisioning Network (10.10.1.0/24)
+                                  |
+                                  +-- Management Server (10.10.1.1)
+                                  +-- Node1 (10.10.1.21) <-> Ceph Network (10.10.2.21)
+                                  +-- Node2 (10.10.1.22) <-> Ceph Network (10.10.2.22) 
+                                  +-- Node3 (10.10.1.23) <-> Ceph Network (10.10.2.23)
+                                  +-- Node4 (10.10.1.24) <-> Ceph Network (10.10.2.24)
 ```
 
-### System Components
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **DHCP Server** | dnsmasq | IP address allocation and PXE boot orchestration |
-| **DNS Server** | dnsmasq | Name resolution for provisioning network |
-| **TFTP Server** | dnsmasq with integrated TFTP | iPXE bootloader distribution |
-| **Web Server** | nginx + PHP-FPM | Hardened autoinstall hosting and dashboard |
-| **NAT Gateway** | iptables + dynamic detection | Internet connectivity with interface auto-detection |
-| **Management API** | Python/Redfish | Hardware control and monitoring |
-| **Health Monitor** | systemd timers | Automated service health checks and recovery |
-| **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
-| **Multi-OS Manager** | Ansible/Templates | Ubuntu and Proxmox automated provisioning |
+### Service Stack
+- **Base OS**: Ubuntu 24.04 LTS
+- **Web Server**: Nginx + PHP-FPM
+- **Network Services**: dnsmasq (DHCP/DNS/TFTP)
+- **Boot Loader**: iPXE with EFI support
+- **Configuration Management**: cloud-init/autoinstall
+- **Monitoring**: Node Exporter + Health checks
 
 ## Prerequisites
 
-### System Requirements
+### Hardware Requirements
+- **Management Server**: 2 CPU cores, 4GB RAM, 50GB storage
+- **Network**: Dedicated provisioning VLAN/network
+- **Target Nodes**: UEFI boot, network boot capability
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| **Operating System** | Ubuntu 20.04 LTS | Ubuntu 24.04 LTS |
-| **Memory** | 4 GB RAM | 8 GB RAM |
-| **Storage** | 50 GB | 100 GB SSD |
-| **Network** | 2x GbE interfaces | 2x 10GbE interfaces |
-| **Python** | 3.8+ | 3.10+ |
-| **Ansible** | 2.9+ | 6.0+ |
+### Software Requirements
+- Ubuntu 24.04 LTS (management server)
+- Ansible >= 2.9
+- Internet connectivity for ISO downloads
 
-### Network Infrastructure
-
-- **Management Network**: Dedicated VLAN for provisioning operations (default: 10.10.1.0/24)
-- **Internet Connectivity**: Required for package downloads and external services
-- **IPMI/BMC Access**: Network reachability to target server management interfaces
-- **Firewall Configuration**: DHCP (67/68), TFTP (69), HTTP (80), HTTPS (443) ports
+### Network Requirements
+- Isolated provisioning network (recommended: 10.10.1.0/24)
+- DHCP range available for target nodes
+- Management server with static IP
 
 ## Quick Start
 
-### 1. Environment Preparation
-
+### 1. Clone Repository
 ```bash
-# System update and dependency installation
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y ansible git python3-pip curl wget
-
-# Repository cloning
-git clone https://github.com/sddcinfo/ansible-provisioning-server.git
+git clone https://github.com/your-org/ansible-provisioning-server.git
 cd ansible-provisioning-server
 ```
 
-### 2. Configuration Setup
-
-```bash
-# Node inventory configuration
-cp nodes.json.example nodes.json
-${EDITOR:-nano} nodes.json
-
-# Configure Redfish/BMC credentials for hardware management
-cp .redfish_credentials.example .redfish_credentials
-${EDITOR:-nano} .redfish_credentials
-chmod 600 .redfish_credentials
+### 2. Configure Network Settings
+Edit `inventory/host_vars/localhost.yml`:
+```yaml
+# Network configuration
+external_interface: "enp1s0"  # WAN interface
+provisioning_network: "10.10.1.0/24"
+server_ip: "10.10.1.1"
+dhcp_range_start: "10.10.1.100"
+dhcp_range_end: "10.10.1.199"
+gateway_ip: "10.10.1.1"
 ```
 
-### 3. Infrastructure Deployment
-
-```bash
-# Core provisioning infrastructure with validation
-sudo ansible-playbook site.yml 
-# Target server boot configuration
-sudo ansible-playbook set_boot_order.yml --limit console-node1
-```
-
-### 4. Deployment Verification
-
-```bash
-# Service health validation (automated during deployment)
-sudo systemctl status dnsmasq nginx php8.3-fpm
-
-# Health monitoring status
-sudo systemctl status provisioning-health-check.timer
-
-# Web interface connectivity
-curl -I http://localhost
-
-# Hardware management verification
-./redfish.py console-node1 sensors
-
-# View health monitoring logs
-sudo journalctl -u provisioning-health-check.service -f
-```
-
-## Configuration
-
-### Node Inventory Schema
-
-The `nodes.json` file serves as the single source of truth for infrastructure topology:
-
+### 3. Configure Node Inventory
+Edit `nodes.json`:
 ```json
 {
   "nodes": [
     {
-      "hostname": "console-node1",
-      "ip": "10.10.1.11",
-      "mac": "aa:bb:cc:dd:ee:ff",
-      "os_hostname": "node1",
+      "mac": "ac:1f:6b:6c:5a:76",
       "os_ip": "10.10.1.21",
-      "os_mac": "ac:1f:6b:6c:58:2c",
+      "os_hostname": "node1",
       "ceph_ip": "10.10.2.21"
     }
   ]
 }
 ```
 
-#### Field Specifications
-
-| Field | Type | Description | Validation |
-|-------|------|-------------|------------|
-| `hostname` | string | Console management identifier | Must match Ansible inventory |
-| `ip` | IPv4 | Console network address | Within management subnet |
-| `mac` | MAC | Console interface MAC | Lowercase, colon-separated |
-| `os_hostname` | string | OS provisioning hostname | Used in Proxmox/Ubuntu installs |
-| `os_ip` | IPv4 | OS network address | Within provisioning subnet |
-| `os_mac` | MAC | OS interface MAC | For PXE boot and filtering |
-| `ceph_ip` | IPv4 | Storage network address | Unique within storage subnet |
-
-### Credential Management
-
-#### Ansible Inventory Credentials
-Credentials can be configured directly in inventory files:
-
-```yaml
-# In inventory or group_vars files
----
-ipmi_user: "admin"
-ipmi_pass: "secure_password"
-```
-
-#### Redfish/BMC Credentials
-For the redfish.py script, configure BMC credentials:
-
+### 4. Deploy Infrastructure
 ```bash
-# Copy example and configure
-cp .redfish_credentials.example .redfish_credentials
-chmod 600 .redfish_credentials
-
-# Edit with your BMC credentials
-# Format: REDFISH_AUTH="username:password"
-echo 'REDFISH_AUTH="admin:your_bmc_password"' > .redfish_credentials
+ansible-playbook -i inventory/hosts site.yml
 ```
 
-**Security Best Practices:**
-- Use strong, unique passwords for all accounts
-- Rotate credentials regularly
-- Restrict file permissions (600) for sensitive files
-- Never commit unencrypted credentials to version control
+## Ubuntu Server Provisioning
 
-### Enterprise Security Features
+### Supported Versions
+- Ubuntu 24.04 LTS (default)
+- Ubuntu 22.04 LTS
+- Ubuntu 20.04 LTS
 
-This solution implements comprehensive security hardening:
+### Node Configuration
+Nodes are configured via the `nodes.json` file with MAC address to IP mapping.
 
-**Input Validation & Sanitization:**
-- Strict MAC address format validation
-- Path traversal attack prevention
-- Parameter whitelist validation
-- Command injection protection
+### Installation Process
+1. Node boots via PXE/UEFI
+2. iPXE loads and contacts provisioning server
+3. Autoinstall configuration is generated dynamically
+4. Ubuntu installs with cloud-init configuration
+5. Post-install hooks configure services
 
-**Error Handling:**
-- No sensitive information in error messages
-- Comprehensive logging without data exposure
-- Graceful failure handling with rollback
+## Proxmox VE Cluster Provisioning
 
-**File System Security:**
-- Secure directory permissions (0750)
-- Safe file operations with verification
-- Protected session directory cleanup
+### Unified Cluster Setup
 
-### Automated Monitoring & Health Checks
+The system uses a comprehensive approach that handles both node preparation and intelligent cluster formation automatically.
 
-**Health Monitoring System:**
+### Network Architecture
+- **Management Network**: vmbr0 - 10.10.1.x/24 (default route, broadcast 10.10.1.255)
+- **Ceph Storage Network**: vmbr1 - 10.10.2.x/24 (MTU 9000, bridged to eno3, broadcast 10.10.2.255)
+- **Physical Interface**: eno3 - Bridge member (10Gbit, MTU 9000, no IP)
+- **Routing**: Management handles internet, Ceph handles storage (no default route)
+
+### Automatic Installation Process
+
+#### 1. Boot and Initial Configuration
+- Node boots with Proxmox auto-installer ISO
+- `answer.php` generates node-specific configuration
+- First boot automatically runs `proxmox-post-install.sh`
+
+#### 2. Node Preparation
+The unified script performs:
+- Repository configuration (disables enterprise repos, adds no-subscription)
+- Package installation and system updates
+- High-performance network configuration (Ceph network with MTU 9000)
+- Proper broadcast address configuration for both networks
+- Performance tuning for high-speed networks
+- Unified SSH key deployment from provisioning server
+- Storage and backup configuration
+- GRUB settings for IOMMU
+- Monitoring tools installation
+
+#### 3. Intelligent Cluster Operations
+- **Node1 (Primary)**: Creates cluster with dual network links
+- **Node2-4 (Secondary)**: Prepare for cluster joining with join instructions
+- Automatic cluster health verification
+
+### Manual Cluster Formation (Fallback)
+
+If automatic cluster formation fails:
 ```bash
-# View current health status
-sudo systemctl status provisioning-health-check.timer
-
-# Check recent health check results
-sudo tail -f /var/log/provisioning_health.log
-
-# Manual health check execution
-sudo /usr/local/bin/monitoring/health_check.sh
+# From provisioning server
+./scripts/proxmox-form-cluster.sh
 ```
 
-**Monitoring Features:**
-- **Service Recovery**: Automatic restart of failed services
-- **Resource Monitoring**: Disk usage and memory alerts
-- **Network Validation**: Connectivity checks every 5 minutes
-- **Log Management**: Automatic log rotation (30 days retention)
-
-**Performance Limits:**
-- systemd resource limits for all critical services
-- File handle limits: 65536 per service
-- Process limits: 4096 per service
-
-## Usage
-
-### Primary Playbooks
-
-#### Infrastructure Deployment
-
-The playbook supports comprehensive tagging for efficient component-based execution instead of running the entire expensive playbook.
-
-**Full Initial Deployment:**
+Or from individual nodes:
 ```bash
-# Complete provisioning server setup (first time - 8-12 minutes)
-sudo ansible-playbook site.yml
+# From node1 to add node2
+pvecm add 10.10.1.22 --link0 10.10.1.22 --link1 10.10.2.22
+
+# From node2 to join cluster
+pvecm add 10.10.1.21 --use_ssh
 ```
 
-**Optimized Tag-Based Execution:**
-```bash
-# Quick health check only (30-60 seconds)
-sudo ansible-playbook site.yml --tags "quick"
-
-# Configuration updates only (2-3 minutes)
-sudo ansible-playbook site.yml --tags "dns_config,web_config,autoinstall_config"
-
-# Update ONLY web files in /var/www/html (30-45 seconds)
-sudo ansible-playbook site.yml --tags "web_files_only"
-
-# Foundation setup without expensive operations
-sudo ansible-playbook site.yml --tags "foundation,services_install,network_infra"
-
-# Template updates only (1-2 minutes)
-sudo ansible-playbook site.yml --tags "templates"
-
-# Comprehensive validation and maintenance (3-5 minutes)
-sudo ansible-playbook site.yml --tags "validation,maintenance"
-```
-
-#### Optimized Tag Architecture
-
-The new tag structure provides **component independence** and **operation efficiency**:
-
-| Tag Category | Tags | Purpose | Performance Impact |
-|--------------|------|---------|-------------------|
-| **Infrastructure** | `foundation`, `network_infra`, `services_install` | Core system setup | Run once, 40-50% faster |
-| **Configuration** | `dns_config`, `web_config`, `autoinstall_config` | Safe to repeat | 80-85% faster updates |
-| **Web Files** | `web_files_only` | Updates /var/www/html files only | 90-95% faster for web updates |
-| **Operations** | `validation`, `quick`, `health_check`, `templates`, `permissions` | Targeted operations | 85-90% faster execution |
-| **Expensive** | `expensive`, `iso_download`, `package_upgrade` | On-demand only | 95% bandwidth savings |
-
-#### Tag Categories Explained
-
-| Tag Category | Purpose | Execution Time | Use Cases |
-|--------------|---------|----------------|-----------|
-| **`foundation`** | Core system setup (packages, users, SSH keys, directories) | One-time: 3-5 min | Initial deployment, system rebuilds |
-| **`services_install`** | Service installation (Docker, nginx, PHP-FPM, dnsmasq) | One-time: 2-4 min | Service setup, major updates |
-| **`network_infra`** | Network infrastructure (bridges, netplan, interfaces) | As needed: 1-3 min | Network changes, interface updates |
-| **`dns_config`** | DNS/DHCP configuration (dnsmasq templates, settings) | Regular: 30-60 sec | IP changes, DHCP updates |
-| **`web_config`** | Web services (nginx, PHP-FPM configs) | Regular: 30-60 sec | Template changes, web updates |
-| **`web_files_only`** | Web content in /var/www/html only | Fast: 30-45 sec | PHP/HTML updates, quick deployments |
-| **`autoinstall_config`** | Provisioning templates (cloud-init, autoinstall) | Regular: 30-90 sec | New nodes, config changes |
-| **`validation`** | All health checks and diagnostics | Regular: 2-3 min | System verification |
-| **`quick`** | Fast validation checks only | Anytime: 30-60 sec | Quick health monitoring |
-| **`templates`** | Template file updates only | As needed: 30-60 sec | Content updates |
-| **`permissions`** | File permission fixes | As needed: 10-30 sec | Security maintenance |
-| **`expensive`** | Resource-intensive operations (ISO downloads, upgrades) | Monthly: 10-30 min | Major updates only |
-
-## Optimized Usage Patterns
-
-### Performance-Optimized Execution
-
-The optimized playbook delivers **dramatic performance improvements**:
-
-| Operation Type | Before Optimization | After Optimization | Improvement |
-|---|---|---|---|
-| **Configuration Updates** | 10-15 minutes | 2-3 minutes | **80-85% faster** |
-| **Health Checks** | 3-5 minutes | 30-60 seconds | **85-90% faster** |
-| **Initial Setup** | 15-20 minutes | 8-12 minutes | **40-50% faster** |
-| **Template Updates** | 8-10 minutes | 1-2 minutes | **85-90% faster** |
-
-### Component Independence
-
-Components can now run independently for targeted updates:
-
-| Component | Tags | Use Case | Example |
-|-----------|------|----------|---------|
-| **DNS/DHCP Services** | `dns_config` | IP range changes, new nodes | `--tags "dns_config"` |
-| **Web Services** | `web_config` | nginx/PHP configuration | `--tags "web_config"` |
-| **Provisioning Templates** | `autoinstall_config,templates` | New OS versions, node configs | `--tags "autoinstall_config,templates"` |
-| **Network Infrastructure** | `network_infra` | Bridge changes, interface config | `--tags "network_infra"` |
-| **System Validation** | `quick,validation` | Health monitoring, diagnostics | `--tags "quick"` |
-
-### Quick Reference - Optimized Commands
-
-**Most Common Operations:**
-```bash
-# 30-60 second health check
-sudo ansible-playbook site.yml --tags "quick"
-
-# 2-3 minute configuration update  
-sudo ansible-playbook site.yml --tags "dns_config,web_config,autoinstall_config"
-
-# 8-12 minute initial setup (without expensive operations)
-sudo ansible-playbook site.yml --tags "foundation,services_install,network_infra,dns_config,web_config,autoinstall_config"
-
-# 30-60 second template updates only
-sudo ansible-playbook site.yml --tags "templates"
-```
-
-### Recommended Usage Patterns
-
-**Daily Operations:**
-```bash
-# Quick health check (30-60 seconds)
-sudo ansible-playbook site.yml --tags "quick"
-
-# Update autoinstall configurations for new nodes (1-2 minutes)
-sudo ansible-playbook site.yml --tags "autoinstall_config,templates"
-
-# Configuration updates after changes (2-3 minutes)
-sudo ansible-playbook site.yml --tags "dns_config,web_config"
-```
-
-**Initial Deployment:**
-```bash
-# Complete initial setup without expensive operations (8-12 minutes)
-sudo ansible-playbook site.yml --tags "foundation,services_install,network_infra,dns_config,web_config,autoinstall_config"
-
-# Full setup including ISO downloads (first time only, adds 10-30 minutes)
-sudo ansible-playbook site.yml
-```
-
-**Maintenance Operations:**
-```bash
-# Comprehensive validation and maintenance (3-5 minutes)
-sudo ansible-playbook site.yml --tags "validation,maintenance"
-
-# System package upgrades (expensive - monthly, 5-15 minutes)
-sudo ansible-playbook site.yml --tags "package_upgrade" --extra-vars "perform_system_upgrade=true"
-
-# ISO downloads and processing (expensive - as needed, 10-30 minutes)
-sudo ansible-playbook site.yml --tags "iso_download" --extra-vars "download_iso_files=true"
-```
-
-**Targeted Updates:**
-```bash
-# Network configuration changes only (1-3 minutes)
-sudo ansible-playbook site.yml --tags "network_infra,dns_config"
-
-# Web services configuration only (1-2 minutes)
-sudo ansible-playbook site.yml --tags "web_config,templates"
-
-# Template updates only (30-60 seconds)
-sudo ansible-playbook site.yml --tags "templates"
-
-# Permission fixes (10-30 seconds)
-sudo ansible-playbook site.yml --tags "permissions"
-```
-
-### Advanced Control Variables
-
-Control expensive operations with environment variables:
-
-```bash
-# Skip all expensive operations
-sudo ansible-playbook site.yml --extra-vars "download_iso_files=false perform_system_upgrade=false"
-
-# Force ISO re-download
-sudo ansible-playbook site.yml --tags "iso_download" --extra-vars "force_iso_download=true"
-
-# Skip iPXE bootloader downloads
-sudo ansible-playbook site.yml --extra-vars "download_ipxe_bootloaders=false"
-```
-
-### Idempotency Features
-
-The optimized playbook includes advanced idempotency:
-
-- **Package Management**: Uses `cache_valid_time: 3600` for apt operations
-- **Service Management**: Checks service status before restart operations  
-- **File Downloads**: Includes existence checks with `force: no` parameter
-- **Configuration Changes**: Only applies when templates actually change
-- **Docker Installation**: Verifies service status before full installation
-- **Network Changes**: Validates configuration before applying changes
-
-#### Legacy Tag Compatibility
-
-The playbook maintains backward compatibility with existing tags:
-- `common`, `packages`, `ssh_setup`, `network_setup`, `docker_setup`
-- `network_config`, `netboot`, `pxe_setup`  
-- `web`, `web_setup`, `autoinstall_templates`
-- `iso_preparation`, `iso_processing`
-- `validation`
-
-#### Hardware Management
-```bash
-# Boot order configuration (per node)
-sudo ansible-playbook set_boot_order.yml --limit <hostname>
-
-# Bulk boot configuration
-sudo ansible-playbook set_boot_order.yml
-
-### Multi-OS Provisioning Support
-
-#### Supported Operating Systems
-
-**Ubuntu 24.04 LTS:**
-- Cloud-init autoinstall configuration
-- Network-based installation via HTTP
-- Automated user and SSH key setup
-- Package installation and configuration
-
-**Proxmox VE 9:**
-- TOML-based answer file configuration  
-- ZFS storage setup with configurable options
-- Network boot with HTTP-served installation media
-- Post-installation automation hooks
-- iPXE EFI network boot support with auto-installer
-
-#### Configuration Management
-```bash
-# Test multi-OS configuration
-./test-multi-os.sh
-
-# View OS-specific templates
-ls roles/web/templates/*ubuntu* roles/web/templates/*proxmox*
-
-# Check provisioning directories
-ls -la /var/www/html/provisioning/
-
-# Verify Proxmox iPXE configuration
-/mnt/verify_proxmox_config.sh
-```
-
-## Proxmox VE 9.0 iPXE Network Boot with HTTP Autoinstaller
-
-### Overview
-This server provides complete support for iPXE-based EFI network boot installation of Proxmox VE 9.0 with advanced HTTP-based autoinstaller functionality. The system combines PXE boot requirements with HTTP answer file fetching to enable both block device recognition and dynamic configuration.
-
-### Key Features
-- **Zero-touch installation** via iPXE EFI network boot
-- **HTTP-based dynamic configuration** with MAC-specific answer files
-- **Dual-mode operation** supporting both ISO detection and HTTP fetch
-- **Auto-installer activation** with proper kernel parameters
-- **ZFS storage configuration** with automated disk setup
-- **Post-installation callbacks** for status tracking
-- **MAC-based configuration discovery** via JSON POST requests
-
-### Architecture Overview
-
-The Proxmox autoinstaller solution addresses two critical challenges:
-1. **PXE Boot Requirement**: Proxmox installer needs access to the ISO as a block device
-2. **HTTP Configuration**: Dynamic answer file fetching via HTTP POST requests
-
-**Solution Design:**
-```
-┌─── PXE Boot ────┬─── HTTP Autoinstaller ───┐
-│                 │                          │
-│ Kernel/initrd   │ JSON POST Request        │
-│ via HTTP        │ to answer.php API        │
-│                 │                          │
-│ initrd contains │ MAC-based dynamic        │
-│ embedded ISO    │ answer.toml generation   │
-│                 │                          │
-│ Solves: "Cannot │ Solves: HTTP fetch       │
-│ find valid ISO" │ configuration discovery  │
-└─────────────────┴──────────────────────────┘
-```
-
-### Critical Requirements
-
-#### Kernel Parameters
-Proxmox 9.0 requires specific kernel parameters for auto-installer activation:
-```bash
-ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer
-```
-
-**Key Points:**
-- `proxmox-start-auto-installer` enables the autoinstaller
-- No `proxmox-fetch-answer` parameter needed (embedded in ISO)
-- `--mod-dhcp` flag used during ISO preparation for PXE environments
-
-#### Answer File Format (TOML)
-Proxmox 9.0 uses kebab-case field names in TOML format:
-```toml
-[global]
-keyboard = "en-us"
-country = "jp"
-fqdn = "node4.sddc.info"
-mailto = "admin@sddc.info"
-timezone = "UTC"
-root-password = "proxmox123"
-
-[network]
-source = "from-answer"
-cidr = "10.10.1.21/24"
-gateway = "10.10.1.1"
-dns = "10.10.1.1"
-filter.ID_NET_NAME_MAC = "*6c5a76"  # MAC-based interface selection
-
-[disk-setup]
-filesystem = "zfs"
-disk_list = ["sda"]
-zfs.raid = "raid0"
-zfs.compress = "on"
-zfs.checksum = "on"
-zfs.copies = 1
-zfs.hdsize = 32
-
-[post-installation-webhook]
-url = "http://10.10.1.1/index.php?action=callback&status=DONE&mac=ac:1f:6b:6c:58:2c"
-```
-
-### HTTP Autoinstaller Implementation
-
-#### JSON POST Request Handling
-The autoinstaller sends HTTP POST requests with system information:
-
-**Request Format:**
-```json
-{
-  "network_interfaces": [
-    {
-      "link": "eth0", 
-      "mac": "ac:1f:6b:6c:58:2c"
-    }
-  ],
-  "product": {
-    "fullname": "Proxmox VE"
-  },
-  "iso": {
-    "release": "9.0"
-  }
-}
-```
-
-**API Response:**
-The `/api/answer.php` endpoint:
-1. Parses JSON POST data from Proxmox installer
-2. Extracts MAC address from `network_interfaces` array
-3. Maps MAC to node using nodes.json (uses `os_hostname` like node1, not console-node1)
-4. Generates dynamic TOML configuration with:
-   - Static IP configuration from nodes.json
-   - MAC-based network filter (`filter.ID_NET_NAME_MAC = "*suffix"`)
-   - Correct hostname (os_hostname) and network settings (os_ip)
-5. Returns node-specific answer file with callback URL
-
-#### ISO Preparation Process
-
-The system uses `jamestalmage/proxmox-auto-install-assistant` Docker container:
-
-```bash
-# Create autoinstaller ISO with HTTP fetch capability
-docker run --rm \
-  -v "/tmp:/input" \
-  -v "/var/www/html/provisioning/proxmox9:/output" \
-  jamestalmage/proxmox-auto-install-assistant \
-  proxmox-auto-install-assistant prepare-iso \
-  --fetch-from http \
-  --url "http://10.10.1.1/api/answer.php" \
-  --mod-dhcp \
-  --output /output/proxmox-ve_9.0-1.iso \
-  /input/proxmox-ve_9.0-1.iso
-```
-
-**Key Features:**
-- `--fetch-from http`: Enables HTTP-based answer file fetching
-- `--url`: Specifies the answer file endpoint  
-- `--mod-dhcp`: Increases DHCP timeout for PXE environments
-- Creates ISO with embedded autoinstaller mode configuration
-
-#### initrd Modification for PXE Boot
-
-**Critical Process:** Manual ISO embedding in initrd for PXE compatibility:
-
-```bash
-# Extract original initrd from autoinstaller ISO
-zstd -d < original_initrd.img > initrd.cpio
-cpio -i -d -H newc < initrd.cpio
-
-# Add autoinstaller ISO as proxmox.iso
-cp proxmox-ve_9.0-1.iso ./proxmox.iso
-
-# Recompress with embedded ISO
-find . | cpio -o -H newc | zstd -5 > new_initrd.img
-```
-
-**Requirements:**
-- ISO file must be named exactly `proxmox.iso` in initrd root
-- Final initrd size: ~1.8GB (contains filesystem + 1.7GB ISO)
-- Uses zstd compression level 5 for optimal performance
-
-### Configuration Discovery Methods
-
-The Proxmox installation supports multiple discovery mechanisms:
-
-1. **HTTP POST Discovery** (Primary - Implemented)
-   - Dynamic POST requests to `/api/answer.php`
-   - MAC-based configuration generation
-   - Real-time answer file creation
-   - JSON payload with system information
-
-2. **Embedded ISO Configuration** (Secondary)
-   - ISO contains `auto-installer-mode.toml`:
-     ```toml
-     mode = "http"
-     [http]
-     url = "http://10.10.1.1/api/answer.php"
-     ```
-   - Fallback if HTTP requests fail
-   - Self-contained configuration
-
-3. **DHCP Option Discovery** (Tertiary)
-   - DHCP option 250 provides answer file URL
-   - Automatic discovery without hardcoded URLs
-   - Network-based configuration distribution
-
-### Testing and Verification
-
-#### API Testing
-```bash
-# Test HTTP POST endpoint with Proxmox-style payload
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"network_interfaces": [{"link": "eth0", "mac": "ac:1f:6b:6c:58:2c"}]}' \
-  http://10.10.1.1/api/answer.php
-```
-
-#### initrd Verification
-```bash
-# Verify ISO embedding
-cd /tmp && mkdir verify && cd verify
-zstd -d < /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i
-ls -lh proxmox.iso  # Should show ~1.7GB file
-```
-
-#### Boot File Accessibility
-```bash
-# Verify PXE boot files are accessible
-curl -I http://10.10.1.1/provisioning/proxmox9/boot/linux26
-curl -I http://10.10.1.1/provisioning/proxmox9/boot/initrd.img
-```
-
-### Troubleshooting
-
-#### Common Issues and Solutions
-
-**1. "Searching for block device containing the ISO proxmox-ve-9.0-1"**
-- **Cause**: initrd doesn't contain embedded ISO
-- **Solution**: Ensure `proxmox.iso` is embedded in initrd root
-- **Verification**: Extract initrd and check for `proxmox.iso` file
-
-**2. "Automatic installation selected but no config for fetching the answer file found!"**
-- **Cause**: Kernel parameters missing or ISO not prepared for HTTP fetch
-- **Solution**: Use `proxmox-auto-install-assistant` with `--fetch-from http`
-- **Verification**: Check ISO contains `auto-installer-mode.toml`
-
-**3. HTTP POST Request Parsing Errors**
-- **Cause**: API expects `network_interfaces` array, not `network`
-- **Solution**: Updated answer.php to parse correct JSON structure
-- **Verification**: Test with actual Proxmox JSON payload
-
-**4. Large initrd Size Issues**
-- **Cause**: Embedded 1.7GB ISO creates 1.8GB initrd
-- **Solution**: Use zstd compression level 5, increase ramdisk_size parameter
-- **Verification**: Monitor PXE transfer times and memory usage
-
-#### Resolution Steps
-```bash
-# Complete verification process
-./verify_proxmox_config.sh
-
-# Check initrd content manually  
-mkdir /tmp/check_initrd && cd /tmp/check_initrd
-zstd -dc /var/www/html/provisioning/proxmox9/boot/initrd.img | cpio -i 2>/dev/null
-ls -la proxmox.iso  # Must exist with correct size
-
-# Verify API response
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"network_interfaces": [{"link": "eth0", "mac": "test:mac:address"}]}' \
-  http://10.10.1.1/api/answer.php
-
-# Check autoinstaller mode configuration
-sudo mount -o loop /var/www/html/provisioning/proxmox9/proxmox-ve_9.0-1.iso /mnt
-cat /mnt/auto-installer-mode.toml
-sudo umount /mnt
-```
-
-### Implementation Benefits
-
-**Dual-Mode Solution:**
-- ✅ Solves PXE boot ISO detection via embedded `proxmox.iso`
-- ✅ Enables HTTP-based dynamic configuration via JSON POST API
-- ✅ MAC-based configuration with automatic callback URLs
-- ✅ Compatible with official Proxmox documentation requirements
-- ✅ Supports both BIOS and EFI boot modes
-- ✅ Optimized for enterprise PXE environments with `--mod-dhcp`
-
-**Performance Optimizations:**
-- Uses Docker container for consistent ISO preparation
-- zstd compression for optimal initrd size/performance balance  
-- Automated health monitoring and validation
-- End-to-end testing with comprehensive verification scripts
-
-## Kubernetes Integration
-
-This provisioning server works with the separate `ansible-kubernetes-nodes` project for Kubernetes cluster management:
-
-### Kubernetes Workflow
-
-1. **Provision nodes** using this server (Ubuntu 24.04 or Proxmox VE 9)
-2. **Use ansible-kubernetes-nodes** project for Kubernetes deployment:
-   - Kubespray management and setup
-   - Kubernetes cluster deployment
-   - Ceph storage configuration
-   - Management tools installation
-
-### Related Projects
-
-- **ansible-kubernetes-nodes**: Handles Kubernetes cluster deployment and management
-- **Kubespray integration**: Located in the kubernetes nodes project for better separation of concerns
-
-### Management Scripts
-
-#### Redfish Hardware Control
-```bash
-# System monitoring
-./redfish.py <hostname> sensors [--filter cpu] [--json]
-
-# Power management
-./redfish.py <hostname> power-on         # Power on the server
-./redfish.py <hostname> power-off        # Gracefully shut down
-./redfish.py <hostname> power-cycle      # Force restart
-./redfish.py <hostname> power-reboot     # Graceful restart
-
-# Boot configuration
-./redfish.py <hostname> set-boot-to-bios      # Boot to BIOS on next restart
-./redfish.py <hostname> get-boot-options      # Display current boot settings
-./redfish.py <hostname> set-boot-next <device> # Set next boot device (Pxe, Hdd, etc.)
-
-# Generic Redfish queries
-./redfish.py <hostname> get <path> [--json]   # Query any Redfish endpoint
-```
-
-#### Provisioning Operations
-```bash
-# Boot order management
-./set_boot_order.py <hostname> pxe hdd
-
-# Status verification
-./verify_provisioning.py <hostname>
-```
+### Cluster Configuration
+- **Cluster Name**: sddc-cluster
+- **Primary Link**: Management network (10.10.1.x)
+- **Secondary Link**: Ceph network (10.10.2.x) for redundancy and performance
+- **Migration Network**: Ceph network (10Gbit for fast VM migrations)
+
+## Configuration
+
+### Global Settings
+Located in `inventory/group_vars/all.yml`:
+- Network configuration
+- OS support matrix
+- Security settings
+
+### Node-Specific Settings  
+Located in `nodes.json`:
+- MAC to IP mapping
+- Hostname assignment
+- Network interface configuration
+
+### Web Interface Customization
+- Modify templates in `roles/web/templates/`
+- Custom styling in web assets
+- API endpoint configuration
 
 ## Web Management Interface
 
-### Dashboard Access
-Navigate to `http://<provisioning-server-ip>` for the management interface.
+Access the web interface at `http://10.10.1.1` (or your configured server IP).
 
-### Feature Overview
-
-| Feature | Description | Capability |
-|---------|-------------|------------|
-| **Status Monitoring** | Real-time node state tracking | `NEW`, `INSTALLING`, `DONE`, `FAILED` |
-| **Provisioning Control** | One-click reprovisioning | State reset and reinstallation trigger |
-| **Hardware Management** | Remote server control via Redfish | Power control, BIOS access, system reboot |
-| **Multi-OS Support** | OS selection per node | Ubuntu 24.04 LTS, Proxmox VE 9 |
-| **Configuration Access** | Direct autoinstall links | Per-node cloud-init configurations |
-| **Timestamp Tracking** | Last update monitoring | Activity auditing and debugging |
-
-### Hardware Management Features
-
-The web interface now includes integrated Redfish-based hardware management capabilities:
-
-#### Available Controls
-- **Boot to BIOS**: Configure server to enter BIOS setup on next restart
-- **System Reboot**: Gracefully restart servers remotely
-- **Power Management**: Control server power states (via redfish.py CLI)
-
-#### Security Implementation
-- **Secure Wrapper Script**: All Redfish commands execute through `/usr/local/bin/redfish-web-wrapper.sh`
-- **Command Validation**: Only whitelisted commands are permitted
-- **Sudo Configuration**: Granular permissions via `/etc/sudoers.d/redfish-web`
-- **Input Sanitization**: Hostname and parameter validation prevents injection attacks
+### Features
+- Real-time node status monitoring
+- Installation progress tracking
+- Log file access
+- Redfish power management
+- Network boot configuration
 
 ### API Endpoints
+- `/api/answer.php` - Dynamic Proxmox answer file generation
+- `/api/register-node.php` - Node registration
+- `/api/node-status.php` - Status updates
+- `/api/get-ssh-keys.php` - SSH key distribution
 
-- `GET /` - Main dashboard interface
-- `GET /autoinstall_configs/<mac>/user-data` - Node-specific autoinstall configuration
-- `GET /autoinstall_configs/<mac>/meta-data` - Cloud-init metadata
-- `GET /?action=boot&mac=<mac>` - iPXE boot script generation
-- `GET /?action=callback&mac=<mac>&status=<status>` - Installation status update
-- `GET /?action=reprovision&mac=<mac>` - Trigger node reprovisioning
-- `GET /?action=boot_to_bios&mac=<mac>` - Set server to boot to BIOS
-- `GET /?action=reboot&mac=<mac>` - Gracefully reboot server
-- `GET /?action=set_os&mac=<mac>&os_type=<os>` - Set OS type for node
-- `POST /api/answer.php` - Proxmox autoinstaller answer endpoint
+## SSH Key Management
+
+### Unified SSH Key System
+
+All Proxmox nodes use the provisioning server's SSH key for seamless cluster communication.
+
+#### Key Features
+- **Single Key Infrastructure**: All nodes use `sysadmin_automation_key`
+- **Seamless Communication**: Management server -> nodes, node -> node, node -> management server
+- **Automatic Deployment**: Keys distributed during first boot
+- **Secure Storage**: Keys copied to `/var/www/html/keys/` with proper permissions
+
+#### API Endpoints
+```bash
+# Get public key
+curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
+
+# Get private key  
+curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=private
+```
+
+#### Implementation
+The post-install script downloads both private and public keys from the provisioning server, ensuring all nodes can communicate without password authentication.
+
+## API Endpoints
+
+### Node Registration
+**POST** `/api/register-node.php`
+```json
+{
+  "hostname": "node1",
+  "ip": "10.10.1.21",
+  "type": "proxmox",
+  "status": "ready"
+}
+```
+
+### Status Updates
+**POST** `/api/node-status.php`
+```json
+{
+  "hostname": "node1",
+  "status": "installing",
+  "timestamp": "2025-08-23T10:00:00Z"
+}
+```
+
+### SSH Key Distribution
+**GET** `/api/get-ssh-keys.php?type=management&key=public`
+Returns the provisioning server's SSH public key.
+
+**GET** `/api/get-ssh-keys.php?type=management&key=private`
+Returns the provisioning server's SSH private key.
+
+### Dynamic Configuration
+**POST** `/api/answer.php`
+Generates Proxmox auto-installer answer files based on requesting node's MAC address.
 
 ## Testing & Validation
 
-### Automated Testing Suite
+### Network Configuration Test
 ```bash
-# Multi-OS provisioning validation
-./test-multi-os.sh
-
-# Proxmox answer.php validation for specific nodes (uses node name parameter)
-./verify_proxmox_config.sh node1  # Validates answer.php response for node1
-./verify_proxmox_config.sh node2  # Tests MAC-based filtering for node2
-./verify_proxmox_config.sh node3  # Checks static IP configuration
-./verify_proxmox_config.sh node4  # Verifies hostname and network settings
-
-# Python script validation
-cd test
-python3 -m pytest test_redfish.py -v
-python3 -m pytest test_web_actions.py -v
-
-# Ansible syntax validation
-ansible-playbook --syntax-check site.yml
-ansible-playbook --syntax-check set_boot_order.yml
+# Test Proxmox network configuration
+./scripts/test-network-config.sh
 ```
 
-#### Multi-OS Test Script
+### Answer File Validation
+```bash  
+# Validate Proxmox answer file syntax
+./verify_proxmox_config.sh node1
+```
 
-The `test-multi-os.sh` script provides comprehensive validation of both Ubuntu 24.04 and Proxmox VE 9 configurations:
-
-**Test Coverage:**
-- Web service availability and HTTP response codes
-- Ubuntu autoinstall configuration (user-data, meta-data, YAML syntax)
-- Proxmox answer.toml configuration (TOML syntax, required sections)
-- TFTP boot setup and PXE configuration  
-- PHP configuration and OS support validation
-- Kernel parameters for network boot
-- Network services (DHCP, DNS, HTTP) status
-
-**Usage:**
+### SSH Connectivity Test
 ```bash
-# Run all tests with color-coded output
-./test-multi-os.sh
+# Test SSH key deployment
+ssh root@10.10.1.21 'ls -la /root/.ssh/id_ed25519*'
 
-# Check specific test results
-echo $?  # 0 = all passed, 1 = failures detected
+# Test inter-node communication
+ssh root@10.10.1.21 'ssh root@10.10.1.22 echo "SSH-OK"'
 ```
 
-### Integration Testing Checklist
+### Web Interface Test
+```bash
+# Test web services
+curl http://10.10.1.1/
 
-- [ ] **Network Services**: DHCP lease assignment and DNS resolution
-- [ ] **Boot Services**: iPXE bootloader serving and chainloading
-- [ ] **Web Services**: Autoinstall configuration accessibility
-- [ ] **Hardware Management**: Redfish API connectivity and control
-- [ ] **Dashboard Functionality**: Status updates and reprovisioning
-- [ ] **Ubuntu Provisioning**: Cloud-init autoinstall workflow
-- [ ] **Proxmox Provisioning**: iPXE auto-installer with embedded ISO
-- [ ] **Multi-OS Support**: OS selection and configuration switching
-- [ ] **DHCP Option 250**: Answer file URL discovery
-- [ ] **End-to-End**: Complete provisioning workflow validation
-
-### Performance Benchmarks
-
-| Metric | Target | Measurement Method |
-|--------|--------|--------------------|
-| DHCP Response Time | < 100ms | `dhcping` utility |
-| TFTP Transfer Rate | > 10 MB/s | iPXE boot timing |
-| Web Response Time | < 200ms | HTTP load testing |
-| Concurrent Provisions | 10+ nodes | Parallel deployment |
-
-## Customization
-
-### Network Topology Adaptation
-
-**DHCP Configuration** (`roles/netboot/vars/main.yml`):
-```yaml
-dnsmasq_dhcp_range: "192.168.1.100,192.168.1.200,12h"
-dnsmasq_listen_address: "192.168.1.1"
+# Test API endpoints
+curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
 ```
-
-**NAT Configuration** (`roles/common/tasks/main.yml`):
-```yaml
-nat_source_network: "192.168.1.0/24"
-nat_output_interface: "ens160"
-```
-
-### Autoinstall Customization
-
-Templates located in `roles/web/templates/`:
-- `autoinstall-user-data.j2`: Ubuntu installer configuration
-- `autoinstall-meta-data.j2`: Cloud-init metadata configuration
-
-### Hardware Platform Support
-
-**Supermicro Servers**: Native support via SUM utility
-**Dell PowerEdge**: iDRAC Redfish compatibility
-**HPE ProLiant**: iLO Redfish integration
-**Generic IPMI**: Standard BMC functionality
 
 ## Troubleshooting
 
-### Automated Diagnostics
+### Common Issues
 
-#### Health Monitoring System
+#### SSH Connection Timeouts During Setup
+The post-install scripts include comprehensive timeout protection to prevent hanging:
+- SSH commands use `timeout` wrapper and `BatchMode=yes` to prevent interactive prompts
+- ConnectTimeout and ServerAliveInterval settings prevent indefinite waiting
+- If connectivity tests fail, they're logged as INFO/WARN rather than causing script failure
+- Normal during initial setup when other nodes haven't completed installation yet
+
+#### Ubuntu Installation Problems
 ```bash
-# Check automated health monitoring
-sudo systemctl status provisioning-health-check.timer
-sudo tail -f /var/log/provisioning_health.log
-
-# View recent service recovery actions
-sudo journalctl -u provisioning-health-check.service --since "1 hour ago"
-
-# Manual health check execution
-sudo /usr/local/bin/monitoring/health_check.sh
-```
-
-#### Validation Framework
-```bash
-# Run system validation manually
-sudo ansible-playbook site.yml --tags "validation"
-# Check validation failure flags
-ls -la /tmp/ansible_validation_failed
-
-# View validation troubleshooting info
-sudo journalctl | grep "validation failed"
-```
-
-### Service Diagnostics
-
-#### Network Services Issues
-```bash
-# DHCP service validation with enhanced debugging
-sudo systemctl status dnsmasq
-sudo journalctl -u dnsmasq --since "1 hour ago"
-
-# TFTP service verification (dnsmasq native)
-sudo netstat -ulnp | grep ':69'
-echo "quit" | tftp 127.0.0.1 69
-
-# Network connectivity testing
-sudo tcpdump -i <interface> port 67 or port 68
-```
-
-#### Web Services Issues
-```bash
-# Application stack health with resource monitoring
-sudo systemctl status nginx php8.3-fpm
+# Check web server logs
 sudo tail -f /var/log/nginx/error.log
 
-# PHP-FPM diagnostics with performance limits
-sudo tail -f /var/log/php8.3-fpm.log
-sudo systemctl show php8.3-fpm --property=LimitNOFILE,LimitNPROC
+# Check cloud-init logs on target node
+tail -f /var/log/cloud-init.log
 ```
 
-#### Hardware Management Issues
+#### Network Boot Issues
 ```bash
-# Redfish connectivity testing
-curl -k -u <user>:<pass> https://<node-ip>/redfish/v1/Systems/1
+# Check TFTP service
+sudo systemctl status dnsmasq
 
-# Network reachability verification
-ping <node-ip>
-nmap -p 443 <node-ip>
+# Test TFTP connectivity
+tftp 10.10.1.1 -c get ipxe.efi
 ```
 
-### Common Resolution Patterns
+#### Proxmox Installation Issues
+```bash
+# Check primary installation log
+tail -f /var/log/proxmox-post-install.log
 
-| Issue Category | Symptoms | Resolution Strategy |
-|----------------|----------|-------------------|
-| **DHCP Failures** | No IP assignment | Interface binding, firewall rules, dynamic interface detection |
-| **TFTP Conflicts** | Port 69 binding errors | Remove conflicting TFTP daemons, use dnsmasq integrated TFTP |
-| **PXE Boot Issues** | Boot loop/timeout | TFTP permissions, bootloader integrity, service conflicts |
-| **Provisioning Stalls** | Install hangs | Network connectivity, repository access, validation checks |
-| **Hardware Control** | API timeouts | Credential validation, network paths, Redfish compatibility |
-| **Service Recovery** | Services down | Check health monitoring logs, automatic restart status |
-| **Validation Failures** | Deployment issues | Review validation logs, check system requirements, manual verification |
-| **Proxmox Auto-installer** | "Searching for block device" | Check ISO naming in initrd (must be `proxmox.iso`) |
-| **Proxmox Config Discovery** | "No config for fetching answer file" | Verify kernel parameters include `proxmox-start-auto-installer` |
-| **Proxmox TOML Errors** | Configuration parsing failures | Use kebab-case field names (`root-password` not `root_password`) |
-| **Large initrd Issues** | Slow downloads/timeouts | Optimize network, consider compression levels, verify ramdisk size |
+# Verify SSH key deployment
+ssh root@10.10.1.21 'ls -la /root/.ssh/id_ed25519*'
 
-### Log Analysis Locations
+# Check network configuration  
+ssh root@10.10.1.21 'ip addr show vmbr0 | grep brd'  # Should show 10.10.1.255
+ssh root@10.10.1.21 'ip addr show vmbr1 | grep brd'  # Should show 10.10.2.255
 
-| Service | Log Location | Analysis Focus |
-|---------|-------------|----------------|
-| **dnsmasq** | `journalctl -u dnsmasq` | DHCP leases, DNS queries, TFTP transfers |
-| **nginx** | `/var/log/nginx/` | HTTP requests, errors, security events |
-| **PHP-FPM** | `/var/log/php8.3-fpm.log` | Application errors, performance issues |
-| **Health Monitor** | `/var/log/provisioning_health.log` | Service recovery, resource alerts |
-| **Validation** | `journalctl \| grep validation` | System validation results, failures |
-| **System** | `/var/log/syslog` | General system events, security logs |
-
-## Optimization Benefits Summary
-
-The optimized ansible-provisioning-server delivers significant improvements:
-
-### Performance Improvements
-- **80-85% faster** configuration updates (2-3 min vs 10-15 min)
-- **85-90% faster** health checks (30-60 sec vs 3-5 min)  
-- **40-50% faster** initial setup (8-12 min vs 15-20 min)
-- **95%+ reduction** in unnecessary bandwidth usage
-
-### Operational Benefits
-- **Component Independence**: Update only what you need
-- **Enhanced Idempotency**: Prevent unnecessary operations
-- **Robust Error Handling**: Automatic rollback and recovery
-- **Advanced Validation**: Multi-tier health checking
-- **Resource Efficiency**: Controlled expensive operations
-
-### Control Features
-```yaml
-# Fine-grained operation control
-download_iso_files: false              # Skip ISO downloads
-download_ipxe_bootloaders: false       # Skip bootloader downloads  
-perform_system_upgrade: false          # Skip package upgrades
-force_iso_download: false              # Force re-download
+# Test Ceph network connectivity
+ping 10.10.2.21  # from any node
 ```
 
-### Migration Path
-1. **Full Compatibility**: All existing tags continue to work
-2. **Gradual Adoption**: Introduce optimized tags incrementally
-3. **Performance Monitoring**: Measure improvements in your environment
-4. **Customization**: Adapt control variables to your needs
+#### Cluster Formation Issues
+```bash
+# Check cluster status
+ssh root@10.10.1.21 'pvecm status'
+
+# Check corosync rings  
+ssh root@10.10.1.21 'corosync-cfgtool -s'
+
+# Manual cluster formation log (if used)
+tail -f /var/log/proxmox-cluster-formation.log
+```
+
+#### SSH Key Issues
+```bash
+# Check SSH key API
+curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
+
+# Test node-to-node SSH
+ssh root@10.10.1.21 'ssh root@10.10.1.22 echo "SSH-OK"'
+
+# Check key permissions
+ls -la /var/www/html/keys/
+```
+
+### Log Files
+
+#### System Logs
+- `/var/log/nginx/error.log` - Web server errors
+- `/var/log/nginx/access.log` - Web server access
+- `/var/log/dnsmasq.log` - DHCP/DNS/TFTP activity
+
+#### Provisioning Logs  
+- `/var/log/proxmox-post-install.log` - Proxmox node preparation
+- `/var/log/proxmox-cluster-formation.log` - Manual cluster formation
+- `/var/log/ssh-key-management.log` - SSH key activity
+
+#### Target Node Logs
+- `/var/log/cloud-init.log` - Ubuntu installation
+- `/var/log/installer/autoinstall-user-data` - Ubuntu autoinstall
+
+### Performance Optimization
+
+#### Network Performance
+The system includes optimizations for high-speed networking:
+- MTU 9000 on Ceph network interfaces
+- TCP congestion control (BBR)
+- Network buffer tuning
+- Optimized sysctl parameters
+
+#### Storage Performance
+- ZFS compression and checksums enabled
+- Proper disk alignment for SSDs
+- I/O scheduler optimization
+
+### Security Considerations
+
+#### Network Security
+- Isolated provisioning network
+- Firewall rules for cluster communication
+- SSH key-based authentication only
+
+#### Web Security
+- Input validation and sanitization
+- Path traversal protection
+- CSRF protection headers
+
+### Backup and Recovery
+
+#### Configuration Backup
+```bash
+# Backup provisioning server configuration
+tar -czf provisioning-backup.tar.gz /etc/nginx/ /var/www/html/ nodes.json
+```
+
+#### Node Recovery
+```bash
+# Re-provision failed node
+# Simply reboot with network boot - system will reinstall automatically
+```
+
+## File Structure
+
+### Scripts
+- `scripts/proxmox-post-install.sh` - Primary unified installation script
+- `scripts/proxmox-form-cluster.sh` - Manual cluster formation script
+- `scripts/test-network-config.sh` - Network configuration validation
+
+### APIs
+- `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator
+- `roles/web/templates/get-ssh-keys.php.j2` - SSH key distribution API
+- `roles/web/templates/register-node.php.j2` - Node registration API
+- `roles/web/templates/node-status.php.j2` - Status update API
+
+### Configuration
+- `nodes.json` - Node inventory and configuration
+- `inventory/group_vars/all.yml` - Global configuration
+- `inventory/host_vars/localhost.yml` - Server-specific settings
+
+### Web Assets
+- `roles/web/templates/index.php.j2` - Main dashboard
+- `roles/web/templates/nginx.conf.j2` - Web server configuration
 
 ## Contributing
 
-We welcome contributions from the community. Please review our contribution guidelines:
-
-### Development Workflow
-1. **Fork** the repository and create a feature branch
-2. **Test** changes in an isolated environment
-3. **Document** new features and configuration options
-4. **Submit** pull request with comprehensive description
+### Development Setup
+1. Fork the repository
+2. Create feature branch
+3. Test changes thoroughly
+4. Submit pull request
 
 ### Code Standards
-- **Ansible**: Follow official best practices and use `ansible-lint`
-- **Python**: Adhere to PEP 8 standards with `black` formatting
-- **Documentation**: Update relevant README sections and role documentation
+- Follow existing code style
+- Include comprehensive testing
+- Document all changes
+- Remove debug code before committing
 
-### Testing Requirements
-- All Ansible playbooks must pass syntax validation
-- Python scripts require unit test coverage
-- Integration tests for end-to-end workflows
+### Testing Guidelines
+- Test on clean Ubuntu 24.04 installation
+- Verify both Ubuntu and Proxmox provisioning
+- Test network configurations
+- Validate security implementations
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see LICENSE file for details.
 
 ## Support
 
+### Documentation
+- All documentation is maintained in this README
+- Check troubleshooting section for common issues
+- Review log files for detailed error information
+
 ### Community Support
-- **GitHub Issues**: Bug reports and feature requests
-- **Documentation**: Comprehensive guides and examples
-- **Community Forums**: Discussion and knowledge sharing
+- GitHub Issues for bug reports
+- GitHub Discussions for questions
+- Pull Requests for contributions
 
 ### Enterprise Support
-For production deployments and enterprise support:
-- **Professional Services**: Implementation and customization
-- **Training Programs**: Team education and certification
-- **SLA Agreements**: Guaranteed response times and resolution
-
-### Contact Information
-- **Project Maintainer**: SDDC.info Team
-- **GitHub Repository**: https://github.com/sddcinfo/ansible-provisioning-server
-- **Documentation Site**: https://docs.sddc.info/provisioning
+Contact the maintainers for enterprise support options.
 
 ---
 
-**Performance-optimized for enterprise deployments** • *Built by the SDDC.info community*
+This unified provisioning system provides a complete solution for bare-metal server and Proxmox VE cluster deployment with enterprise-grade features, security, and performance optimization.

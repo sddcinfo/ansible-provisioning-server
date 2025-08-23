@@ -40,29 +40,29 @@ for node in "${!NODES[@]}"; do
     log "Checking $node ($mgmt_ip)..."
     
     # Check if node is prepared
-    if ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no root@$mgmt_ip \
+    if timeout 15 ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip \
        'test -f /var/lib/proxmox-node-prepared.done' 2>/dev/null; then
-        log "✓ $node is prepared"
+        log "[OK] $node is prepared"
         PREPARED_NODES+=($node)
     else
-        log "✗ $node is NOT prepared or not accessible"
+        log "[FAIL] $node is NOT prepared or not accessible"
         FAILED_NODES+=($node)
     fi
     
     # Check SSH connectivity
-    if ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@$mgmt_ip \
+    if timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip \
        'echo "SSH OK"' >/dev/null 2>&1; then
-        log "✓ $node SSH connectivity OK"
+        log "[OK] $node SSH connectivity OK"
     else
-        log "✗ $node SSH connectivity FAILED"
+        log "[FAIL] $node SSH connectivity FAILED"
         FAILED_NODES+=($node)
     fi
     
     # Check Ceph network connectivity
     if ping -c 1 -W 2 $ceph_ip >/dev/null 2>&1; then
-        log "✓ $node Ceph network ($ceph_ip) reachable"
+        log "[OK] $node Ceph network ($ceph_ip) reachable"
     else
-        log "✗ $node Ceph network ($ceph_ip) NOT reachable"
+        log "[FAIL] $node Ceph network ($ceph_ip) NOT reachable"
     fi
 done
 
@@ -117,7 +117,7 @@ if [[ ! " ${ALREADY_CLUSTERED[@]} " =~ " node1 " ]]; then
         "pvecm create $CLUSTER_NAME --link0 $node1_mgmt --link1 $node1_ceph" || \
         error_exit "Failed to create cluster on node1"
     
-    log "✓ Cluster '$CLUSTER_NAME' created on node1"
+    log "[OK] Cluster '$CLUSTER_NAME' created on node1"
     sleep 5  # Allow cluster to stabilize
 else
     log "node1 already in cluster, skipping creation"
@@ -137,29 +137,26 @@ for node in "${PREPARED_NODES[@]}"; do
     log "Joining $node to cluster..."
     
     # First verify SSH connectivity from node1 to this node
-    if ! ssh -o StrictHostKeyChecking=no root@$node1_mgmt \
-         "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@$mgmt_ip 'echo SSH-OK'" >/dev/null 2>&1; then
-        log "Warning: SSH from node1 to $node failed, trying to fix..."
-        
-        # Try to copy SSH key again
-        ssh -o StrictHostKeyChecking=no root@$node1_mgmt "cat /root/.ssh/id_ed25519.pub" | \
-        ssh -o StrictHostKeyChecking=no root@$mgmt_ip "cat >> /root/.ssh/authorized_keys"
+    if ! timeout 15 ssh -o StrictHostKeyChecking=no -o BatchMode=yes root@$node1_mgmt \
+         "timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip 'echo SSH-OK'" >/dev/null 2>&1; then
+        log "Warning: SSH from node1 to $node failed - unified SSH keys should resolve this"
+        # With unified SSH keys, both nodes use the same key so this should work
     fi
     
     # Join node to cluster with dual links
     if ssh -o StrictHostKeyChecking=no root@$mgmt_ip \
        "pvecm add $node1_mgmt --link0 $mgmt_ip --link1 $ceph_ip --use_ssh"; then
-        log "✓ $node successfully joined cluster"
+        log "[OK] $node successfully joined cluster"
     else
-        log "✗ Failed to join $node to cluster"
+        log "[FAIL] Failed to join $node to cluster"
         
         # Try alternative method
         log "Trying alternative join method for $node..."
         if ssh -o StrictHostKeyChecking=no root@$mgmt_ip \
            "pvecm add $node1_mgmt --use_ssh"; then
-            log "✓ $node joined cluster (single link)"
+            log "[OK] $node joined cluster (single link)"
         else
-            log "✗ $node join failed completely"
+            log "[FAIL] $node join failed completely"
             FAILED_NODES+=($node)
         fi
     fi
@@ -175,7 +172,7 @@ sleep 5
 CLUSTER_STATUS=$(ssh -o StrictHostKeyChecking=no root@$node1_mgmt 'pvecm status' 2>/dev/null || echo "FAILED")
 
 if echo "$CLUSTER_STATUS" | grep -q "Quorum provider"; then
-    log "✓ Cluster is operational"
+    log "[OK] Cluster is operational"
     
     # Count cluster members
     MEMBER_COUNT=$(echo "$CLUSTER_STATUS" | grep -c "0x[0-9]" || echo "0")
@@ -197,9 +194,9 @@ if echo "$CLUSTER_STATUS" | grep -q "Quorum provider"; then
         
         NODE_STATUS=$(ssh -o StrictHostKeyChecking=no root@$mgmt_ip 'pvecm status 2>/dev/null | grep -c "0x[0-9]"' || echo "0")
         if [ "$NODE_STATUS" -gt 0 ]; then
-            log "✓ $node can see cluster ($NODE_STATUS members)"
+            log "[OK] $node can see cluster ($NODE_STATUS members)"
         else
-            log "✗ $node cannot see cluster properly"
+            log "[FAIL] $node cannot see cluster properly"
         fi
     done
     

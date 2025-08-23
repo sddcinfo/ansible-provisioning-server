@@ -114,13 +114,13 @@ check_value() {
     if echo "$RESPONSE" | grep -q "$pattern"; then
         actual=$(echo "$RESPONSE" | grep "$pattern" | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/' | xargs)
         if [ "$actual" = "$expected" ]; then
-            echo -e "${GREEN}✓${NC} $actual"
+            echo -e "${GREEN}[OK]${NC} $actual"
         else
-            echo -e "${YELLOW}⚠${NC} Found: '$actual', Expected: '$expected'"
+            echo -e "${YELLOW}${NC} Found: '$actual', Expected: '$expected'"
             ERRORS=$((ERRORS + 1))
         fi
     else
-        echo -e "${RED}✗${NC} Not found (Expected: $expected)"
+        echo -e "${RED}[FAIL]${NC} Not found (Expected: $expected)"
         ERRORS=$((ERRORS + 1))
     fi
 }
@@ -154,30 +154,30 @@ echo -e "${BLUE}Optional Configurations:${NC}"
 # Check if swap configuration is present
 if echo "$RESPONSE" | grep -q "^swap"; then
     SWAP_SIZE=$(echo "$RESPONSE" | grep "^swap" | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/')
-    echo -e "  Swap size: ${GREEN}✓${NC} $SWAP_SIZE"
+    echo -e "  Swap size: ${GREEN}[OK]${NC} $SWAP_SIZE"
 else
-    echo -e "  Swap size: ${YELLOW}⚠${NC} Not configured (using default)"
+    echo -e "  Swap size: ${YELLOW}${NC} Not configured (using default)"
 fi
 
 # Check if root password is configured
 if echo "$RESPONSE" | grep -q "^password"; then
-    echo -e "  Root password: ${GREEN}✓${NC} Configured"
+    echo -e "  Root password: ${GREEN}[OK]${NC} Configured"
 else
-    echo -e "  Root password: ${YELLOW}⚠${NC} Not configured in response"
+    echo -e "  Root password: ${YELLOW}${NC} Not configured in response"
 fi
 
 # Check if SSH key is configured
 if echo "$RESPONSE" | grep -q "ssh_public_key\|public_key"; then
-    echo -e "  SSH public key: ${GREEN}✓${NC} Configured"
+    echo -e "  SSH public key: ${GREEN}[OK]${NC} Configured"
 else
-    echo -e "  SSH public key: ${YELLOW}⚠${NC} Not configured"
+    echo -e "  SSH public key: ${YELLOW}${NC} Not configured"
 fi
 
 # Check for post-install script configuration
 if echo "$RESPONSE" | grep -q "post_install_script\|postinstall"; then
-    echo -e "  Post-install script: ${GREEN}✓${NC} Configured"
+    echo -e "  Post-install script: ${GREEN}[OK]${NC} Configured"
 else
-    echo -e "  Post-install script: ${YELLOW}⚠${NC} Not configured"
+    echo -e "  Post-install script: ${YELLOW}${NC} Not configured"
 fi
 
 echo
@@ -185,41 +185,41 @@ echo "=== Advanced Validation ==="
 
 # Validate MAC address format
 if [[ $OS_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
-    echo -e "  MAC address format: ${GREEN}✓${NC} Valid"
+    echo -e "  MAC address format: ${GREEN}[OK]${NC} Valid"
 else
-    echo -e "  MAC address format: ${RED}✗${NC} Invalid"
+    echo -e "  MAC address format: ${RED}[FAIL]${NC} Invalid"
     ERRORS=$((ERRORS + 1))
 fi
 
 # Validate IP address format
 if [[ $OS_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-    echo -e "  IP address format: ${GREEN}✓${NC} Valid"
+    echo -e "  IP address format: ${GREEN}[OK]${NC} Valid"
 else
-    echo -e "  IP address format: ${RED}✗${NC} Invalid"
+    echo -e "  IP address format: ${RED}[FAIL]${NC} Invalid"
     ERRORS=$((ERRORS + 1))
 fi
 
 # Check if response contains any obvious errors
 if echo "$RESPONSE" | grep -qi "error\|failed\|invalid"; then
-    echo -e "  Response errors: ${RED}✗${NC} Error keywords found in response"
+    echo -e "  Response errors: ${RED}[FAIL]${NC} Error keywords found in response"
     ERRORS=$((ERRORS + 1))
 else
-    echo -e "  Response errors: ${GREEN}✓${NC} No error keywords found"
+    echo -e "  Response errors: ${GREEN}[OK]${NC} No error keywords found"
 fi
 
 # Check response size (should be substantial for a proper preseed)
 RESPONSE_SIZE=$(echo "$RESPONSE" | wc -c)
 if [ "$RESPONSE_SIZE" -gt 500 ]; then
-    echo -e "  Response size: ${GREEN}✓${NC} $RESPONSE_SIZE bytes (adequate)"
+    echo -e "  Response size: ${GREEN}[OK]${NC} $RESPONSE_SIZE bytes (adequate)"
 else
-    echo -e "  Response size: ${YELLOW}⚠${NC} $RESPONSE_SIZE bytes (may be too small)"
+    echo -e "  Response size: ${YELLOW}${NC} $RESPONSE_SIZE bytes (may be too small)"
 fi
 
 echo
 echo "=== Summary ==="
 
 if [ $ERRORS -eq 0 ]; then
-    echo -e "${GREEN}✓ All validation checks passed!${NC}"
+    echo -e "${GREEN}[OK] All validation checks passed!${NC}"
     echo
     echo "The answer.php correctly generates configuration for ${NODE_NAME}:"
     echo "  - Hostname: ${OS_HOSTNAME} (not ${CONSOLE_HOSTNAME})"
@@ -232,7 +232,7 @@ if [ $ERRORS -eq 0 ]; then
     echo "Node is ready for Proxmox installation."
     exit 0
 else
-    echo -e "${RED}✗ $ERRORS validation check(s) failed${NC}"
+    echo -e "${RED}[FAIL] $ERRORS validation check(s) failed${NC}"
     echo
     echo "Please review the issues above and check:"
     echo "  1. answer.php template is correctly configured"

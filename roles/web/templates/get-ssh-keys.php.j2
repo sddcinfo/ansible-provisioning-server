@@ -26,6 +26,36 @@ function logSshActivity($message) {
 if ($method === 'GET') {
     $node_type = $_GET['type'] ?? 'all';
     $hostname = $_GET['hostname'] ?? null;
+    $key_type = $_GET['key'] ?? '';  // 'public', 'private', or empty for JSON response
+    
+    // Handle management server SSH key requests
+    if ($node_type === 'management') {
+        $sysadmin_ssh_dir = '/var/www/html/keys';
+        
+        if ($key_type === 'public') {
+            $public_key_file = $sysadmin_ssh_dir . '/sysadmin_automation_key.pub';
+            if (file_exists($public_key_file)) {
+                header('Content-Type: text/plain');
+                readfile($public_key_file);
+            } else {
+                http_response_code(404);
+                header('Content-Type: text/plain');
+                echo "Public key not found";
+            }
+            exit;
+        } elseif ($key_type === 'private') {
+            $private_key_file = $sysadmin_ssh_dir . '/sysadmin_automation_key';
+            if (file_exists($private_key_file)) {
+                header('Content-Type: text/plain');  
+                readfile($private_key_file);
+            } else {
+                http_response_code(404);
+                header('Content-Type: text/plain');
+                echo "Private key not found";
+            }
+            exit;
+        }
+    }
     
     $ssh_data = loadSshKeys();
     
