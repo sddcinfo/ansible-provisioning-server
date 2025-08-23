@@ -58,12 +58,16 @@ OS_MAC=$(echo "$NODE_DATA" | jq -r '.os_mac')
 OS_IP=$(echo "$NODE_DATA" | jq -r '.os_ip')
 OS_HOSTNAME=$(echo "$NODE_DATA" | jq -r '.os_hostname')
 CONSOLE_HOSTNAME=$(echo "$NODE_DATA" | jq -r '.hostname')
+CEPH_IP=$(echo "$NODE_DATA" | jq -r '.ceph_ip // empty')
 
 echo -e "${YELLOW}Node Information:${NC}"
 echo "  Hostname: $OS_HOSTNAME"
 echo "  MAC Address: $OS_MAC"
 echo "  IP Address: $OS_IP"
 echo "  Console Hostname: $CONSOLE_HOSTNAME"
+if [ -n "$CEPH_IP" ]; then
+    echo "  Ceph IP: $CEPH_IP"
+fi
 echo
 
 # Prepare POST data for answer.php
@@ -127,6 +131,7 @@ check_value "Network source" "^source = " "from-answer"
 check_value "IP address (CIDR)" "^cidr = " "${OS_IP}/24"
 check_value "Gateway" "^gateway = " "10.10.1.1"
 check_value "DNS server" "^dns = " "10.10.1.1"
+
 # Extract MAC suffix for validation (last 3 octets without colons)
 MAC_SUFFIX=$(echo "$OS_MAC" | cut -d: -f4-6 | tr -d ':')
 check_value "Network filter (MAC)" "^filter.ID_NET_NAME_MAC = " "*${MAC_SUFFIX}"
@@ -142,6 +147,74 @@ echo -e "${BLUE}Storage Configuration:${NC}"
 check_value "Filesystem" "^filesystem = " "zfs"
 check_value "RAID level" "^zfs.raid = " "raid0"
 
+# Check for optional configurations
+echo
+echo -e "${BLUE}Optional Configurations:${NC}"
+
+# Check if swap configuration is present
+if echo "$RESPONSE" | grep -q "^swap"; then
+    SWAP_SIZE=$(echo "$RESPONSE" | grep "^swap" | sed 's/.*= *"\?\([^"]*\)"\?.*/\1/')
+    echo -e "  Swap size: ${GREEN}✓${NC} $SWAP_SIZE"
+else
+    echo -e "  Swap size: ${YELLOW}⚠${NC} Not configured (using default)"
+fi
+
+# Check if root password is configured
+if echo "$RESPONSE" | grep -q "^password"; then
+    echo -e "  Root password: ${GREEN}✓${NC} Configured"
+else
+    echo -e "  Root password: ${YELLOW}⚠${NC} Not configured in response"
+fi
+
+# Check if SSH key is configured
+if echo "$RESPONSE" | grep -q "ssh_public_key\|public_key"; then
+    echo -e "  SSH public key: ${GREEN}✓${NC} Configured"
+else
+    echo -e "  SSH public key: ${YELLOW}⚠${NC} Not configured"
+fi
+
+# Check for post-install script configuration
+if echo "$RESPONSE" | grep -q "post_install_script\|postinstall"; then
+    echo -e "  Post-install script: ${GREEN}✓${NC} Configured"
+else
+    echo -e "  Post-install script: ${YELLOW}⚠${NC} Not configured"
+fi
+
+echo
+echo "=== Advanced Validation ==="
+
+# Validate MAC address format
+if [[ $OS_MAC =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+    echo -e "  MAC address format: ${GREEN}✓${NC} Valid"
+else
+    echo -e "  MAC address format: ${RED}✗${NC} Invalid"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Validate IP address format
+if [[ $OS_IP =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    echo -e "  IP address format: ${GREEN}✓${NC} Valid"
+else
+    echo -e "  IP address format: ${RED}✗${NC} Invalid"
+    ERRORS=$((ERRORS + 1))
+fi
+
+# Check if response contains any obvious errors
+if echo "$RESPONSE" | grep -qi "error\|failed\|invalid"; then
+    echo -e "  Response errors: ${RED}✗${NC} Error keywords found in response"
+    ERRORS=$((ERRORS + 1))
+else
+    echo -e "  Response errors: ${GREEN}✓${NC} No error keywords found"
+fi
+
+# Check response size (should be substantial for a proper preseed)
+RESPONSE_SIZE=$(echo "$RESPONSE" | wc -c)
+if [ "$RESPONSE_SIZE" -gt 500 ]; then
+    echo -e "  Response size: ${GREEN}✓${NC} $RESPONSE_SIZE bytes (adequate)"
+else
+    echo -e "  Response size: ${YELLOW}⚠${NC} $RESPONSE_SIZE bytes (may be too small)"
+fi
+
 echo
 echo "=== Summary ==="
 
@@ -154,13 +227,22 @@ if [ $ERRORS -eq 0 ]; then
     echo "  - Network filter: MAC-based (*${MAC_SUFFIX})"
     echo "  - Gateway: 10.10.1.1"
     echo "  - DNS: 10.10.1.1"
+    echo "  - Storage: ZFS with RAID0"
+    echo
+    echo "Node is ready for Proxmox installation."
     exit 0
 else
     echo -e "${RED}✗ $ERRORS validation check(s) failed${NC}"
     echo
     echo "Please review the issues above and check:"
     echo "  1. answer.php template is correctly configured"
-    echo "  2. nodes.json has the correct data"
+    echo "  2. nodes.json has the correct data for ${NODE_NAME}"
     echo "  3. PHP templates are properly deployed"
+    echo "  4. Web server is serving the correct content"
+    echo
+    echo "To debug further:"
+    echo "  - Check answer.php logs: tail -f /var/log/nginx/access.log"
+    echo "  - Test API directly: curl -X POST -H 'Content-Type: application/json' -d '$POST_DATA' '$API_URL'"
+    echo "  - Verify nodes.json: cat $NODES_FILE | jq '.nodes[] | select(.os_hostname == \"$NODE_NAME\")'"
     exit 1
 fi

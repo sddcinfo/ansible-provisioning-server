@@ -1,0 +1,85 @@
+<?php
+// Node Registration API Endpoint
+// Handles registration of newly installed Proxmox nodes
+
+header('Content-Type: application/json');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+
+// Get POST data
+$input = file_get_contents('php://input');
+$data = json_decode($input, true);
+
+// Validate input
+if (!$data || !isset($data['hostname']) || !isset($data['ip'])) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Missing required fields: hostname and ip']);
+    exit;
+}
+
+$hostname = $data['hostname'];
+$ip = $data['ip'];
+$type = $data['type'] ?? 'unknown';
+$status = $data['status'] ?? 'registered';
+$timestamp = date('Y-m-d H:i:s');
+
+// Log registration
+$log_file = '/var/www/html/logs/node-registrations.log';
+$log_dir = dirname($log_file);
+
+if (!file_exists($log_dir)) {
+    mkdir($log_dir, 0755, true);
+}
+
+$log_entry = sprintf(
+    "[%s] Node registered: hostname=%s, ip=%s, type=%s, status=%s\n",
+    $timestamp,
+    $hostname,
+    $ip,
+    $type,
+    $status
+);
+
+file_put_contents($log_file, $log_entry, FILE_APPEND | LOCK_EX);
+
+// Store registration in JSON file
+$registrations_file = '/var/www/html/data/registered-nodes.json';
+$registrations_dir = dirname($registrations_file);
+
+if (!file_exists($registrations_dir)) {
+    mkdir($registrations_dir, 0755, true);
+}
+
+// Load existing registrations
+$registrations = [];
+if (file_exists($registrations_file)) {
+    $content = file_get_contents($registrations_file);
+    if ($content) {
+        $registrations = json_decode($content, true) ?? [];
+    }
+}
+
+// Add or update registration
+$registrations[$hostname] = [
+    'hostname' => $hostname,
+    'ip' => $ip,
+    'type' => $type,
+    'status' => $status,
+    'registered_at' => $timestamp,
+    'last_seen' => $timestamp
+];
+
+// Save registrations
+file_put_contents(
+    $registrations_file,
+    json_encode($registrations, JSON_PRETTY_PRINT),
+    LOCK_EX
+);
+
+// Return success response
+http_response_code(200);
+echo json_encode([
+    'success' => true,
+    'message' => "Node $hostname registered successfully",
+    'data' => $registrations[$hostname]
+]);
+?>

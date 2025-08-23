@@ -1,0 +1,102 @@
+<?php
+// SSH Key Collection API
+// Collects SSH public keys from nodes during Stage 1 preparation
+
+header('Content-Type: application/json');
+
+$method = $_SERVER['REQUEST_METHOD'];
+$input = json_decode(file_get_contents('php://input'), true);
+
+// SSH keys storage file
+$ssh_keys_file = '/var/www/html/ssh_keys.json';
+
+// Initialize SSH keys file if it doesn't exist
+if (!file_exists($ssh_keys_file)) {
+    file_put_contents($ssh_keys_file, json_encode(['keys' => []], JSON_PRETTY_PRINT));
+}
+
+function loadSshKeys() {
+    global $ssh_keys_file;
+    $data = json_decode(file_get_contents($ssh_keys_file), true);
+    return $data ?: ['keys' => []];
+}
+
+function saveSshKeys($data) {
+    global $ssh_keys_file;
+    return file_put_contents($ssh_keys_file, json_encode($data, JSON_PRETTY_PRINT));
+}
+
+function logSshActivity($message) {
+    $log_entry = date('Y-m-d H:i:s') . " - " . $message . "\n";
+    file_put_contents('/var/log/ssh-key-management.log', $log_entry, FILE_APPEND | LOCK_EX);
+}
+
+if ($method === 'POST') {
+    // Collect SSH key from node
+    
+    if (!$input || !isset($input['hostname']) || !isset($input['public_key'])) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Missing required fields: hostname, public_key'
+        ]);
+        exit;
+    }
+    
+    $hostname = $input['hostname'];
+    $ip = $input['ip'] ?? 'unknown';
+    $public_key = $input['public_key'];
+    $node_type = $input['node_type'] ?? 'unknown';
+    
+    // Validate public key format
+    if (!preg_match('/^ssh-(rsa|ed25519|ecdsa)/', $public_key)) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Invalid public key format'
+        ]);
+        exit;
+    }
+    
+    $ssh_data = loadSshKeys();
+    
+    // Remove existing key for this hostname
+    $ssh_data['keys'] = array_filter($ssh_data['keys'], function($key) use ($hostname) {
+        return $key['hostname'] !== $hostname;
+    });
+    
+    // Add new key
+    $ssh_data['keys'][] = [
+        'hostname' => $hostname,
+        'ip' => $ip,
+        'public_key' => $public_key,
+        'node_type' => $node_type,
+        'collected_at' => date('Y-m-d H:i:s'),
+        'last_updated' => date('Y-m-d H:i:s')
+    ];
+    
+    if (saveSshKeys($ssh_data)) {
+        logSshActivity("Collected SSH key from $hostname ($ip)");
+        
+        echo json_encode([
+            'success' => true,
+            'message' => "SSH key collected for $hostname",
+            'total_keys' => count($ssh_data['keys'])
+        ]);
+    } else {
+        http_response_code(500);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Failed to save SSH key'
+        ]);
+    }
+    
+} else {
+    // Invalid method
+    http_response_code(405);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Method not allowed'
+    ]);
+}
+?>

@@ -1,0 +1,109 @@
+<?php
+// Node Status Update API Endpoint
+// Handles status updates from Proxmox nodes during post-installation
+
+header('Content-Type: application/json');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+
+// Get POST data
+$input = file_get_contents('php://input');
+$data = json_decode($input, true);
+
+// Validate input
+if (!$data || !isset($data['hostname']) || !isset($data['status'])) {
+    http_response_code(400);
+    echo json_encode(['error' => 'Missing required fields: hostname and status']);
+    exit;
+}
+
+$hostname = $data['hostname'];
+$status = $data['status'];
+$ip = $data['ip'] ?? 'unknown';
+$timestamp = $data['timestamp'] ?? date('Y-m-d H:i:s');
+$details = $data['details'] ?? [];
+
+// Log status update
+$log_file = '/var/www/html/logs/node-status.log';
+$log_dir = dirname($log_file);
+
+if (!file_exists($log_dir)) {
+    mkdir($log_dir, 0755, true);
+}
+
+$log_entry = sprintf(
+    "[%s] Status update: hostname=%s, ip=%s, status=%s\n",
+    date('Y-m-d H:i:s'),
+    $hostname,
+    $ip,
+    $status
+);
+
+file_put_contents($log_file, $log_entry, FILE_APPEND | LOCK_EX);
+
+// Update node status in registrations
+$registrations_file = '/var/www/html/data/registered-nodes.json';
+$registrations_dir = dirname($registrations_file);
+
+if (!file_exists($registrations_dir)) {
+    mkdir($registrations_dir, 0755, true);
+}
+
+// Load existing registrations
+$registrations = [];
+if (file_exists($registrations_file)) {
+    $content = file_get_contents($registrations_file);
+    if ($content) {
+        $registrations = json_decode($content, true) ?? [];
+    }
+}
+
+// Update node status
+if (isset($registrations[$hostname])) {
+    $registrations[$hostname]['status'] = $status;
+    $registrations[$hostname]['last_seen'] = date('Y-m-d H:i:s');
+    $registrations[$hostname]['last_update'] = $timestamp;
+    if (!empty($details)) {
+        $registrations[$hostname]['details'] = $details;
+    }
+} else {
+    // Create new entry if node doesn't exist
+    $registrations[$hostname] = [
+        'hostname' => $hostname,
+        'ip' => $ip,
+        'type' => 'proxmox',
+        'status' => $status,
+        'registered_at' => date('Y-m-d H:i:s'),
+        'last_seen' => date('Y-m-d H:i:s'),
+        'last_update' => $timestamp,
+        'details' => $details
+    ];
+}
+
+// Save registrations
+file_put_contents(
+    $registrations_file,
+    json_encode($registrations, JSON_PRETTY_PRINT),
+    LOCK_EX
+);
+
+// Handle special status cases
+switch ($status) {
+    case 'post-install-complete':
+        // Send notification or trigger additional actions
+        $message = "Node $hostname completed post-installation successfully";
+        break;
+    case 'error':
+        $message = "Node $hostname reported an error during post-installation";
+        break;
+    default:
+        $message = "Node $hostname status updated to: $status";
+}
+
+// Return success response
+http_response_code(200);
+echo json_encode([
+    'success' => true,
+    'message' => $message,
+    'data' => $registrations[$hostname]
+]);
+?>

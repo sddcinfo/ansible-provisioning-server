@@ -1,0 +1,109 @@
+<?php
+// SSH Key Retrieval API
+// Provides collected SSH public keys to nodes during Stage 1 preparation
+
+header('Content-Type: application/json');
+
+$method = $_SERVER['REQUEST_METHOD'];
+
+// SSH keys storage file
+$ssh_keys_file = '/var/www/html/ssh_keys.json';
+
+function loadSshKeys() {
+    global $ssh_keys_file;
+    if (!file_exists($ssh_keys_file)) {
+        return ['keys' => []];
+    }
+    $data = json_decode(file_get_contents($ssh_keys_file), true);
+    return $data ?: ['keys' => []];
+}
+
+function logSshActivity($message) {
+    $log_entry = date('Y-m-d H:i:s') . " - " . $message . "\n";
+    file_put_contents('/var/log/ssh-key-management.log', $log_entry, FILE_APPEND | LOCK_EX);
+}
+
+if ($method === 'GET') {
+    $node_type = $_GET['type'] ?? 'all';
+    $hostname = $_GET['hostname'] ?? null;
+    
+    $ssh_data = loadSshKeys();
+    
+    // Filter keys based on parameters
+    $filtered_keys = $ssh_data['keys'];
+    
+    if ($node_type !== 'all') {
+        $filtered_keys = array_filter($filtered_keys, function($key) use ($node_type) {
+            return $key['node_type'] === $node_type;
+        });
+    }
+    
+    if ($hostname) {
+        $filtered_keys = array_filter($filtered_keys, function($key) use ($hostname) {
+            return $key['hostname'] !== $hostname; // Exclude requesting node's own key
+        });
+    }
+    
+    // Re-index array to ensure JSON array format
+    $filtered_keys = array_values($filtered_keys);
+    
+    logSshActivity("SSH keys requested - type: $node_type, hostname: " . ($hostname ?: 'all') . ", returned: " . count($filtered_keys));
+    
+    echo json_encode([
+        'success' => true,
+        'total_keys' => count($filtered_keys),
+        'keys' => $filtered_keys,
+        'generated_at' => date('Y-m-d H:i:s')
+    ], JSON_PRETTY_PRINT);
+    
+} else if ($method === 'DELETE') {
+    // Clear all SSH keys (admin function)
+    $input = json_decode(file_get_contents('php://input'), true);
+    
+    if (!$input || !isset($input['confirm']) || $input['confirm'] !== 'yes') {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => 'Confirmation required'
+        ]);
+        exit;
+    }
+    
+    file_put_contents($ssh_keys_file, json_encode(['keys' => []], JSON_PRETTY_PRINT));
+    
+    logSshActivity("All SSH keys cleared");
+    
+    echo json_encode([
+        'success' => true,
+        'message' => 'All SSH keys cleared'
+    ]);
+    
+} else if ($method === 'POST') {
+    // Get authorized_keys format for a specific node type
+    $input = json_decode(file_get_contents('php://input'), true);
+    $node_type = $input['type'] ?? 'proxmox';
+    $exclude_hostname = $input['exclude_hostname'] ?? null;
+    
+    $ssh_data = loadSshKeys();
+    
+    $authorized_keys = [];
+    foreach ($ssh_data['keys'] as $key) {
+        if ($key['node_type'] === $node_type && $key['hostname'] !== $exclude_hostname) {
+            $authorized_keys[] = $key['public_key'];
+        }
+    }
+    
+    echo json_encode([
+        'success' => true,
+        'authorized_keys' => implode("\n", $authorized_keys),
+        'key_count' => count($authorized_keys)
+    ]);
+    
+} else {
+    http_response_code(405);
+    echo json_encode([
+        'success' => false,
+        'error' => 'Method not allowed'
+    ]);
+}
+?>

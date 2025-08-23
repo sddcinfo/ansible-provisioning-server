@@ -96,6 +96,11 @@ zfs.hdsize = 32
 [post-installation-webhook]
 url = "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={$mac}"
 
+[first-boot]
+source = "from-url"
+ordering = "network-online"
+url = "http://{{ server_ip }}/scripts/proxmox-post-install-improved.sh"
+
 TOML;
 
 echo $config;
