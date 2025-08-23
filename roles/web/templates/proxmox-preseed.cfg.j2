@@ -4,13 +4,17 @@
 [global]
 keyboard = "en-us"
 country = "jp"
-fqdn = "node4.sddc.info"
-mailto = "sddc@sddc.info"
-timezone = "Asia/Tokyo"
+fqdn = "{{ hostname }}.{{ domain | default('sddc.info') }}"
+mailto = "{{ mailto | default('admin@sddc.info') }}"
+timezone = "{{ timezone | default('Asia/Tokyo') }}"
 root-password = "{{ root_password | default('proxmox') }}"
 
 [network]
-source = "from-dhcp"
+source = "from-answer"
+cidr = "{{ os_ip | default('10.10.1.24') }}/24"
+gateway = "{{ gateway_ip | default('10.10.1.1') }}"
+dns = "{{ dns_servers | default('10.10.1.1') }}"
+filter.name = "eno1"
 
 [disk-setup]
 filesystem = "zfs"

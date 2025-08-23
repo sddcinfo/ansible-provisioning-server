@@ -34,8 +34,18 @@ $mac = str_replace(';', ':', $mac);
 // Log the request for debugging
 error_log("Proxmox answer request - IP: {$client_ip}, MAC: {$mac}, POST data: " . substr($post_data, 0, 500));
 
+// Debug logging for answer file generation
+file_put_contents('/var/www/html/answer_debug.log', 
+    date('Y-m-d H:i:s') . " - MAC: {$mac}, Client IP: {$client_ip}\n" .
+    "POST Data: " . $post_data . "\n\n", 
+    FILE_APPEND);
+
 $node = get_node_by_mac($mac);
-$hostname = $node['hostname'] ?? 'unknown-node'; // Default
+$hostname = $node['os_hostname'] ?? 'unknown-node'; // Use OS hostname (node1, node2, etc)
+$os_ip = $node['os_ip'] ?? '10.10.1.100'; // OS network IP
+$gateway = '{{ gateway_ip | default("10.10.1.1") }}';
+$dns = '{{ dns_servers | default("10.10.1.1") }}';
+$netmask = '24'; // /24 network
 
 // Generate dynamic answer file
 $config = <<<TOML
@@ -45,14 +55,17 @@ $config = <<<TOML
 [global]
 keyboard = "en-us"
 country = "jp"
-fqdn = "{$hostname}.{{ domain }}"
+fqdn = "{$hostname}.{{ domain | default('local') }}"
 mailto = "{{ mailto | default('admin@' + domain) }}"
 timezone = "{{ timezone | default('UTC') }}"
 root-password = "{{ root_password }}"
 
 [network]
-source = "from-dhcp"
-filter = "net.ifnames.mac == '{$mac}'"
+source = "from-answer"
+cidr = "{$os_ip}/{$netmask}"
+gateway = "{$gateway}"
+dns = "{$dns}"
+filter.name = "eno1"
 
 [disk-setup]
 filesystem = "zfs"

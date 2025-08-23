@@ -395,8 +395,9 @@
     - { template: "proxmox-preseed.cfg.j2", filename: "answer.toml" }
     - { template: "proxmox-meta-data.j2", filename: "meta-data" }
   vars:
-    hostname: "{{ default_autoinstall_nodes.proxmox9.hostname }}"
+    hostname: "{{ default_autoinstall_nodes.proxmox9.hostname | default('node-default') }}"
     mac: "{{ default_autoinstall_nodes.proxmox9.mac }}"
+    os_ip: "{{ default_autoinstall_nodes.proxmox9.os_ip | default('10.10.1.100') }}"
   tags:
     - autoinstall_config
     - templates
