@@ -119,22 +119,33 @@ if ! grep -q "broadcast 10.10.1.255" /etc/network/interfaces; then
     # Create a temporary file with the fixed configuration
     cp /etc/network/interfaces /tmp/interfaces.tmp
     
-    # Add broadcast line after the address line in vmbr0 section
-    sed -i '/^iface vmbr0 inet static/,/^[[:space:]]*bridge-fd/ {
-        /address.*\/24/ a\
-	broadcast 10.10.1.255
-    }' /tmp/interfaces.tmp
+    # Find vmbr0 section and add broadcast after address line
+    awk '
+    /^iface vmbr0 inet static/ { in_vmbr0 = 1; print; next }
+    in_vmbr0 && /^[[:space:]]*address.*\/24/ { print; print "	broadcast 10.10.1.255"; broadcast_added = 1; next }
+    in_vmbr0 && /^iface|^auto/ && !/vmbr0/ { in_vmbr0 = 0 }
+    { print }
+    ' /etc/network/interfaces > /tmp/interfaces.tmp
     
     # Verify the change was made correctly
     if grep -q "broadcast 10.10.1.255" /tmp/interfaces.tmp; then
         cp /tmp/interfaces.tmp /etc/network/interfaces
         log "[OK] Added broadcast 10.10.1.255 to vmbr0 configuration"
         
-        # Apply the configuration
+        # Apply the configuration immediately
         log "Applying network configuration changes..."
-        ifdown vmbr0 && ifup vmbr0 || log "Warning: Could not restart vmbr0 interface"
+        systemctl restart networking || log "Warning: Failed to restart networking service"
+        
+        # Verify the broadcast is actually set
+        if ip addr show vmbr0 | grep -q "10.10.1.255"; then
+            log "[OK] Broadcast address verified on vmbr0 interface"
+        else
+            log "[WARNING] Broadcast address not showing on interface, trying manual set"
+            ip addr flush dev vmbr0
+            ifup vmbr0 || log "Warning: Could not bring up vmbr0"
+        fi
     else
-        log "Warning: Failed to add broadcast configuration"
+        log "[ERROR] Failed to add broadcast configuration - sed command failed"
     fi
     rm -f /tmp/interfaces.tmp
 else
@@ -304,81 +315,7 @@ if ! grep -Fxq "$PUBLIC_KEY" /root/.ssh/authorized_keys; then
     log "Added provisioning server public key to authorized_keys"
 fi
 
-# Test SSH connectivity to other nodes using the shared key
-log "Testing SSH connectivity to cluster nodes with shared key..."
-SSH_SUCCESS_COUNT=0
-
-# Define comprehensive SSH options to prevent hanging
-SSH_OPTS="-o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes -o LogLevel=ERROR"
-
-# Function to test SSH with multiple layers of timeout protection
-test_ssh_robust() {
-    local target_ip="$1"
-    local node_name="$2"
-    
-    # Layer 1: Process timeout with SIGKILL after 12 seconds
-    # Layer 2: timeout command with 10 second limit  
-    # Layer 3: SSH built-in timeouts (ConnectTimeout=5)
-    # Layer 4: Background process with manual kill if needed
-    
-    local ssh_pid
-    local result=1
-    
-    # Run SSH in background and capture PID
-    (
-        exec timeout 10 ssh $SSH_OPTS root@"$target_ip" 'echo SSH-OK' >/dev/null 2>&1
-    ) &
-    ssh_pid=$!
-    
-    # Wait up to 12 seconds for the process to complete
-    local count=0
-    while [ $count -lt 12 ]; do
-        if ! kill -0 "$ssh_pid" 2>/dev/null; then
-            # Process has completed
-            wait "$ssh_pid"
-            result=$?
-            break
-        fi
-        sleep 1
-        ((count++))
-    done
-    
-    # Force kill if still running after 12 seconds
-    if kill -0 "$ssh_pid" 2>/dev/null; then
-        log "[WARNING] SSH to $node_name ($target_ip) exceeded timeout, force killing process"
-        kill -KILL "$ssh_pid" 2>/dev/null
-        wait "$ssh_pid" 2>/dev/null
-        result=124  # timeout exit code
-    fi
-    
-    return $result
-}
-
-for node_ip in "${NODE_IPS[@]}"; do
-    if [ "$node_ip" != "$IP_ADDRESS" ]; then
-        node_name=$(get_hostname_by_ip "$node_ip")
-        log "Testing SSH to $node_name ($node_ip)..."
-        
-        # Use robust SSH test function with multiple timeout layers
-        if test_ssh_robust "$node_ip" "$node_name"; then
-            log "[OK] SSH connectivity to $node_name ($node_ip) works"
-            ((SSH_SUCCESS_COUNT++))
-        else
-            log "[INFO] SSH connectivity to $node_name ($node_ip) not ready yet (normal during initial setup)"
-        fi
-    fi
-done
-
-if [ $SSH_SUCCESS_COUNT -gt 0 ]; then
-    log "SSH connectivity established to $SSH_SUCCESS_COUNT nodes using shared management key"
-elif [ ${#NODE_IPS[@]} -eq 1 ]; then
-    log "Single node deployment - SSH connectivity test skipped"
-else
-    log "No SSH connectivity established yet - other nodes may still be provisioning"
-    log "This is normal during initial node setup - connectivity will work once all nodes are configured"
-fi
-
-log "[OK] All nodes will use the same SSH key for seamless cluster communication"
+log "[OK] SSH keys configured - cluster formation script will handle connectivity testing"
 
 # 8. Cluster Configuration (Node-specific behavior)
 log "Step 8: Cluster configuration..."
@@ -437,13 +374,7 @@ else
             log "[FAIL] Cannot reach primary node Ceph network"
         fi
         
-        # Test SSH connectivity (will fail initially until keys are exchanged)
-        log "Testing SSH connectivity to primary node ($CLUSTER_PRIMARY_IP)..."
-        if test_ssh_robust "$CLUSTER_PRIMARY_IP" "$CLUSTER_PRIMARY"; then
-            log "[OK] SSH connectivity to primary node works"
-        else
-            log "[INFO] SSH connectivity to primary node not ready (keys may need exchange)"
-        fi
+        # SSH connectivity will be tested during cluster formation
         
         log ""
         log "TO JOIN THIS NODE TO THE CLUSTER:"

@@ -72,7 +72,8 @@ test_ssh_robust() {
 log "=== Starting Proxmox Cluster Formation ==="
 
 # 1. Check all nodes are prepared and accessible
-log "Checking node preparation status..."
+# This is where all SSH connectivity testing happens - post-install script only sets up keys
+log "Checking node preparation status and SSH connectivity..."
 PREPARED_NODES=()
 FAILED_NODES=()
 
