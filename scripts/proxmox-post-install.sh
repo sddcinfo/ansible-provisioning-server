@@ -311,13 +311,56 @@ SSH_SUCCESS_COUNT=0
 # Define comprehensive SSH options to prevent hanging
 SSH_OPTS="-o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes -o LogLevel=ERROR"
 
+# Function to test SSH with multiple layers of timeout protection
+test_ssh_robust() {
+    local target_ip="$1"
+    local node_name="$2"
+    
+    # Layer 1: Process timeout with SIGKILL after 12 seconds
+    # Layer 2: timeout command with 10 second limit  
+    # Layer 3: SSH built-in timeouts (ConnectTimeout=5)
+    # Layer 4: Background process with manual kill if needed
+    
+    local ssh_pid
+    local result=1
+    
+    # Run SSH in background and capture PID
+    (
+        exec timeout 10 ssh $SSH_OPTS root@"$target_ip" 'echo SSH-OK' >/dev/null 2>&1
+    ) &
+    ssh_pid=$!
+    
+    # Wait up to 12 seconds for the process to complete
+    local count=0
+    while [ $count -lt 12 ]; do
+        if ! kill -0 "$ssh_pid" 2>/dev/null; then
+            # Process has completed
+            wait "$ssh_pid"
+            result=$?
+            break
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    # Force kill if still running after 12 seconds
+    if kill -0 "$ssh_pid" 2>/dev/null; then
+        log "[WARNING] SSH to $node_name ($target_ip) exceeded timeout, force killing process"
+        kill -KILL "$ssh_pid" 2>/dev/null
+        wait "$ssh_pid" 2>/dev/null
+        result=124  # timeout exit code
+    fi
+    
+    return $result
+}
+
 for node_ip in "${NODE_IPS[@]}"; do
     if [ "$node_ip" != "$IP_ADDRESS" ]; then
         node_name=$(get_hostname_by_ip "$node_ip")
         log "Testing SSH to $node_name ($node_ip)..."
         
-        # Use timeout command as additional protection against hanging
-        if timeout 10 ssh $SSH_OPTS root@"$node_ip" 'echo SSH-OK' >/dev/null 2>&1; then
+        # Use robust SSH test function with multiple timeout layers
+        if test_ssh_robust "$node_ip" "$node_name"; then
             log "[OK] SSH connectivity to $node_name ($node_ip) works"
             ((SSH_SUCCESS_COUNT++))
         else
@@ -396,7 +439,7 @@ else
         
         # Test SSH connectivity (will fail initially until keys are exchanged)
         log "Testing SSH connectivity to primary node ($CLUSTER_PRIMARY_IP)..."
-        if timeout 10 ssh $SSH_OPTS root@"$CLUSTER_PRIMARY_IP" 'echo SSH-OK' >/dev/null 2>&1; then
+        if test_ssh_robust "$CLUSTER_PRIMARY_IP" "$CLUSTER_PRIMARY"; then
             log "[OK] SSH connectivity to primary node works"
         else
             log "[INFO] SSH connectivity to primary node not ready (keys may need exchange)"

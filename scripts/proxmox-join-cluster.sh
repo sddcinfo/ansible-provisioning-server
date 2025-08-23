@@ -22,6 +22,48 @@ error_exit() {
     exit 1
 }
 
+# Define comprehensive SSH options to prevent hanging
+SSH_OPTS="-o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes -o LogLevel=ERROR"
+
+# Function to test SSH with multiple layers of timeout protection
+test_ssh_robust() {
+    local target_ip="$1"
+    local node_name="$2"
+    local command="${3:-echo SSH-OK}"
+    
+    local ssh_pid
+    local result=1
+    
+    # Run SSH in background and capture PID
+    (
+        exec timeout 10 ssh $SSH_OPTS root@"$target_ip" "$command" >/dev/null 2>&1
+    ) &
+    ssh_pid=$!
+    
+    # Wait up to 12 seconds for the process to complete
+    local count=0
+    while [ $count -lt 12 ]; do
+        if ! kill -0 "$ssh_pid" 2>/dev/null; then
+            # Process has completed
+            wait "$ssh_pid"
+            result=$?
+            break
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    # Force kill if still running after 12 seconds
+    if kill -0 "$ssh_pid" 2>/dev/null; then
+        log "[WARNING] SSH to $node_name ($target_ip) exceeded timeout, force killing process"
+        kill -KILL "$ssh_pid" 2>/dev/null
+        wait "$ssh_pid" 2>/dev/null
+        result=124  # timeout exit code
+    fi
+    
+    return $result
+}
+
 log "Starting Proxmox cluster join process for $HOSTNAME"
 
 # 1. Check if already in cluster

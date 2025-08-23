@@ -27,6 +27,48 @@ error_exit() {
     exit 1
 }
 
+# Define comprehensive SSH options to prevent hanging
+SSH_OPTS="-o ConnectTimeout=5 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o BatchMode=yes -o LogLevel=ERROR"
+
+# Function to test SSH with multiple layers of timeout protection
+test_ssh_robust() {
+    local target_ip="$1"
+    local node_name="$2"
+    local command="${3:-echo SSH-OK}"
+    
+    local ssh_pid
+    local result=1
+    
+    # Run SSH in background and capture PID
+    (
+        exec timeout 10 ssh $SSH_OPTS root@"$target_ip" "$command" >/dev/null 2>&1
+    ) &
+    ssh_pid=$!
+    
+    # Wait up to 12 seconds for the process to complete
+    local count=0
+    while [ $count -lt 12 ]; do
+        if ! kill -0 "$ssh_pid" 2>/dev/null; then
+            # Process has completed
+            wait "$ssh_pid"
+            result=$?
+            break
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    # Force kill if still running after 12 seconds
+    if kill -0 "$ssh_pid" 2>/dev/null; then
+        log "[WARNING] SSH to $node_name ($target_ip) exceeded timeout, force killing process"
+        kill -KILL "$ssh_pid" 2>/dev/null
+        wait "$ssh_pid" 2>/dev/null
+        result=124  # timeout exit code
+    fi
+    
+    return $result
+}
+
 log "=== Starting Proxmox Cluster Formation ==="
 
 # 1. Check all nodes are prepared and accessible
@@ -40,8 +82,7 @@ for node in "${!NODES[@]}"; do
     log "Checking $node ($mgmt_ip)..."
     
     # Check if node is prepared
-    if timeout 15 ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip \
-       'test -f /var/lib/proxmox-node-prepared.done' 2>/dev/null; then
+    if test_ssh_robust "$mgmt_ip" "$node" 'test -f /var/lib/proxmox-node-prepared.done'; then
         log "[OK] $node is prepared"
         PREPARED_NODES+=($node)
     else
@@ -50,8 +91,7 @@ for node in "${!NODES[@]}"; do
     fi
     
     # Check SSH connectivity
-    if timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip \
-       'echo "SSH OK"' >/dev/null 2>&1; then
+    if test_ssh_robust "$mgmt_ip" "$node"; then
         log "[OK] $node SSH connectivity OK"
     else
         log "[FAIL] $node SSH connectivity FAILED"
@@ -81,8 +121,8 @@ ALREADY_CLUSTERED=()
 for node in "${PREPARED_NODES[@]}"; do
     IFS=':' read -r mgmt_ip ceph_ip <<< "${NODES[$node]}"
     
-    if ssh -o StrictHostKeyChecking=no root@$mgmt_ip 'pvecm status' >/dev/null 2>&1; then
-        CLUSTER_INFO=$(ssh -o StrictHostKeyChecking=no root@$mgmt_ip 'pvecm status' 2>/dev/null || echo "")
+    if test_ssh_robust "$mgmt_ip" "$node" 'pvecm status'; then
+        CLUSTER_INFO=$(timeout 10 ssh $SSH_OPTS root@$mgmt_ip 'pvecm status' 2>/dev/null || echo "")
         if echo "$CLUSTER_INFO" | grep -q "Quorum provider"; then
             log "$node is already in a cluster"
             ALREADY_CLUSTERED+=($node)
@@ -94,7 +134,7 @@ if [ ${#ALREADY_CLUSTERED[@]} -gt 0 ]; then
     log "Found existing cluster members: ${ALREADY_CLUSTERED[*]}"
     log "Current cluster status:"
     IFS=':' read -r mgmt_ip ceph_ip <<< "${NODES[${ALREADY_CLUSTERED[0]}]}"
-    ssh -o StrictHostKeyChecking=no root@$mgmt_ip 'pvecm status' || true
+    timeout 10 ssh $SSH_OPTS root@$mgmt_ip 'pvecm status' || true
     
     read -p "Do you want to continue and join remaining nodes? (y/N): " -n 1 -r
     echo
@@ -113,7 +153,7 @@ if [[ ! " ${ALREADY_CLUSTERED[@]} " =~ " node1 " ]]; then
     log "Creating cluster on node1..."
     
     # Create cluster with dual network links
-    ssh -o StrictHostKeyChecking=no root@$node1_mgmt \
+    timeout 30 ssh $SSH_OPTS root@$node1_mgmt \
         "pvecm create $CLUSTER_NAME --link0 $node1_mgmt --link1 $node1_ceph" || \
         error_exit "Failed to create cluster on node1"
     
@@ -137,14 +177,13 @@ for node in "${PREPARED_NODES[@]}"; do
     log "Joining $node to cluster..."
     
     # First verify SSH connectivity from node1 to this node
-    if ! timeout 15 ssh -o StrictHostKeyChecking=no -o BatchMode=yes root@$node1_mgmt \
-         "timeout 10 ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no -o BatchMode=yes root@$mgmt_ip 'echo SSH-OK'" >/dev/null 2>&1; then
+    if ! test_ssh_robust "$node1_mgmt" "node1" "timeout 10 ssh $SSH_OPTS root@$mgmt_ip 'echo SSH-OK'"; then
         log "Warning: SSH from node1 to $node failed - unified SSH keys should resolve this"
         # With unified SSH keys, both nodes use the same key so this should work
     fi
     
     # Join node to cluster with dual links
-    if ssh -o StrictHostKeyChecking=no root@$mgmt_ip \
+    if timeout 60 ssh $SSH_OPTS root@$mgmt_ip \
        "pvecm add $node1_mgmt --link0 $mgmt_ip --link1 $ceph_ip --use_ssh"; then
         log "[OK] $node successfully joined cluster"
     else
@@ -152,7 +191,7 @@ for node in "${PREPARED_NODES[@]}"; do
         
         # Try alternative method
         log "Trying alternative join method for $node..."
-        if ssh -o StrictHostKeyChecking=no root@$mgmt_ip \
+        if timeout 60 ssh $SSH_OPTS root@$mgmt_ip \
            "pvecm add $node1_mgmt --use_ssh"; then
             log "[OK] $node joined cluster (single link)"
         else
@@ -169,7 +208,7 @@ done
 log "Verifying cluster formation..."
 sleep 5
 
-CLUSTER_STATUS=$(ssh -o StrictHostKeyChecking=no root@$node1_mgmt 'pvecm status' 2>/dev/null || echo "FAILED")
+CLUSTER_STATUS=$(timeout 15 ssh $SSH_OPTS root@$node1_mgmt 'pvecm status' 2>/dev/null || echo "FAILED")
 
 if echo "$CLUSTER_STATUS" | grep -q "Quorum provider"; then
     log "[OK] Cluster is operational"
@@ -184,7 +223,7 @@ if echo "$CLUSTER_STATUS" | grep -q "Quorum provider"; then
     
     # Check corosync ring status
     log "Checking corosync rings..."
-    RING_STATUS=$(ssh -o StrictHostKeyChecking=no root@$node1_mgmt 'corosync-cfgtool -s' 2>/dev/null || echo "Ring check failed")
+    RING_STATUS=$(timeout 15 ssh $SSH_OPTS root@$node1_mgmt 'corosync-cfgtool -s' 2>/dev/null || echo "Ring check failed")
     echo "$RING_STATUS"
     
     # Verify each node can see the cluster
@@ -192,7 +231,7 @@ if echo "$CLUSTER_STATUS" | grep -q "Quorum provider"; then
     for node in "${PREPARED_NODES[@]}"; do
         IFS=':' read -r mgmt_ip ceph_ip <<< "${NODES[$node]}"
         
-        NODE_STATUS=$(ssh -o StrictHostKeyChecking=no root@$mgmt_ip 'pvecm status 2>/dev/null | grep -c "0x[0-9]"' || echo "0")
+        NODE_STATUS=$(timeout 15 ssh $SSH_OPTS root@$mgmt_ip 'pvecm status 2>/dev/null | grep -c "0x[0-9]"' || echo "0")
         if [ "$NODE_STATUS" -gt 0 ]; then
             log "[OK] $node can see cluster ($NODE_STATUS members)"
         else
@@ -208,12 +247,12 @@ fi
 log "Configuring cluster settings..."
 
 # Enable firewall on cluster level
-ssh -o StrictHostKeyChecking=no root@$node1_mgmt 'pvecm set -firewall 1' 2>/dev/null || \
+timeout 15 ssh $SSH_OPTS root@$node1_mgmt 'pvecm set -firewall 1' 2>/dev/null || \
     log "Warning: Could not enable cluster firewall"
 
 # Set migration network to use Ceph network for better performance
 log "Configuring migration network..."
-ssh -o StrictHostKeyChecking=no root@$node1_mgmt \
+timeout 15 ssh $SSH_OPTS root@$node1_mgmt \
     'pvecm mtunnel -migration_network 10.10.2.0/24' 2>/dev/null || \
     log "Warning: Could not set migration network"
 
