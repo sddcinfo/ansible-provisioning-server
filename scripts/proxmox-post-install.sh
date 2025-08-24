@@ -1,7 +1,8 @@
 #!/bin/bash
-# Proxmox Post-Installation Script - Improved Version
+# Proxmox 9 Post-Installation Script - Optimized Version
 # Runs on first boot after Proxmox installation
-# Properly supports node1 as primary and nodes 2-4 as cluster members
+# Fully self-contained - no Ansible dependencies
+# Supports node1 as primary and nodes 2-4 as cluster members
 
 set -e
 
@@ -41,10 +42,22 @@ error_exit() {
     exit 1
 }
 
+# Validate Proxmox version
+validate_proxmox_version() {
+    local pve_version=$(pveversion | grep -oP 'pve-manager/\K[0-9]+' || echo "0")
+    if [ "$pve_version" -ne 9 ]; then
+        error_exit "This script requires Proxmox 9. Found version: $pve_version"
+    fi
+    log "Proxmox version $pve_version validated"
+}
+
 log "=========================================="
-log "Starting Proxmox post-installation for $HOSTNAME"
+log "Starting Proxmox 9 post-installation for $HOSTNAME"
 log "IP: $IP_ADDRESS, Node Number: $NODE_NUM"
 log "=========================================="
+
+# Validate we're running on Proxmox 9
+validate_proxmox_version
 
 # 1. Fix Repository Configuration
 log "Step 1: Configuring Proxmox repositories..."
@@ -94,7 +107,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
     chrony \
     zfsutils-linux \
     ceph-common \
-    ansible \
+    fail2ban \
+    libguestfs-tools \
+    pve-edk2-firmware \
+    proxmox-backup-client \
     || error_exit "Failed to install essential packages"
 
 # 3. Configure NTP
@@ -201,10 +217,22 @@ else
     log "Ceph network already configured"
 fi
 
+# Configure RSS/RPS for 10Gbit optimization
+log "Configuring RSS/RPS for 10Gbit network optimization..."
+for iface in eno3 vmbr1; do
+    if [ -d /sys/class/net/$iface ]; then
+        # Get number of CPUs
+        CPUS=$(nproc)
+        # Set RPS to use all CPUs
+        echo $(printf '%x' $((2**CPUS-1))) > /sys/class/net/$iface/queues/rx-0/rps_cpus 2>/dev/null || true
+        log "Configured RPS for $iface"
+    fi
+done
+
 # 5. Apply Performance Tuning
 log "Step 5: Applying performance tuning..."
 cat > /etc/sysctl.d/99-proxmox-performance.conf <<EOF
-# Performance tuning for Proxmox with 10Gbit networking
+# Performance tuning for Proxmox 9 with 10Gbit networking
 vm.swappiness = 10
 net.core.netdev_max_backlog = 30000
 net.ipv4.tcp_congestion_control = bbr
@@ -225,9 +253,30 @@ net.ipv4.tcp_mtu_probing = 1
 net.ipv4.tcp_window_scaling = 1
 net.ipv4.tcp_timestamps = 1
 net.ipv4.tcp_sack = 1
+
+# Additional optimizations for virtualization
+kernel.pid_max = 4194304
+fs.aio-max-nr = 1048576
 EOF
 
 sysctl --system
+
+# Set CPU governor to performance
+log "Setting CPU governor to performance mode..."
+for gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    echo "performance" > "$gov" 2>/dev/null || true
+done
+
+# NVMe optimization if present
+if lsblk | grep -q nvme; then
+    log "Optimizing NVMe storage..."
+    for nvme in /sys/block/nvme*; do
+        if [ -d "$nvme" ]; then
+            echo "none" > "$nvme/queue/scheduler" 2>/dev/null || true
+            echo "1024" > "$nvme/queue/nr_requests" 2>/dev/null || true
+        fi
+    done
+fi
 
 # 6. Configure ZFS (if applicable)
 log "Step 6: Configuring storage..."
@@ -396,7 +445,7 @@ else
     log ""
     log "TO FORM THE CLUSTER:"
     log "Run the API-based cluster formation script from the management server:"
-    log "  ./scripts/proxmox-form-cluster.sh"
+    log "  ./scripts/proxmox-form-cluster.py"
     log ""
     log "This will use the Proxmox API (not SSH) to:"
     log "- Create cluster on node1 if it doesn't exist"
@@ -404,8 +453,8 @@ else
     log "- Verify cluster health and connectivity"
 fi
 
-# 9. Configure Firewall
-log "Step 9: Configuring firewall rules..."
+# 9. Configure Firewall and Security
+log "Step 9: Configuring firewall rules and security..."
 mkdir -p /etc/pve/firewall
 
 if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
@@ -441,9 +490,34 @@ IN ACCEPT -source 10.10.2.0/24 -p tcp -dport 60000:60050  # Live migration
 
 # Monitoring
 IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 9100  # Node exporter
+
+# Proxmox Backup Server
+IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 8007  # PBS API
 EOF
     log "Firewall rules configured"
 fi
+
+# Configure fail2ban for security hardening
+log "Configuring fail2ban..."
+cat > /etc/fail2ban/filter.d/proxmox.conf <<EOF
+[Definition]
+failregex = pvedaemon\[.*authentication failure; rhost=<HOST> user=.* msg=.*
+ignoreregex =
+EOF
+
+cat > /etc/fail2ban/jail.d/proxmox.conf <<EOF
+[proxmox]
+enabled = true
+port = 8006
+filter = proxmox
+logpath = /var/log/daemon.log
+maxretry = 3
+bantime = 3600
+findtime = 600
+EOF
+
+systemctl enable --now fail2ban
+log "fail2ban configured and started"
 
 # 10. Install Monitoring
 log "Step 10: Setting up monitoring..."
@@ -488,8 +562,34 @@ EOF
     log "Backup schedule configured"
 fi
 
-# 12. GRUB Configuration for IOMMU
-log "Step 12: Checking virtualization features..."
+# 12. Download VM Templates (optional but useful)
+log "Step 12: Downloading common VM templates..."
+if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
+    # Download templates in background to not block script
+    (
+        cd /var/lib/vz/template/iso/
+        
+        # Ubuntu 24.04 cloud image
+        if [ ! -f ubuntu-24.04-cloudimg.img ]; then
+            wget -q -O ubuntu-24.04-cloudimg.img \
+                "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img" \
+                && log "Downloaded Ubuntu 24.04 cloud image" \
+                || log "Failed to download Ubuntu 24.04 cloud image"
+        fi
+        
+        # Debian 12 cloud image
+        if [ ! -f debian-12-cloudimg.qcow2 ]; then
+            wget -q -O debian-12-cloudimg.qcow2 \
+                "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2" \
+                && log "Downloaded Debian 12 cloud image" \
+                || log "Failed to download Debian 12 cloud image"
+        fi
+    ) &
+    log "VM template downloads started in background"
+fi
+
+# 13. GRUB Configuration for IOMMU
+log "Step 13: Checking virtualization features..."
 if grep -q "vmx\|svm" /proc/cpuinfo; then
     log "Hardware virtualization support detected"
     
@@ -509,8 +609,8 @@ if grep -q "vmx\|svm" /proc/cpuinfo; then
     fi
 fi
 
-# 13. Register with Provisioning Server
-log "Step 13: Registering with provisioning server..."
+# 14. Register with Provisioning Server
+log "Step 14: Registering with provisioning server..."
 REGISTER_DATA=$(cat <<EOF
 {
     "hostname": "$HOSTNAME",
@@ -520,7 +620,8 @@ REGISTER_DATA=$(cat <<EOF
     "status": "post-install-complete",
     "cluster_role": $([ "$HOSTNAME" == "$CLUSTER_PRIMARY" ] && echo '"primary"' || echo '"secondary"'),
     "cluster_name": "$CLUSTER_NAME",
-    "in_cluster": $(pvecm status >/dev/null 2>&1 && echo "true" || echo "false")
+    "in_cluster": $(pvecm status >/dev/null 2>&1 && echo "true" || echo "false"),
+    "pve_version": "9"
 }
 EOF
 )
@@ -531,14 +632,6 @@ curl -X POST \
     "http://$PROVISION_SERVER/api/register-node.php" \
     || log "Warning: Failed to register with provisioning server"
 
-# 14. Run Ansible Playbook (if needed)
-log "Step 14: Running additional configuration..."
-if [ -f "/var/www/html/playbooks/proxmox-post-install.yml" ]; then
-    log "Running Ansible playbook for additional configuration..."
-    curl -s "http://$PROVISION_SERVER/scripts/proxmox-ansible-pull.sh" | bash || \
-        log "Warning: Ansible pull failed or not available"
-fi
-
 # 15. Final Cleanup
 log "Step 15: Performing cleanup..."
 apt-get autoremove -y
@@ -548,7 +641,7 @@ apt-get autoclean
 touch /var/lib/proxmox-post-install.done
 touch /var/lib/proxmox-node-prepared.done
 log "[OK] Node preparation markers created"
-echo "$HOSTNAME:$(date -Iseconds)" > /var/lib/proxmox-post-install.done
+echo "$HOSTNAME:$(date -Iseconds):pve9" > /var/lib/proxmox-post-install.done
 
 # 16. Summary and Next Steps
 log "=========================================="
@@ -560,27 +653,34 @@ log "  Hostname: $HOSTNAME"
 log "  Management IP: $IP_ADDRESS"
 log "  Ceph IP: ${CEPH_IPS[$HOSTNAME]}"
 log "  Cluster: $CLUSTER_NAME"
+log "  Proxmox Version: 9"
 
 if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
     log "  Role: PRIMARY (Cluster Master)"
     log ""
     log "Next Steps:"
     log "1. Wait for other nodes to complete post-install"
-    log "2. Join other nodes using:"
-    log "   pvecm add <node-ip> --link0 <node-ip> --link1 <ceph-ip>"
+    log "2. Run cluster formation script from management server:"
+    log "   ./scripts/proxmox-form-cluster.py"
     log "3. Configure Ceph storage after all nodes joined"
 else
     log "  Role: SECONDARY (Cluster Member)"
     log ""
     log "Next Steps:"
-    log "1. Join cluster from $CLUSTER_PRIMARY or this node"
-    log "2. Verify cluster membership with: pvecm status"
+    log "1. Wait for primary node to complete post-install"
+    log "2. Cluster will be formed via API from management server"
+    log "3. Verify cluster membership with: pvecm status"
 fi
 
 log ""
 log "Access Proxmox Web GUI: https://$IP_ADDRESS:8006"
 log "Default credentials: root / <password-from-install>"
 log ""
-log "Reboot recommended if IOMMU was enabled"
+
+if grep -q "intel_iommu=on\|amd_iommu=on" /etc/default/grub && ! grep -q "intel_iommu=on\|amd_iommu=on" /proc/cmdline; then
+    log "⚠️  REBOOT REQUIRED for IOMMU changes to take effect"
+fi
+
+log "✅ Post-installation script completed successfully!"
 
 exit 0

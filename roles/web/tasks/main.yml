@@ -586,18 +586,6 @@
     - templates
     - web_files_only
 
-- name: Deploy Proxmox ansible pull script
-  template:
-    src: proxmox-ansible-pull.sh.j2
-    dest: "{{ nginx_web_root }}/scripts/proxmox-ansible-pull.sh"
-    owner: www-data
-    group: www-data
-    mode: "0755"
-  tags:
-    - web_config
-    - templates
-    - web_files_only
-
 - name: Deploy Python-based Proxmox cluster formation script
   template:
     src: proxmox-form-cluster.py.j2
@@ -610,28 +598,9 @@
     - templates
     - web_files_only
 
-- name: Create playbooks directory for web access
-  file:
-    path: "{{ nginx_web_root }}/playbooks"
-    state: directory
-    owner: www-data
-    group: www-data
-    mode: "0755"
-  tags:
-    - web_config
-    - web_files_only
-
-- name: Deploy Proxmox post-install playbook
-  copy:
-    src: /home/sysadmin/claude/ansible-provisioning-server/playbooks/proxmox-post-install.yml
-    dest: "{{ nginx_web_root }}/playbooks/proxmox-post-install.yml"
-    owner: www-data
-    group: www-data
-    mode: "0644"
-  tags:
-    - web_config
-    - templates
-    - web_files_only
+# Note: Ansible playbooks removed - Proxmox configuration is now handled by
+# self-contained scripts (proxmox-post-install.sh and proxmox-form-cluster.py)
+# that run directly on the nodes without Ansible dependencies
 
 - name: Generate verification script with error handling
   block:

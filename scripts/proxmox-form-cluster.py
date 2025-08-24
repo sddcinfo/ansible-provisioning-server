@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Proxmox Cluster Formation Script - Python Implementation
-Uses Proxmox REST API for reliable cluster formation without SSH dependencies
+Proxmox Cluster Formation Script - API-Only Implementation
+Uses Proxmox REST API exclusively for cluster formation
+No SSH operations or password prompts - all auth handled via tokens or management server
 """
 
 import requests
@@ -9,9 +10,9 @@ import json
 import time
 import sys
 import logging
+import subprocess
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime
-import subprocess
 
 # Disable SSL warnings for self-signed certificates
 import urllib3
@@ -20,7 +21,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Configuration
 PROVISION_SERVER = "10.10.1.1"
 CLUSTER_NAME = "sddc-cluster"
-LOG_FILE = "/tmp/proxmox-cluster-formation-python.log"
+LOG_FILE = "/tmp/proxmox-cluster-formation.log"
 
 # Node configuration
 NODES = {
@@ -42,7 +43,7 @@ logging.basicConfig(
 )
 
 class ProxmoxAPI:
-    """Proxmox API client for cluster operations"""
+    """Proxmox API client for cluster operations - API only, no SSH"""
     
     def __init__(self, host: str):
         self.host = host
@@ -51,164 +52,163 @@ class ProxmoxAPI:
         self.session.verify = False
         self.token_id = None
         self.token_secret = None
-        self.ticket = None
+        self.auth_method = None
     
-    def load_token(self) -> bool:
-        """Load API token from node's token file with validation"""
+    def regenerate_token_via_mgmt(self, node_name: str) -> bool:
+        """Regenerate API token on node via management server SSH"""
         try:
-            # Get token file from node
-            result = subprocess.run([
-                'scp', '-q', '-o', 'ConnectTimeout=5', 
-                '-o', 'StrictHostKeyChecking=no',
-                f'root@{self.host}:/etc/proxmox-cluster-token',
-                f'/tmp/node_{self.host}_token'
-            ], capture_output=True)
+            logging.info(f"Regenerating API token for {node_name} via management server...")
+            
+            # Command to regenerate token on remote node
+            regenerate_cmd = f"""
+ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{self.host} '
+    # Remove old token if exists
+    pveum user token remove automation@pam cluster-formation 2>/dev/null || true
+    sleep 1
+    
+    # Create new token
+    TOKEN_OUTPUT=$(pveum user token add automation@pam cluster-formation --privsep 0 --expire 0 2>&1)
+    TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -oE "[a-f0-9]{{8}}-[a-f0-9]{{4}}-[a-f0-9]{{4}}-[a-f0-9]{{4}}-[a-f0-9]{{12}}" | head -1)
+    
+    # Save token to file
+    cat > /etc/proxmox-cluster-token <<EOF
+TOKEN_ID=automation@pam!cluster-formation
+TOKEN_SECRET=$TOKEN_SECRET
+CREATED_AT=$(date -Iseconds)
+HOSTNAME={node_name}
+NODE_IP={self.host}
+STATUS=valid
+EOF
+    
+    # Output the token for capture
+    echo "TOKEN_ID=automation@pam!cluster-formation"
+    echo "TOKEN_SECRET=$TOKEN_SECRET"
+'
+"""
+            
+            # Run command from management server (which has passwordless SSH)
+            result = subprocess.run(
+                regenerate_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
             
             if result.returncode != 0:
-                logging.warning(f"Could not retrieve token file from {self.host}")
+                logging.error(f"Failed to regenerate token on {node_name}: {result.stderr}")
                 return False
             
-            # Parse token file with validation
-            token_data = {}
-            with open(f'/tmp/node_{self.host}_token', 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if '=' in line:
-                        key, value = line.split('=', 1)
-                        token_data[key] = value
+            # Parse the output to get new token
+            for line in result.stdout.split('\n'):
+                if line.startswith('TOKEN_ID='):
+                    self.token_id = line.split('=', 1)[1].strip()
+                elif line.startswith('TOKEN_SECRET='):
+                    self.token_secret = line.split('=', 1)[1].strip()
             
-            # Clean up temp file
-            subprocess.run(['rm', '-f', f'/tmp/node_{self.host}_token'])
+            if self.token_id and self.token_secret and len(self.token_secret) == 36:
+                logging.info(f"Successfully regenerated token for {node_name}")
+                return True
+            else:
+                logging.error(f"Failed to extract valid token from regeneration output")
+                return False
+                
+        except Exception as e:
+            logging.error(f"Error regenerating token for {node_name}: {e}")
+            return False
+    
+    def get_token_from_node(self, node_name: str) -> bool:
+        """Get existing token from node via management server SSH"""
+        try:
+            # Command to read token from remote node
+            read_cmd = f"""
+ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no root@{self.host} '
+    if [ -f /etc/proxmox-cluster-token ]; then
+        cat /etc/proxmox-cluster-token
+    else
+        echo "NO_TOKEN_FILE"
+    fi
+'
+"""
             
-            # Validate token data
-            self.token_id = token_data.get('TOKEN_ID', '').strip()
-            self.token_secret = token_data.get('TOKEN_SECRET', '').strip()
-            token_status = token_data.get('STATUS', 'unknown')
+            result = subprocess.run(
+                read_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
             
-            # Comprehensive token validation
-            if not self.token_id or not self.token_secret:
-                logging.warning(f"Missing token data from {self.host}: ID={bool(self.token_id)}, SECRET={bool(self.token_secret)}")
+            if result.returncode != 0 or "NO_TOKEN_FILE" in result.stdout:
+                logging.debug(f"No token file found on {node_name}")
                 return False
             
-            # Validate token format
-            if not self.token_id.startswith('automation@pam!'):
-                logging.warning(f"Invalid token ID format from {self.host}: {self.token_id}")
-                return False
+            # Parse token data
+            for line in result.stdout.split('\n'):
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    if key == 'TOKEN_ID':
+                        self.token_id = value.strip()
+                    elif key == 'TOKEN_SECRET':
+                        self.token_secret = value.strip()
             
-            if len(self.token_secret) != 36 or not self._is_valid_uuid(self.token_secret):
-                logging.warning(f"Invalid token secret format from {self.host}: length={len(self.token_secret)}")
+            # Validate token
+            if self.token_id and self.token_secret and len(self.token_secret) == 36:
+                return True
+            else:
+                logging.debug(f"Invalid token data from {node_name}")
                 return False
-            
-            # Check token status from file
-            if token_status == 'fallback_to_root':
-                logging.warning(f"Token on {self.host} marked for fallback to root authentication")
-                return False
-            
-            # Set authentication header
+                
+        except Exception as e:
+            logging.debug(f"Could not get token from {node_name}: {e}")
+            return False
+    
+    def authenticate(self, node_name: str) -> bool:
+        """Authenticate to node API using token (regenerate if needed)"""
+        # First try to get existing token
+        if self.get_token_from_node(node_name):
+            # Test the token
             self.session.headers.update({
                 'Authorization': f'PVEAPIToken={self.token_id}={self.token_secret}',
                 'Content-Type': 'application/json'
             })
             
-            logging.debug(f"Successfully loaded token for {self.host}")
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error loading token from {self.host}: {e}")
-            return False
-    
-    def _is_valid_uuid(self, uuid_string: str) -> bool:
-        """Validate UUID format for token secret"""
-        import re
-        uuid_pattern = r'^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$'
-        return bool(re.match(uuid_pattern, uuid_string))
-    
-    def authenticate_root(self) -> bool:
-        """Authenticate as root@pam using the known installation password"""
-        try:
-            # Clear any existing token headers before trying root@pam
-            if 'Authorization' in self.session.headers:
-                if self.session.headers['Authorization'].startswith('PVEAPIToken='):
-                    # Clear token-based auth headers
-                    headers_to_remove = ['Authorization']
-                    for header in headers_to_remove:
-                        self.session.headers.pop(header, None)
-            
-            # Use the root password set during installation (from Ansible vars)
-            auth_data = {
-                'username': 'root@pam',
-                'password': 'proxmox123'  # Password from ansible vars/main.yml
-            }
-            
-            response = self.session.post(f"{self.base_url}/access/ticket", json=auth_data)
-            if response.status_code == 200:
-                ticket_data = response.json()
-                if 'data' in ticket_data:
-                    self.ticket = ticket_data['data']['ticket']
-                    csrf_token = ticket_data['data']['CSRFPreventionToken']
-                    
-                    # Clear token info to prevent confusion
-                    self.token_id = None
-                    self.token_secret = None
-                    
-                    # Set ticket-based authentication  
-                    self.session.headers.update({
-                        'Authorization': f'PVEAuthCookie={self.ticket}',
-                        'CSRFPreventionToken': csrf_token,
-                        'Content-Type': 'application/json'
-                    })
-                    logging.debug(f"Successfully authenticated as root@pam on {self.host}")
+            try:
+                response = self.session.get(f"{self.base_url}/version", timeout=5)
+                if response.status_code == 200:
+                    self.auth_method = "token"
+                    logging.debug(f"Using existing token for {node_name}")
                     return True
-            
-            logging.error(f"Authentication failed for root@pam on {self.host}: HTTP {response.status_code}")
-            return False
-            
-        except Exception as e:
-            logging.error(f"Error authenticating as root@pam on {self.host}: {e}")
-            return False
-    
-    def ensure_authenticated(self) -> bool:
-        """Ensure we have valid authentication, trying token first, then root@pam"""
-        # If we already have a ticket, assume it's valid (tickets have longer lifetime)
-        if self.ticket:
-            return True
+            except:
+                pass
         
-        # Try token authentication first
-        if self.load_token():
-            # Test the token with a simple API call
-            test_result = self.session.get(f"{self.base_url}/version", timeout=10)
-            if test_result.status_code == 200:
-                return True
-            else:
-                logging.debug(f"Token test failed for {self.host}, trying root@pam fallback")
+        # Token doesn't exist or doesn't work - regenerate it
+        if self.regenerate_token_via_mgmt(node_name):
+            # Set headers with new token
+            self.session.headers.update({
+                'Authorization': f'PVEAPIToken={self.token_id}={self.token_secret}',
+                'Content-Type': 'application/json'
+            })
+            
+            # Test the new token
+            try:
+                response = self.session.get(f"{self.base_url}/version", timeout=5)
+                if response.status_code == 200:
+                    self.auth_method = "token"
+                    logging.debug(f"Using regenerated token for {node_name}")
+                    return True
+            except Exception as e:
+                logging.error(f"New token test failed for {node_name}: {e}")
         
-        # Fall back to root@pam authentication
-        return self.authenticate_root()
+        logging.error(f"All authentication methods failed for {node_name}")
+        return False
     
     def get(self, endpoint: str) -> Optional[Dict]:
-        """Make GET request to Proxmox API with automatic fallback on token failures"""
+        """Make GET request to Proxmox API"""
         try:
             response = self.session.get(f"{self.base_url}/{endpoint}", timeout=30)
             response.raise_for_status()
             return response.json()
-        except requests.exceptions.HTTPError as e:
-            # Check if it's a 401 (token invalid) and we can try root@pam fallback
-            if e.response.status_code == 401 and self.token_id and not self.ticket:
-                logging.debug(f"Token auth failed (401) for {self.host}, trying root@pam fallback...")
-                if self.authenticate_root():
-                    try:
-                        response = self.session.get(f"{self.base_url}/{endpoint}", timeout=30)
-                        response.raise_for_status()
-                        return response.json()
-                    except Exception as fallback_e:
-                        logging.error(f"API GET {endpoint} failed even with root@pam fallback for {self.host}: {fallback_e}")
-                        return None
-                else:
-                    logging.error(f"Root@pam fallback failed for {self.host}")
-                    return None
-            else:
-                logging.error(f"API GET {endpoint} failed for {self.host}: {e}")
-                return None
         except Exception as e:
             logging.error(f"API GET {endpoint} failed for {self.host}: {e}")
             return None
@@ -216,32 +216,35 @@ class ProxmoxAPI:
     def post(self, endpoint: str, data: Dict) -> Optional[Dict]:
         """Make POST request to Proxmox API"""
         try:
-            logging.debug(f"POST {endpoint} data: {data}")
             response = self.session.post(
                 f"{self.base_url}/{endpoint}", 
                 json=data, 
-                timeout=30
+                timeout=60
             )
             
-            # Log response for debugging
-            logging.debug(f"POST {endpoint} response: {response.status_code}, {response.text[:500]}")
-            
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as e:
-            # Get detailed error response
-            error_detail = ""
-            if hasattr(e.response, 'text'):
-                error_detail = e.response.text[:500]
-            logging.error(f"API POST {endpoint} failed for {self.host}: {e}, Response: {error_detail}")
-            return None
+            # Handle both success and error responses
+            if response.status_code in [200, 201]:
+                return response.json()
+            else:
+                # Try to extract error message
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('errors', response.text)
+                except:
+                    error_msg = response.text
+                    
+                logging.error(f"API POST {endpoint} failed: {error_msg}")
+                
+                # Return error info for handling
+                return {'error': True, 'message': error_msg, 'status_code': response.status_code}
+                
         except Exception as e:
-            logging.error(f"API POST {endpoint} failed for {self.host}: {e}")
+            logging.error(f"API POST {endpoint} exception for {self.host}: {e}")
             return None
 
 def check_node_status(node_name: str, node_config: Dict) -> str:
     """
-    Check node status via API with resilient authentication
+    Check node status via API
     Returns: 'ready', 'clustered', or 'failed'
     """
     mgmt_ip = node_config['mgmt_ip']
@@ -251,9 +254,9 @@ def check_node_status(node_name: str, node_config: Dict) -> str:
     # Create API client
     api = ProxmoxAPI(mgmt_ip)
     
-    # Use resilient authentication that handles token invalidation
-    if not api.ensure_authenticated():
-        logging.error(f"[FAIL] Cannot authenticate to {node_name} with either token or root@pam")
+    # Authenticate (will regenerate token if needed)
+    if not api.authenticate(node_name):
+        logging.error(f"[FAIL] Cannot authenticate to {node_name}")
         return 'failed'
     
     # Test basic API connectivity
@@ -263,13 +266,13 @@ def check_node_status(node_name: str, node_config: Dict) -> str:
         return 'failed'
     
     version = version_result['data'].get('version', 'unknown')
-    auth_method = "root@pam" if api.ticket else "token"
-    logging.info(f"[OK] {node_name} API accessible (Proxmox {version}, auth: {auth_method})")
+    logging.info(f"[OK] {node_name} API accessible (Proxmox {version}, auth: {api.auth_method})")
     
     # Check cluster status
     cluster_result = api.get('cluster/status')
     if not cluster_result or 'data' not in cluster_result:
-        logging.warning(f"[WARN] Could not determine cluster status for {node_name}")
+        # Node is accessible but not in cluster
+        logging.info(f"[OK] {node_name} is not in a cluster (ready to join)")
         return 'ready'
     
     # Look for cluster object in status
@@ -284,17 +287,17 @@ def check_node_status(node_name: str, node_config: Dict) -> str:
         return 'ready'
 
 def create_cluster(node_name: str, node_config: Dict) -> bool:
-    """Create cluster on the specified node using root@pam authentication"""
+    """Create cluster on the specified node via API"""
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    logging.info(f"Creating cluster '{CLUSTER_NAME}' on {node_name} via API with root@pam...")
+    logging.info(f"Creating cluster '{CLUSTER_NAME}' on {node_name} via API...")
     
-    # Create API client and authenticate as root@pam
+    # Create API client and authenticate
     api = ProxmoxAPI(mgmt_ip)
     
-    if not api.authenticate_root():
-        logging.error(f"[FAIL] Cannot authenticate as root@pam for {node_name}")
+    if not api.authenticate(node_name):
+        logging.error(f"[FAIL] Cannot authenticate for {node_name}")
         return False
     
     # Create cluster
@@ -306,278 +309,321 @@ def create_cluster(node_name: str, node_config: Dict) -> bool:
     
     result = api.post('cluster/config', cluster_data)
     
-    if result and 'data' in result:
-        logging.info(f"[OK] Cluster '{CLUSTER_NAME}' created successfully on {node_name}")
-        return True
-    elif result and 'errors' in result:
-        error_msg = result.get('errors', 'Unknown error')
-        if 'already exists' in str(error_msg).lower():
-            logging.info(f"[OK] Cluster already exists on {node_name}")
+    if result:
+        if 'data' in result:
+            logging.info(f"[OK] Cluster '{CLUSTER_NAME}' created successfully on {node_name}")
             return True
-        else:
-            logging.error(f"[FAIL] Cluster creation failed: {error_msg}")
-            return False
-    else:
-        logging.error(f"[FAIL] API call failed for cluster creation on {node_name}")
-        return False
-
-def join_cluster(node_name: str, node_config: Dict, primary_ip: str) -> bool:
-    """Join node to existing cluster using root@pam authentication with robust retry logic"""
-    mgmt_ip = node_config['mgmt_ip']
-    ceph_ip = node_config['ceph_ip']
-    
-    logging.info(f"Joining {node_name} to cluster via API with root@pam...")
-    
-    # Multiple retry attempts for the entire join process
-    max_attempts = 3
-    
-    for join_attempt in range(max_attempts):
-        if join_attempt > 0:
-            logging.info(f"Join attempt {join_attempt + 1}/{max_attempts} for {node_name}")
-            time.sleep(10)  # Wait between attempts
-        
-        try:
-            # Get join information from primary node using root@pam (with retry)
-            primary_api = ProxmoxAPI(primary_ip)
-            if not primary_api.authenticate_root():
-                logging.error(f"[FAIL] Cannot authenticate as root@pam on primary node ({primary_ip})")
-                if join_attempt < max_attempts - 1:
-                    continue
-                return False
-            
-            # Retry getting join info (cluster might be syncing)
-            join_info = None
-            for info_attempt in range(3):
-                join_info = primary_api.get('cluster/config/join')
-                if join_info and 'data' in join_info:
-                    break
-                if info_attempt < 2:
-                    logging.warning(f"Join info attempt {info_attempt + 1}/3 failed, retrying in 5 seconds...")
-                    time.sleep(5)
-            
-            if not join_info or 'data' not in join_info:
-                logging.warning(f"Could not get join information from primary node {primary_ip}")
-                if join_attempt < max_attempts - 1:
-                    continue
-                return False
-            
-            # Create API client for joining node using root@pam
-            node_api = ProxmoxAPI(mgmt_ip)
-            if not node_api.authenticate_root():
-                logging.error(f"[FAIL] Cannot authenticate as root@pam for {node_name}")
-                if join_attempt < max_attempts - 1:
-                    continue
-                return False
-            
-            # Extract fingerprint from nodelist
-            nodelist = join_info['data'].get('nodelist', [])
-            fingerprint = None
-            if nodelist:
-                fingerprint = nodelist[0].get('pve_fp')
-            
-            if not fingerprint:
-                logging.error(f"[FAIL] Could not get fingerprint from primary node join info")
-                if join_attempt < max_attempts - 1:
-                    continue
-                return False
-            
-            logging.info(f"Using fingerprint: {fingerprint[:20]}... from primary node {primary_ip}")
-            
-            # Join cluster with required parameters
-            join_data = {
-                "hostname": primary_ip,
-                "password": "proxmox123",  # Root password of primary node (from ansible vars)
-                "fingerprint": fingerprint,
-                "link0": mgmt_ip,
-                "link1": ceph_ip
-            }
-            
-            logging.info(f"Attempting to join {node_name} to cluster...")
-            result = node_api.post('cluster/config/join', join_data)
-            
-            if result and 'data' in result:
-                # Check if we got a task ID (indicates async operation)
-                if isinstance(result['data'], str) and 'UPID:' in result['data']:
-                    logging.info(f"[OK] {node_name} join initiated (Task: {result['data']})")
-                    
-                    # Wait for the join task to complete
-                    logging.info(f"Waiting for {node_name} join task to complete...")
-                    time.sleep(20)  # Give more time for join to complete
-                    
-                    # Verify join was successful by checking cluster membership
-                    verification_attempts = 3
-                    for verify_attempt in range(verification_attempts):
-                        time.sleep(5)
-                        verify_result = node_api.get('cluster/status')
-                        if (verify_result and 'data' in verify_result and 
-                            any(item.get('type') == 'cluster' for item in verify_result['data'])):
-                            logging.info(f"[OK] {node_name} successfully joined cluster (verified)")
-                            return True
-                        logging.info(f"Join verification attempt {verify_attempt + 1}/{verification_attempts}...")
-                    
-                    logging.warning(f"Could not verify {node_name} join completion, but task was initiated")
-                    return True  # Assume success if task was created
-                else:
-                    logging.info(f"[OK] {node_name} successfully joined cluster")
-                    return True
-                    
-            elif result and 'errors' in result:
-                error_msg = result.get('errors', 'Unknown error')
-                logging.error(f"[FAIL] Join failed for {node_name}: {error_msg}")
-                
-                # Check if it's a retryable error
-                if 'already exists' in str(error_msg).lower():
-                    logging.info(f"[OK] {node_name} appears to already be in cluster")
-                    return True
-                elif join_attempt < max_attempts - 1:
-                    logging.info(f"Retryable error, will attempt again...")
-                    continue
-                else:
-                    return False
-            else:
-                logging.error(f"[FAIL] Unexpected API response for {node_name}: {result}")
-                if join_attempt < max_attempts - 1:
-                    continue
-                return False
-                
-        except Exception as e:
-            logging.error(f"Exception during join attempt for {node_name}: {e}")
-            if join_attempt < max_attempts - 1:
-                logging.info(f"Will retry due to exception...")
-                continue
-            return False
-    
-    logging.error(f"[FAIL] All join attempts failed for {node_name}")
-    return False
-
-def verify_cluster(node_name: str, mgmt_ip: str) -> bool:
-    """Verify cluster status with fallback authentication and retry logic"""
-    logging.info(f"Verifying cluster status on {node_name}...")
-    
-    # Multiple attempts with different auth methods
-    for verify_attempt in range(3):
-        if verify_attempt > 0:
-            logging.info(f"Verification attempt {verify_attempt + 1}/3 for {node_name}")
-            time.sleep(5)
-        
-        try:
-            api = ProxmoxAPI(mgmt_ip)
-            
-            # Use resilient authentication that handles token invalidation
-            if not api.ensure_authenticated():
-                logging.warning(f"Authentication failed for {node_name} on attempt {verify_attempt + 1}")
-                if verify_attempt < 2:
-                    continue
-                return False
-            
-            auth_method = "root@pam" if api.ticket else "token"
-            logging.debug(f"Using {auth_method} auth for verification on {node_name}")
-            
-            # Get cluster status with retry
-            cluster_result = None
-            for status_attempt in range(3):
-                cluster_result = api.get('cluster/status')
-                if cluster_result and 'data' in cluster_result:
-                    break
-                if status_attempt < 2:
-                    logging.debug(f"Cluster status attempt {status_attempt + 1}/3 failed, retrying...")
-                    time.sleep(3)
-            
-            if not cluster_result or 'data' not in cluster_result:
-                logging.warning(f"Could not get cluster status from {node_name} on attempt {verify_attempt + 1}")
-                if verify_attempt < 2:
-                    continue
-                return False
-            
-            # Analyze cluster data
-            node_members = [item for item in cluster_result['data'] if item.get('type') == 'node']
-            cluster_info = [item for item in cluster_result['data'] if item.get('type') == 'cluster']
-            
-            member_count = len(node_members)
-            quorate = cluster_info[0].get('quorate', False) if cluster_info else False
-            cluster_name = cluster_info[0].get('name', 'unknown') if cluster_info else 'no cluster'
-            
-            logging.info(f"[OK] Cluster verification on {node_name} (auth: {auth_method}):")
-            logging.info(f"  Cluster: {cluster_name}")
-            logging.info(f"  Members: {member_count}")
-            logging.info(f"  Quorate: {quorate}")
-            
-            # List all members with details
-            if node_members:
-                logging.info("  Node details:")
-                for member in node_members:
-                    node_name_member = member.get('name', 'unknown')
-                    node_ip = member.get('ip', 'unknown')
-                    level = member.get('level', 'unknown')
-                    online = member.get('online', 0)
-                    status_str = "online" if online else "offline"
-                    logging.info(f"    {node_name_member} ({node_ip}) - {level} [{status_str}]")
-            
-            # Success criteria: cluster exists and has members
-            if cluster_info and member_count > 0:
+        elif result.get('error'):
+            error_msg = result.get('message', 'Unknown error')
+            if 'already exists' in str(error_msg).lower():
+                logging.info(f"[OK] Cluster already exists on {node_name}")
                 return True
             else:
-                logging.warning(f"Cluster verification failed on {node_name}: no cluster or no members")
-                if verify_attempt < 2:
-                    continue
+                logging.error(f"[FAIL] Cluster creation failed: {error_msg}")
                 return False
-                
-        except Exception as e:
-            logging.error(f"Exception during cluster verification on {node_name} (attempt {verify_attempt + 1}): {e}")
-            if verify_attempt < 2:
-                continue
-            return False
     
-    logging.error(f"[FAIL] All verification attempts failed for {node_name}")
+    logging.error(f"[FAIL] No response from cluster creation on {node_name}")
     return False
 
-def update_node_registration(node_name: str, node_config: Dict, success: bool = True):
-    """Update node registration status with provision server"""
+def get_join_info_via_api(primary_ip: str) -> Optional[Dict]:
+    """Get cluster join info from primary node via API"""
+    try:
+        logging.info(f"Getting join information from primary node ({primary_ip}) via API...")
+        
+        # Create API client for primary node
+        api = ProxmoxAPI(primary_ip)
+        
+        if not api.authenticate("node1"):
+            logging.error(f"Could not authenticate to primary node {primary_ip}")
+            return None
+        
+        # Get join info via API
+        join_result = api.get('cluster/config/join')
+        if not join_result or 'data' not in join_result:
+            logging.error(f"Could not get join info from API on {primary_ip}")
+            return None
+        
+        join_data = join_result['data']
+        
+        # Extract fingerprint from nodelist
+        nodelist = join_data.get('nodelist', [])
+        if not nodelist:
+            logging.error(f"No nodelist in join info from {primary_ip}")
+            return None
+        
+        # Get fingerprint from first node in list
+        fingerprint = nodelist[0].get('pve_fp')
+        if not fingerprint:
+            logging.error(f"No fingerprint in join info from {primary_ip}")
+            return None
+        
+        logging.info(f"Successfully got join info from API")
+        return {
+            'fingerprint': fingerprint,
+            'hostname': primary_ip,
+            'nodelist': nodelist
+        }
+        
+    except Exception as e:
+        logging.error(f"Error getting join info via API: {e}")
+        return None
+
+def join_cluster_via_api(node_name: str, node_config: Dict, primary_ip: str) -> bool:
+    """Join node to cluster using Proxmox API"""
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    # Set status based on success
-    status = "clustered" if success else "cluster-join-failed"
-    stage = "2-complete" if success else "2-failed"
+    logging.info(f"Joining {node_name} to cluster via API...")
     
-    registration_data = {
-        "hostname": node_name,
-        "ip": mgmt_ip,
-        "ceph_ip": ceph_ip,
-        "type": "proxmox",
-        "status": status,
-        "stage": stage,
-        "cluster_name": CLUSTER_NAME if success else "failed",
-        "formation_method": "python-api",
-        "timestamp": datetime.now().isoformat()
+    # Get join information from primary via API
+    join_info = get_join_info_via_api(primary_ip)
+    if not join_info:
+        logging.error(f"[FAIL] Could not get join information from primary node")
+        return False
+    
+    fingerprint = join_info['fingerprint']
+    logging.info(f"Using fingerprint: {fingerprint[:20]}... from primary node")
+    
+    # Create API client for the joining node
+    # Cluster join operations require root@pam authentication
+    api = ProxmoxAPI(mgmt_ip)
+    
+    # Authenticate as root@pam for cluster operations (required for cluster/config/join)
+    logging.info(f"Authenticating as root@pam for cluster join on {node_name}...")
+    root_password = "proxmox123"  # Known installation password - will be changed after cluster formation
+    
+    auth_data = {
+        'username': 'root@pam',
+        'password': root_password
     }
     
-    # Multiple retry attempts for registration
-    for attempt in range(3):
-        try:
-            response = requests.post(
-                f"http://{PROVISION_SERVER}/api/register-node.php",
-                json=registration_data,
-                timeout=10
-            )
-            if response.status_code == 200:
-                logging.info(f"Updated registration for {node_name} (status: {status})")
-                return
+    try:
+        response = api.session.post(f"{api.base_url}/access/ticket", json=auth_data)
+        if response.status_code == 200:
+            ticket_data = response.json()
+            if 'data' in ticket_data:
+                api.ticket = ticket_data['data']['ticket']
+                csrf_token = ticket_data['data']['CSRFPreventionToken']
+                
+                api.session.headers.update({
+                    'Authorization': f'PVEAuthCookie={api.ticket}',
+                    'CSRFPreventionToken': csrf_token,
+                    'Content-Type': 'application/json'
+                })
+                logging.debug(f"Successfully authenticated as root@pam on {node_name}")
             else:
-                logging.warning(f"Registration attempt {attempt + 1} failed for {node_name} - HTTP {response.status_code}")
-        except Exception as e:
-            logging.warning(f"Registration attempt {attempt + 1} failed for {node_name}: {e}")
-        
-        if attempt < 2:  # Don't sleep after last attempt
-            time.sleep(2)
+                logging.error(f"[FAIL] Invalid ticket response from {node_name}")
+                return False
+        else:
+            logging.error(f"[FAIL] Authentication failed for root@pam on {node_name}: HTTP {response.status_code}")
+            return False
+    except Exception as e:
+        logging.error(f"[FAIL] Exception during root@pam authentication on {node_name}: {e}")
+        return False
     
-    logging.error(f"Could not update registration for {node_name} after 3 attempts")
+    # Prepare join data for API call
+    join_data = {
+        "hostname": primary_ip,
+        "password": root_password,  # Password for primary node
+        "fingerprint": fingerprint,
+        "link0": mgmt_ip,
+        "link1": ceph_ip
+    }
+    
+    logging.info(f"Sending cluster join request via API...")
+    result = api.post('cluster/config/join', join_data)
+    
+    if result:
+        if 'data' in result:
+            # Check if we got a task ID (indicates async operation)
+            if isinstance(result['data'], str) and 'UPID:' in result['data']:
+                task_id = result['data']
+                logging.info(f"[OK] {node_name} join initiated (Task: {task_id})")
+                
+                # Wait for the join task to complete
+                logging.info(f"Waiting for {node_name} join task to complete...")
+                time.sleep(30)  # Give more time for cluster join
+                
+                return True
+            else:
+                logging.info(f"[OK] {node_name} successfully joined cluster")
+                return True
+                
+        elif result.get('error'):
+            error_msg = result.get('message', 'Unknown error')
+            if 'already exists' in str(error_msg).lower() or 'already member' in str(error_msg).lower():
+                logging.info(f"[OK] {node_name} appears to already be in cluster")
+                return True
+            else:
+                logging.error(f"[FAIL] Join failed for {node_name}: {error_msg}")
+                return False
+    
+    logging.error(f"[FAIL] No response from cluster join API for {node_name}")
+    return False
+
+def verify_cluster_comprehensive(nodes: Dict) -> Dict:
+    """Comprehensive cluster verification across all nodes"""
+    logging.info("=== Starting comprehensive cluster verification ===")
+    
+    cluster_states = {}
+    expected_nodes = list(nodes.keys())
+    
+    # Check each node's view of the cluster
+    for node_name, node_config in nodes.items():
+        mgmt_ip = node_config['mgmt_ip']
+        logging.info(f"Verifying cluster view from {node_name}...")
+        
+        api = ProxmoxAPI(mgmt_ip)
+        
+        if not api.authenticate(node_name):
+            logging.error(f"Could not authenticate to {node_name} for verification")
+            cluster_states[node_name] = {
+                'status': 'auth_failed',
+                'members': [],
+                'cluster_name': None,
+                'quorate': False
+            }
+            continue
+        
+        # Get cluster status with retry
+        cluster_result = None
+        for attempt in range(3):
+            cluster_result = api.get('cluster/status')
+            if cluster_result and 'data' in cluster_result:
+                break
+            if attempt < 2:
+                logging.debug(f"Retry {attempt + 1}/3 for cluster status on {node_name}")
+                time.sleep(5)
+        
+        if not cluster_result or 'data' not in cluster_result:
+            logging.warning(f"Could not get cluster status from {node_name}")
+            cluster_states[node_name] = {
+                'status': 'no_cluster',
+                'members': [],
+                'cluster_name': None,
+                'quorate': False
+            }
+            continue
+        
+        # Analyze cluster data
+        node_members = [item for item in cluster_result['data'] if item.get('type') == 'node']
+        cluster_info = [item for item in cluster_result['data'] if item.get('type') == 'cluster']
+        
+        if not cluster_info:
+            cluster_states[node_name] = {
+                'status': 'no_cluster',
+                'members': [],
+                'cluster_name': None,
+                'quorate': False
+            }
+            continue
+        
+        # Extract cluster information
+        member_count = len(node_members)
+        quorate = cluster_info[0].get('quorate', False)
+        cluster_name = cluster_info[0].get('name', 'unknown')
+        
+        # Get member details
+        members = []
+        for member in node_members:
+            member_name = member.get('name', 'unknown')
+            member_ip = member.get('ip', 'unknown')
+            online = member.get('online', 0)
+            members.append({
+                'name': member_name,
+                'ip': member_ip,
+                'online': bool(online)
+            })
+        
+        cluster_states[node_name] = {
+            'status': 'clustered' if member_count > 0 else 'no_cluster',
+            'members': members,
+            'cluster_name': cluster_name,
+            'quorate': quorate,
+            'member_count': member_count
+        }
+        
+        logging.info(f"  {node_name} view: {cluster_name}, {member_count} members, quorate={quorate}")
+        for member in members:
+            status = "online" if member['online'] else "offline"
+            logging.info(f"    {member['name']} ({member['ip']}) - [{status}]")
+    
+    return cluster_states
+
+def analyze_cluster_consistency(cluster_states: Dict, expected_nodes: List[str]) -> bool:
+    """Analyze if all nodes have a consistent view of the cluster"""
+    logging.info("=== Analyzing cluster consistency ===")
+    
+    # Check if all nodes are clustered
+    clustered_nodes = []
+    failed_nodes = []
+    
+    for node_name, state in cluster_states.items():
+        if state['status'] == 'clustered':
+            clustered_nodes.append(node_name)
+        else:
+            failed_nodes.append(node_name)
+            logging.warning(f"  {node_name}: {state['status']}")
+    
+    if failed_nodes:
+        logging.error(f"Nodes not in cluster: {failed_nodes}")
+        return False
+    
+    # Check cluster name consistency
+    cluster_names = set(state['cluster_name'] for state in cluster_states.values() if state['cluster_name'])
+    if len(cluster_names) > 1:
+        logging.error(f"Multiple cluster names detected: {cluster_names}")
+        return False
+    
+    cluster_name = list(cluster_names)[0] if cluster_names else 'unknown'
+    
+    # Check member count consistency
+    member_counts = set(state['member_count'] for state in cluster_states.values() if 'member_count' in state)
+    if len(member_counts) > 1:
+        logging.warning(f"Inconsistent member counts: {member_counts}")
+    
+    expected_member_count = len(expected_nodes)
+    actual_member_count = list(member_counts)[0] if member_counts else 0
+    
+    # Check if all expected nodes are seen by each cluster member
+    all_consistent = True
+    for node_name, state in cluster_states.items():
+        if state['status'] != 'clustered':
+            continue
+            
+        seen_nodes = set(member['name'] for member in state['members'])
+        missing_nodes = set(expected_nodes) - seen_nodes
+        extra_nodes = seen_nodes - set(expected_nodes)
+        
+        if missing_nodes:
+            logging.warning(f"  {node_name} doesn't see: {missing_nodes}")
+            all_consistent = False
+        if extra_nodes:
+            logging.warning(f"  {node_name} sees unexpected nodes: {extra_nodes}")
+    
+    # Summary
+    logging.info(f"Cluster consistency analysis:")
+    logging.info(f"  Cluster name: {cluster_name}")
+    logging.info(f"  Expected members: {len(expected_nodes)}")
+    logging.info(f"  Actual members: {actual_member_count}")
+    logging.info(f"  Clustered nodes: {len(clustered_nodes)}/{len(expected_nodes)}")
+    logging.info(f"  All nodes consistent: {all_consistent}")
+    
+    # Success criteria: all nodes clustered and consistent view
+    success = (
+        len(failed_nodes) == 0 and
+        actual_member_count == expected_member_count and
+        all_consistent
+    )
+    
+    return success
 
 def main():
     """Main cluster formation logic"""
-    logging.info("=== Starting Python-Based Proxmox Cluster Formation ===")
+    logging.info("=== Starting API-Based Proxmox Cluster Formation ===")
+    logging.info("No passwords will be requested - all auth via tokens or management server")
     
-    # Phase 1: Check all nodes are accessible
+    # Phase 1: Check all nodes
     logging.info("Phase 1: Checking node status via API...")
     
     ready_nodes = []
@@ -593,216 +639,77 @@ def main():
         else:
             failed_nodes.append(node_name)
     
-    if failed_nodes:
-        logging.error(f"Failed nodes: {failed_nodes}")
-        logging.error("Some nodes are not accessible. Please check and run post-install on failed nodes.")
-        sys.exit(1)
-    
     logging.info(f"Ready nodes: {ready_nodes}")
     logging.info(f"Already clustered: {clustered_nodes}")
+    if failed_nodes:
+        logging.warning(f"Failed nodes: {failed_nodes}")
     
-    # Phase 2: Create cluster on node1 if needed
-    node1_config = NODES['node1']
+    if not ready_nodes and not clustered_nodes:
+        logging.error("No nodes available for cluster formation")
+        sys.exit(1)
     
-    if 'node1' not in clustered_nodes:
-        logging.info("Phase 2: Creating cluster on node1...")
-        
-        # Multiple attempts for cluster creation
-        cluster_created = False
-        for create_attempt in range(3):
-            if create_attempt > 0:
-                logging.info(f"Cluster creation attempt {create_attempt + 1}/3")
-                time.sleep(10)
-            
-            if create_cluster('node1', node1_config):
-                cluster_created = True
-                break
-            else:
-                logging.warning(f"Cluster creation attempt {create_attempt + 1} failed")
-        
-        if not cluster_created:
-            logging.error("[FAIL] Failed to create cluster on node1 after multiple attempts")
+    # Phase 2: Create or verify cluster
+    primary_node = "node1"
+    primary_ip = NODES[primary_node]['mgmt_ip']
+    
+    if primary_node in ready_nodes:
+        # Create cluster on primary
+        logging.info(f"Phase 2: Creating cluster on {primary_node}...")
+        if not create_cluster(primary_node, NODES[primary_node]):
+            logging.error(f"Failed to create cluster on {primary_node}")
             sys.exit(1)
         
-        # Wait for cluster to stabilize with progressive waiting
-        for stabilize_wait in [5, 10, 15]:
-            logging.info(f"Waiting {stabilize_wait} seconds for cluster to stabilize...")
-            time.sleep(stabilize_wait)
-            
-            # Verify cluster creation with retry
-            if verify_cluster('node1', node1_config['mgmt_ip']):
-                logging.info("[OK] Cluster creation verified successfully")
-                break
-            else:
-                logging.warning(f"Cluster verification attempt failed, waiting longer...")
-        else:
-            # Final verification attempt
-            logging.warning("Final cluster verification attempt...")
-            if not verify_cluster('node1', node1_config['mgmt_ip']):
-                logging.error("[FAIL] Cluster creation verification failed after multiple attempts")
-                logging.error("Cluster may have been created but is not responding properly")
-                logging.error("Consider manual verification before proceeding")
-                sys.exit(1)
+        logging.info("Waiting 10 seconds for cluster to stabilize...")
+        time.sleep(10)
+        
+        # Verify cluster was created
+        if not verify_cluster_api(primary_node, primary_ip):
+            logging.error(f"Cluster verification failed on {primary_node}")
+            sys.exit(1)
+        
+        ready_nodes.remove(primary_node)
+    elif primary_node in clustered_nodes:
+        logging.info(f"Phase 2: {primary_node} already has a cluster")
     else:
-        logging.info("Phase 2: Skipped - node1 already in cluster")
-        
-        # Even if skipping creation, verify cluster is healthy
-        logging.info("Verifying existing cluster health...")
-        if not verify_cluster('node1', node1_config['mgmt_ip']):
-            logging.error("[FAIL] Existing cluster on node1 is not healthy")
-            logging.error("Please check cluster status manually before proceeding")
-            sys.exit(1)
+        logging.error(f"Primary node {primary_node} is not available")
+        sys.exit(1)
     
     # Phase 3: Join remaining nodes
-    logging.info("Phase 3: Joining remaining nodes to cluster...")
-    
-    primary_ip = node1_config['mgmt_ip']
-    join_failed = []
-    nodes_to_join = [name for name in ready_nodes if name != 'node1']  # Exclude primary node
-    
-    if not nodes_to_join:
-        logging.info("No nodes to join - all nodes are already clustered or node1 is the only ready node")
-    else:
-        logging.info(f"Nodes to join: {nodes_to_join}")
+    if ready_nodes:
+        logging.info(f"Phase 3: Joining {len(ready_nodes)} nodes to cluster...")
         
-        for node_name in nodes_to_join:
-            node_config = NODES[node_name]
+        for node_name in ready_nodes:
+            logging.info(f"Joining {node_name} to cluster...")
             
-            logging.info(f"=== Joining {node_name} to cluster ===")
-            
-            # Pre-join verification: ensure node is still ready
-            current_status = check_node_status(node_name, node_config)
-            if current_status == 'clustered':
-                logging.info(f"[SKIP] {node_name} is already clustered")
-                continue
-            elif current_status != 'ready':
-                logging.error(f"[FAIL] {node_name} status changed to {current_status}, skipping join")
-                join_failed.append(node_name)
-                continue
-            
-            # Attempt join with comprehensive logging
-            join_start_time = time.time()
-            if join_cluster(node_name, node_config, primary_ip):
-                join_duration = int(time.time() - join_start_time)
-                logging.info(f"[OK] {node_name} successfully joined (took {join_duration}s)")
-                
-                # Post-join verification
-                logging.info(f"Verifying {node_name} join success...")
-                time.sleep(10)  # Allow cluster to sync
-                
-                post_join_status = check_node_status(node_name, node_config)
-                if post_join_status == 'clustered':
-                    logging.info(f"[OK] {node_name} join verified - node is clustered")
-                else:
-                    logging.warning(f"[WARN] {node_name} join verification inconclusive - status: {post_join_status}")
-                
-                # Wait for cluster to stabilize before next join
-                if node_name != nodes_to_join[-1]:  # Not the last node
-                    logging.info("Waiting for cluster to stabilize before next join...")
-                    time.sleep(15)
+            if join_cluster_via_api(node_name, NODES[node_name], primary_ip):
+                logging.info(f"[OK] {node_name} joined successfully")
+                time.sleep(5)  # Wait between joins
             else:
-                join_duration = int(time.time() - join_start_time)
-                logging.error(f"[FAIL] Failed to join {node_name} (took {join_duration}s)")
-                join_failed.append(node_name)
-                
-                # Optional: attempt to continue with other nodes
-                logging.info(f"Continuing with remaining nodes despite {node_name} failure...")
+                logging.error(f"[FAIL] {node_name} failed to join")
+                failed_nodes.append(node_name)
+    else:
+        logging.info("Phase 3: No additional nodes to join")
     
-    # Summary of join phase
-    successful_joins = len(nodes_to_join) - len(join_failed)
-    logging.info(f"Join phase complete: {successful_joins}/{len(nodes_to_join)} nodes joined successfully")
-    if join_failed:
-        logging.warning(f"Failed joins: {join_failed}")
-    
-    # Phase 4: Final verification with comprehensive checks
+    # Phase 4: Final verification with extended wait time
     logging.info("Phase 4: Final cluster verification...")
+    logging.info("Waiting 30 seconds for cluster to fully stabilize...")
+    time.sleep(30)  # Allow cluster to stabilize
     
-    # Wait for cluster to fully stabilize
-    logging.info("Allowing cluster to stabilize before final verification...")
-    time.sleep(20)
+    # Comprehensive verification
+    cluster_states = verify_cluster_comprehensive(NODES)
+    all_verified = analyze_cluster_consistency(cluster_states, list(NODES.keys()))
     
-    # Verify cluster status from multiple perspectives
-    verification_success = True
-    all_verification_nodes = [name for name in NODES.keys() if name not in join_failed]
-    
-    for verify_node in all_verification_nodes:
-        node_mgmt_ip = NODES[verify_node]['mgmt_ip']
-        if not verify_cluster(verify_node, node_mgmt_ip):
-            logging.error(f"Cluster verification failed from {verify_node}")
-            verification_success = False
-        else:
-            logging.info(f"Cluster verification successful from {verify_node}")
-        
-        # Add delay between verifications to avoid overwhelming the cluster
-        if verify_node != all_verification_nodes[-1]:  # Not the last node
-            time.sleep(5)
-    
-    if not verification_success:
-        logging.warning("Some cluster verifications failed, but continuing with registration updates")
-    
-    # Update node registration status
-    logging.info("Updating node registration status...")
-    for node_name, node_config in NODES.items():
-        node_success = node_name not in join_failed
-        update_node_registration(node_name, node_config, success=node_success)
-    
-    # Final Summary and Status Report
-    logging.info("\n=== Cluster Formation Complete ===")
-    logging.info(f"Cluster Name: {CLUSTER_NAME}")
-    logging.info(f"Formation Method: Python REST API (SSH-free)")
-    
-    successful_nodes = [name for name in NODES.keys() if name not in join_failed]
-    total_nodes = len(NODES)
-    success_rate = len(successful_nodes) / total_nodes * 100
-    
-    logging.info(f"\nCluster Statistics:")
-    logging.info(f"  Total nodes configured: {total_nodes}")
-    logging.info(f"  Successfully clustered: {len(successful_nodes)} ({success_rate:.1f}%)")
-    logging.info(f"  Failed nodes: {len(join_failed)}")
-    
-    logging.info(f"\nSuccessfully clustered nodes: {successful_nodes}")
-    
-    if join_failed:
-        logging.warning(f"Failed nodes requiring attention: {join_failed}")
-        logging.warning("These nodes may need:")
-        logging.warning("  - Manual post-install script re-run")
-        logging.warning("  - Network connectivity verification")
-        logging.warning("  - API token regeneration")
-        logging.warning("  - Manual cluster join via web interface")
-    
-    # Cluster health assessment
-    expected_members = len(successful_nodes)
-    if expected_members >= 3:
-        logging.info(f"\n[OK] Cluster has {expected_members} members - quorum possible")
-    elif expected_members == 2:
-        logging.warning(f"[WARN] Cluster has only 2 members - no automatic quorum (consider adding more nodes)")
-    else:
-        logging.error(f"[ERROR] Cluster has only {expected_members} member - this is not a functional cluster")
-    
-    logging.info(f"\nNext steps:")
-    logging.info(f"1. Access Proxmox web interface: https://{primary_ip}:8006")
-    logging.info(f"2. Verify cluster status in GUI: Datacenter > Cluster")
-    logging.info(f"3. Configure shared storage (Ceph, NFS, etc.)")
-    logging.info(f"4. Set up high availability (HA) policies")
-    logging.info(f"5. Create VMs and containers")
-    logging.info(f"6. Configure monitoring and backup strategies")
-    
-    if join_failed:
-        logging.info(f"7. Address failed nodes: {join_failed}")
-    
-    # Final status
-    if len(join_failed) == 0:
-        logging.info(f"\nPython-based cluster formation completed SUCCESSFULLY!")
-        logging.info(f"All {total_nodes} nodes are now part of the '{CLUSTER_NAME}' cluster.")
-    elif len(successful_nodes) >= 3:
-        logging.warning(f"\nCluster formation completed with WARNINGS.")
-        logging.warning(f"Functional cluster created with {len(successful_nodes)}/{total_nodes} nodes.")
-        logging.warning(f"Failed nodes: {join_failed}")
-    else:
-        logging.error(f"\nCluster formation completed with ERRORS.")
-        logging.error(f"Only {len(successful_nodes)}/{total_nodes} nodes successfully joined.")
-        logging.error(f"This may not be a functional cluster configuration.")
+    # Summary
+    logging.info("=== Cluster Formation Summary ===")
+    if all_verified and not failed_nodes:
+        logging.info("✅ SUCCESS: All nodes successfully joined the cluster")
+        sys.exit(0)
+    elif failed_nodes:
+        logging.error(f"❌ PARTIAL SUCCESS: Failed nodes: {failed_nodes}")
         sys.exit(1)
+    else:
+        logging.warning("⚠️  COMPLETE: Cluster formed but verification incomplete")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

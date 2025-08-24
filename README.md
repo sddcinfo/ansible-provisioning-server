@@ -1,12 +1,12 @@
-# Ansible Provisioning Server
+# Bare-Metal Provisioning Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Ansible](https://img.shields.io/badge/ansible-%3E%3D2.9-blue.svg)](https://www.ansible.com/)
+[![Proxmox](https://img.shields.io/badge/Proxmox-9.x-orange.svg)](https://www.proxmox.com/)
 [![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%20%7C%2022.04%20%7C%2024.04-orange.svg)](https://ubuntu.com/)
 
-Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE clusters.
+Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9 clusters.
 
-An Ansible-based automation solution that deploys and manages a comprehensive provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation.
+A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE 9 clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation via the Proxmox API.
 
 ## Table of Contents
 
@@ -28,7 +28,9 @@ An Ansible-based automation solution that deploys and manages a comprehensive pr
 
 ## Overview
 
-The Ansible Provisioning Server automates the deployment of a complete bare-metal provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers and Proxmox VE clusters at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
+The Bare-Metal Provisioning Server automates the deployment of a complete provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers and Proxmox VE 9 clusters at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
+
+**Note**: Ansible is used only for initial setup of the provisioning server infrastructure. Proxmox node configuration is handled by self-contained Python and shell scripts that run directly on the nodes after installation.
 
 ## Features
 
