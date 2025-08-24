@@ -136,11 +136,11 @@ if ! grep -q "broadcast 10.10.1.255" /etc/network/interfaces; then
     cp /etc/network/interfaces /tmp/interfaces.tmp
     
     # Find vmbr0 section and add broadcast after address line
-    awk '
-    /^iface vmbr0 inet static/ { in_vmbr0 = 1; print; next }
-    in_vmbr0 && /^[[:space:]]*address.*\/24/ { print; print "	broadcast 10.10.1.255"; broadcast_added = 1; next }
-    in_vmbr0 && /^iface|^auto/ && !/vmbr0/ { in_vmbr0 = 0 }
-    { print }
+    awk ' \
+    /^iface vmbr0 inet static/ { in_vmbr0 = 1; print; next } \
+    in_vmbr0 && /^[[:space:]]*address.*\/24/ { print; print "\tbroadcast 10.10.1.255"; broadcast_added = 1; next } \
+    in_vmbr0 && /^iface|^auto/ && !/vmbr0/ { in_vmbr0 = 0 } \
+    { print } \
     ' /etc/network/interfaces > /tmp/interfaces.tmp
     
     # Verify the change was made correctly
@@ -293,136 +293,8 @@ mkdir -p /var/lib/vz/template/iso
 mkdir -p /var/lib/vz/template/cache
 mkdir -p /var/lib/vz/dump
 
-# 7. Set up API user for cluster management
-log "Step 7: Setting up API user for cluster management..."
-
-# Create a dedicated user for cluster formation operations
-if ! pveum user list | grep -q "automation@pam"; then
-    pveum user add automation@pam --comment "Automated cluster formation user"
-    log "Created automation@pam user"
-else
-    log "automation@pam user already exists"
-fi
-
-# Create API token for the automation user with robust parsing
-TOKEN_NAME="cluster-formation"
-if pveum user token list automation@pam | grep -q "$TOKEN_NAME"; then
-    log "API token $TOKEN_NAME already exists, removing old token"
-    pveum user token remove automation@pam $TOKEN_NAME 2>/dev/null || true
-    sleep 2  # Wait for token removal to propagate
-fi
-
-# Create token with multiple retry attempts
-TOKEN_ID="automation@pam!cluster-formation"
-TOKEN_SECRET=""
-for attempt in 1 2 3; do
-    log "Creating API token (attempt $attempt/3)..."
-    TOKEN_OUTPUT=$(pveum user token add automation@pam $TOKEN_NAME --privsep 0 --expire 0 2>&1)
-    
-    if [ $? -eq 0 ]; then
-        # Multiple parsing strategies for robust token extraction
-        TOKEN_SECRET=$(echo "$TOKEN_OUTPUT" | grep -oE '[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}' | head -1)
-        
-        # Validate token secret format
-        if [[ -n "$TOKEN_SECRET" && ${#TOKEN_SECRET} -eq 36 && "$TOKEN_SECRET" =~ ^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$ ]]; then
-            log "✅ Created API token successfully"
-            log "Token ID: $TOKEN_ID"
-            log "Token secret format: ${TOKEN_SECRET:0:8}-****-****-****-${TOKEN_SECRET:32:4}"
-            break
-        else
-            log "WARNING: Token parsing failed, extracted: '$TOKEN_SECRET' (length: ${#TOKEN_SECRET})"
-            if [ $attempt -lt 3 ]; then
-                sleep 2
-                continue
-            fi
-        fi
-    else
-        log "WARNING: Token creation failed: $TOKEN_OUTPUT"
-    fi
-done
-
-# Final validation
-if [[ -z "$TOKEN_SECRET" || ${#TOKEN_SECRET} -ne 36 ]]; then
-    log "❌ Failed to create valid API token after 3 attempts"
-    log "Cluster formation will rely on root@pam authentication"
-    TOKEN_ID=""
-    TOKEN_SECRET=""
-else
-    # Test the token immediately to ensure it works
-    log "🔍 Testing API token functionality..."
-    TEST_RESULT=$(curl -k -s -H "Authorization: PVEAPIToken=$TOKEN_ID=$TOKEN_SECRET" \
-        "https://localhost:8006/api2/json/version" 2>/dev/null | grep -o '"version"' | head -1)
-    
-    if [ "$TEST_RESULT" = '"version"' ]; then
-        log "SUCCESS: API token validation successful"
-    else
-        log "WARNING: API token validation failed, cluster formation may use root authentication"
-    fi
-fi
-
-# Grant necessary permissions for cluster operations
-pveum acl modify / --users automation@pam --roles Administrator
-log "Granted Administrator role to automation@pam user"
-
-# Store token information for cluster formation script
-cat > /etc/proxmox-cluster-token <<EOF
-TOKEN_ID=$TOKEN_ID
-TOKEN_SECRET=$TOKEN_SECRET
-CREATED_AT=$(date -Iseconds)
-HOSTNAME=$HOSTNAME
-NODE_IP=$IP_ADDRESS
-STATUS=$([ -n "$TOKEN_SECRET" ] && echo "valid" || echo "fallback_to_root")
-VALIDATION_DATE=$(date -Iseconds)
-EOF
-chmod 600 /etc/proxmox-cluster-token
-
-# Verify token file was created correctly
-if [ -f /etc/proxmox-cluster-token ]; then
-    log "✅ Stored API token configuration in /etc/proxmox-cluster-token"
-    # Log file contents for debugging (without revealing the full secret)
-    log "Token file contents:"
-    sed 's/TOKEN_SECRET=.*/TOKEN_SECRET=[REDACTED]/' /etc/proxmox-cluster-token | while read line; do
-        log "  $line"
-    done
-else
-    log "❌ Failed to create token file"
-fi
-
-# SSH setup - Proxmox automatically manages cluster SSH keys
-# Management server access is configured via answer file during installation
-mkdir -p /root/.ssh
-chmod 700 /root/.ssh
-
-log "[OK] API user configured - cluster formation will use Proxmox API"
-
-# 8. Cluster Preparation (API-ready state)
-log "Step 8: Preparing node for API-based cluster formation..."
-
-# Test basic network connectivity to other nodes
-log "Testing network connectivity to cluster nodes..."
-for node in "${!NODE_IPS[@]}"; do
-    if [ "$node" != "$HOSTNAME" ]; then
-        node_ip="${NODE_IPS[$node]}"
-        if ping -c 1 -W 2 "$node_ip" >/dev/null 2>&1; then
-            log "[OK] Can reach $node ($node_ip)"
-        else
-            log "[FAIL] Cannot reach $node ($node_ip)"
-        fi
-    fi
-done
-
-# Test Ceph network connectivity
-log "Testing Ceph network connectivity..."
-for node in "${!CEPH_IPS[@]}"; do
-    if [ "$node" != "$HOSTNAME" ]; then
-        ceph_ip="${CEPH_IPS[$node]}"
-        if ping -c 1 -W 2 "$ceph_ip" >/dev/null 2>&1; then
-            log "[OK] Can reach $node Ceph network ($ceph_ip)"
-        else
-            log "[FAIL] Cannot reach $node Ceph network ($ceph_ip)"
-        fi
-    fi
-done
+# 7. Prepare for Cluster Formation
+log "Step 7: Preparing node for API-based cluster formation..."
 
 # Check if already in cluster
 if pvecm status >/dev/null 2>&1; then
@@ -435,14 +307,11 @@ else
     log "Run the API-based cluster formation script from the management server:"
     log "  ./scripts/proxmox-form-cluster.py"
     log ""
-    log "This will use the Proxmox API (not SSH) to:"
-    log "- Create cluster on node1 if it doesn't exist"
-    log "- Join all nodes using API tokens"
-    log "- Verify cluster health and connectivity"
+    log "This will use the Proxmox API (not SSH) to create the cluster."
 fi
 
-# 9. Configure Firewall and Security
-log "Step 9: Configuring firewall rules and security..."
+# 8. Configure Firewall and Security
+log "Step 8: Configuring firewall rules and security..."
 mkdir -p /etc/pve/firewall
 
 if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
@@ -489,7 +358,7 @@ fi
 log "Configuring fail2ban..."
 cat > /etc/fail2ban/filter.d/proxmox.conf <<EOF
 [Definition]
-failregex = pvedaemon\[.*authentication failure; rhost=<HOST> user=.* msg=.*
+failregex = pvedaemon[.*authentication failure; rhost=<HOST> user=.* msg=.*
 ignoreregex =
 EOF
 
@@ -507,8 +376,8 @@ EOF
 systemctl enable --now fail2ban
 log "fail2ban configured and started"
 
-# 10. Install Monitoring
-log "Step 10: Setting up monitoring..."
+# 9. Install Monitoring
+log "Step 9: Setting up monitoring..."
 if [ ! -f /usr/local/bin/node_exporter ]; then
     wget -q -O /tmp/node_exporter.tar.gz \
         "https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz" || \
@@ -540,8 +409,8 @@ EOF
     fi
 fi
 
-# 11. Configure Backup Schedule
-log "Step 11: Configuring backup schedule..."
+# 10. Configure Backup Schedule
+log "Step 10: Configuring backup schedule..."
 if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
     cat > /etc/cron.d/proxmox-backup <<EOF
 # Proxmox VM backup schedule
@@ -550,12 +419,12 @@ EOF
     log "Backup schedule configured"
 fi
 
-# 12. Download VM Templates (optional but useful)
-log "Step 12: Downloading common VM templates..."
+# 11. Download VM Templates (optional but useful)
+log "Step 11: Downloading common VM templates..."
 if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
     # Download templates in background to not block script
     (
-        cd /var/lib/vz/template/iso/
+        cd /var/lib/vz/template/iso/ 
         
         # Ubuntu 24.04 cloud image
         if [ ! -f ubuntu-24.04-cloudimg.img ]; then
@@ -576,15 +445,16 @@ if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
     log "VM template downloads started in background"
 fi
 
-# 13. GRUB Configuration for IOMMU
-log "Step 13: Checking virtualization features..."
+# 12. GRUB Configuration for IOMMU
+log "Step 12: Checking virtualization features..."
 if grep -q "vmx\|svm" /proc/cpuinfo; then
     log "Hardware virtualization support detected"
     
     if ! grep -q "intel_iommu=on\|amd_iommu=on" /proc/cmdline; then
         cp /etc/default/grub /etc/default/grub.backup.$(date +%Y%m%d-%H%M%S)
         
-        if grep -q "Intel" /proc/cpuinfo; then
+        if grep -q "Intel" /proc/cpuinfo;
+        then
             sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& intel_iommu=on iommu=pt/' /etc/default/grub
         else
             sed -i 's/GRUB_CMDLINE_LINUX_DEFAULT="[^"]*/& amd_iommu=on iommu=pt/' /etc/default/grub
@@ -597,8 +467,8 @@ if grep -q "vmx\|svm" /proc/cpuinfo; then
     fi
 fi
 
-# 14. Register with Provisioning Server
-log "Step 14: Registering with provisioning server..."
+# 13. Register with Provisioning Server
+log "Step 13: Registering with provisioning server..."
 REGISTER_DATA=$(cat <<EOF
 {
     "hostname": "$HOSTNAME",
@@ -620,8 +490,8 @@ curl -X POST \
     "http://$PROVISION_SERVER/api/register-node.php" \
     || log "Warning: Failed to register with provisioning server"
 
-# 15. Final Cleanup
-log "Step 15: Performing cleanup..."
+# 14. Final Cleanup
+log "Step 14: Performing cleanup..."
 apt-get autoremove -y
 apt-get autoclean
 
@@ -631,7 +501,8 @@ touch /var/lib/proxmox-node-prepared.done
 log "[OK] Node preparation markers created"
 echo "$HOSTNAME:$(date -Iseconds):pve9" > /var/lib/proxmox-post-install.done
 
-# 16. Summary and Next Steps
+# 15. Summary and Next Steps
+log "Step 15: Summary and Next Steps..."
 log "=========================================="
 log "Post-installation completed for $HOSTNAME!"
 log "=========================================="
