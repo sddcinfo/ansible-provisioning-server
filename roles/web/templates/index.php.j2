@@ -393,7 +393,7 @@ function handle_boot_to_bios_request(): void {
     
     // Execute redfish script via secure wrapper
     $command = sprintf(
-        '/usr/local/bin/redfish-web-wrapper.sh %s set-boot-to-bios --json 2>&1',
+        'sudo /usr/local/bin/redfish-web-wrapper.sh %s set-boot-to-bios --json 2>&1',
         escapeshellarg($hostname)
     );
     
