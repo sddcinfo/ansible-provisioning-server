@@ -256,7 +256,6 @@ The provisioning server exposes several API endpoints to facilitate the automate
 - `/api/answer.php` - Dynamic Proxmox answer file generation.
 - `/api/register-node.php` - Used by nodes to register themselves with the provisioning server after installation.
 - `/api/node-status.php` - Used to update the status of a node during the provisioning process.
-- `/api/dynamic-config.php` - Provides dynamic configuration to nodes during installation.
 
 ## Testing & Validation
 
@@ -276,9 +275,6 @@ The provisioning server exposes several API endpoints to facilitate the automate
 ```bash
 # Test SSH key deployment
 ssh root@10.10.1.21 'ls -la /root/.ssh/id_ed25519*'
-
-# Test inter-node communication
-ssh root@10.10.1.21 'ssh root@10.10.1.22 echo "SSH-OK"'
 ```
 
 ### Web Interface Test
