@@ -388,22 +388,10 @@ else
     log "❌ Failed to create token file"
 fi
 
-# Basic SSH setup for management server access only (no inter-node keys)
+# SSH setup - Proxmox automatically manages cluster SSH keys
+# Management server access is configured via answer file during installation
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
-touch /root/.ssh/authorized_keys
-chmod 600 /root/.ssh/authorized_keys
-
-# Download management server public key for basic management access
-if curl -s "http://$PROVISION_SERVER/api/get-ssh-keys.php?type=management&key=public" >> /tmp/mgmt_key 2>/dev/null; then
-    if [ -s /tmp/mgmt_key ]; then
-        cat /tmp/mgmt_key >> /root/.ssh/authorized_keys
-        log "Added management server SSH key for basic access"
-    fi
-    rm -f /tmp/mgmt_key
-else
-    log "Warning: Could not download management server SSH key"
-fi
 
 log "[OK] API user configured - cluster formation will use Proxmox API"
 
