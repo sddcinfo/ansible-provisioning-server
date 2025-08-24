@@ -49,8 +49,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 - **Observability**: Comprehensive logging, health monitoring, and status tracking
 
 ### Proxmox VE Cluster Features
-- **Unified SSH Key Management**: Single key infrastructure for seamless cluster communication
-- **Intelligent Cluster Formation**: Automatic cluster creation and node joining
+- **API-Driven Cluster Formation**: Reliable, sequential cluster creation and node joining using the Proxmox API.
 - **High-Performance Networking**: 10Gbit Ceph network with MTU 9000 optimization
 - **Dual Network Links**: Management and Ceph networks for redundancy and performance
 - **Automated Repository Configuration**: Enterprise/community repository management
@@ -176,30 +175,35 @@ The unified script performs:
 - High-performance network configuration (Ceph network with MTU 9000)
 - Proper broadcast address configuration for both networks
 - Performance tuning for high-speed networks
-- Unified SSH key deployment from provisioning server
 - Storage and backup configuration
 - GRUB settings for IOMMU
 - Monitoring tools installation
 
-#### 3. Intelligent Cluster Operations
-- **Node1 (Primary)**: Creates cluster with dual network links
-- **Node2-4 (Secondary)**: Prepare for cluster joining with join instructions
-- Automatic cluster health verification
+### Cluster Formation
 
-### Manual Cluster Formation (Fallback)
+The cluster formation process is handled by a Python script that runs on the management server and uses the Proxmox API. This method is reliable and ensures that nodes are joined to the cluster sequentially and with verification at each step.
 
-If automatic cluster formation fails:
+To form the cluster, run the following command from the provisioning server:
 ```bash
-# From provisioning server
-./scripts/proxmox-form-cluster.sh
+./scripts/proxmox-form-cluster.py
 ```
 
-Or from individual nodes:
-```bash
-# From node1 to add node2
-pvecm add 10.10.1.22 --link0 10.10.1.22 --link1 10.10.2.22
+The script will:
+1.  Check the status of all nodes.
+2.  Create the cluster on the primary node (`node1`).
+3.  Join the remaining nodes to the cluster one by one.
+4.  Verify that each node has successfully joined the cluster.
 
-# From node2 to join cluster
+#### Manual Fallback
+If the automated script fails, you can still form the cluster manually using `pvecm` commands from the nodes themselves.
+
+From `node1` to add `node2`:
+```bash
+pvecm add 10.10.1.22 --link0 10.10.1.22 --link1 10.10.2.22
+```
+
+From `node2` to join the cluster:
+```bash
 pvecm add 10.10.1.21 --use_ssh
 ```
 
@@ -239,69 +243,20 @@ Access the web interface at `http://10.10.1.1` (or your configured server IP).
 - Redfish power management
 - Network boot configuration
 
-### API Endpoints
-- `/api/answer.php` - Dynamic Proxmox answer file generation
-- `/api/register-node.php` - Node registration
-- `/api/node-status.php` - Status updates
-- `/api/get-ssh-keys.php` - SSH key distribution
-
 ## SSH Key Management
 
-### Unified SSH Key System
+Initial SSH access to the Proxmox nodes from the management server is configured during the automated installation process. However, the cluster formation and ongoing management are primarily handled through the Proxmox API using `root@pam` authentication.
 
-All Proxmox nodes use the provisioning server's SSH key for seamless cluster communication.
-
-#### Key Features
-- **Single Key Infrastructure**: All nodes use `sysadmin_automation_key`
-- **Seamless Communication**: Management server -> nodes, node -> node, node -> management server
-- **Automatic Deployment**: Keys distributed during first boot
-- **Secure Storage**: Keys copied to `/var/www/html/keys/` with proper permissions
-
-#### API Endpoints
-```bash
-# Get public key
-curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
-
-# Get private key  
-curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=private
-```
-
-#### Implementation
-The post-install script downloads both private and public keys from the provisioning server, ensuring all nodes can communicate without password authentication.
+Proxmox automatically manages the SSH keys required for intra-cluster communication (e.g., for migrations). The `proxmox-form-cluster.py` script does not rely on SSH for cluster operations, using it only as an emergency fallback to restart services if a node's API becomes unresponsive.
 
 ## API Endpoints
 
-### Node Registration
-**POST** `/api/register-node.php`
-```json
-{
-  "hostname": "node1",
-  "ip": "10.10.1.21",
-  "type": "proxmox",
-  "status": "ready"
-}
-```
+The provisioning server exposes several API endpoints to facilitate the automated installation process.
 
-### Status Updates
-**POST** `/api/node-status.php`
-```json
-{
-  "hostname": "node1",
-  "status": "installing",
-  "timestamp": "2025-08-23T10:00:00Z"
-}
-```
-
-### SSH Key Distribution
-**GET** `/api/get-ssh-keys.php?type=management&key=public`
-Returns the provisioning server's SSH public key.
-
-**GET** `/api/get-ssh-keys.php?type=management&key=private`
-Returns the provisioning server's SSH private key.
-
-### Dynamic Configuration
-**POST** `/api/answer.php`
-Generates Proxmox auto-installer answer files based on requesting node's MAC address.
+- `/api/answer.php` - Dynamic Proxmox answer file generation.
+- `/api/register-node.php` - Used by nodes to register themselves with the provisioning server after installation.
+- `/api/node-status.php` - Used to update the status of a node during the provisioning process.
+- `/api/dynamic-config.php` - Provides dynamic configuration to nodes during installation.
 
 ## Testing & Validation
 
@@ -332,7 +287,7 @@ ssh root@10.10.1.21 'ssh root@10.10.1.22 echo "SSH-OK"'
 curl http://10.10.1.1/
 
 # Test API endpoints
-curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
+curl http://10.10.1.1/api/register-node.php
 ```
 
 ## Troubleshooting
@@ -392,95 +347,26 @@ ssh root@10.10.1.21 'corosync-cfgtool -s'
 tail -f /var/log/proxmox-cluster-formation.log
 ```
 
-#### SSH Key Issues
-```bash
-# Check SSH key API
-curl http://10.10.1.1/api/get-ssh-keys.php?type=management&key=public
-
-# Test node-to-node SSH
-ssh root@10.10.1.21 'ssh root@10.10.1.22 echo "SSH-OK"'
-
-# Check key permissions
-ls -la /var/www/html/keys/
-```
-
-### Log Files
-
-#### System Logs
-- `/var/log/nginx/error.log` - Web server errors
-- `/var/log/nginx/access.log` - Web server access
-- `/var/log/dnsmasq.log` - DHCP/DNS/TFTP activity
-
-#### Provisioning Logs  
-- `/var/log/proxmox-post-install.log` - Proxmox node preparation
-- `/var/log/proxmox-cluster-formation.log` - Manual cluster formation
-- `/var/log/ssh-key-management.log` - SSH key activity
-
-#### Target Node Logs
-- `/var/log/cloud-init.log` - Ubuntu installation
-- `/var/log/installer/autoinstall-user-data` - Ubuntu autoinstall
-
-### Performance Optimization
-
-#### Network Performance
-The system includes optimizations for high-speed networking:
-- MTU 9000 on Ceph network interfaces
-- TCP congestion control (BBR)
-- Network buffer tuning
-- Optimized sysctl parameters
-
-#### Storage Performance
-- ZFS compression and checksums enabled
-- Proper disk alignment for SSDs
-- I/O scheduler optimization
-
-### Security Considerations
-
-#### Network Security
-- Isolated provisioning network
-- Firewall rules for cluster communication
-- SSH key-based authentication only
-
-#### Web Security
-- Input validation and sanitization
-- Path traversal protection
-- CSRF protection headers
-
-### Backup and Recovery
-
-#### Configuration Backup
-```bash
-# Backup provisioning server configuration
-tar -czf provisioning-backup.tar.gz /etc/nginx/ /var/www/html/ nodes.json
-```
-
-#### Node Recovery
-```bash
-# Re-provision failed node
-# Simply reboot with network boot - system will reinstall automatically
-```
-
 ## File Structure
 
 ### Scripts
-- `scripts/proxmox-post-install.sh` - Primary unified installation script
-- `scripts/proxmox-form-cluster.sh` - Manual cluster formation script
-- `scripts/test-network-config.sh` - Network configuration validation
+- `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed.
+- `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.
+- `scripts/test-network-config.sh` - Network configuration validation.
 
 ### APIs
-- `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator
-- `roles/web/templates/get-ssh-keys.php.j2` - SSH key distribution API
-- `roles/web/templates/register-node.php.j2` - Node registration API
-- `roles/web/templates/node-status.php.j2` - Status update API
+- `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator.
+- `roles/web/templates/register-node.php.j2` - Node registration API.
+- `roles/web/templates/node-status.php.j2` - Status update API.
 
 ### Configuration
-- `nodes.json` - Node inventory and configuration
-- `inventory/group_vars/all.yml` - Global configuration
-- `inventory/host_vars/localhost.yml` - Server-specific settings
+- `nodes.json` - Node inventory and configuration.
+- `inventory/group_vars/all.yml` - Global configuration.
+- `inventory/host_vars/localhost.yml` - Server-specific settings.
 
 ### Web Assets
-- `roles/web/templates/index.php.j2` - Main dashboard
-- `roles/web/templates/nginx.conf.j2` - Web server configuration
+- `roles/web/templates/index.php.j2` - Main dashboard.
+- `roles/web/templates/nginx.conf.j2` - Web server configuration.
 
 ## Contributing
 
@@ -505,174 +391,3 @@ tar -czf provisioning-backup.tar.gz /etc/nginx/ /var/www/html/ nodes.json
 ## License
 
 MIT License - see LICENSE file for details.
-
-## Support
-
-### Documentation
-- All documentation is maintained in this README
-- Check troubleshooting section for common issues
-- Review log files for detailed error information
-
-### Community Support
-- GitHub Issues for bug reports
-- GitHub Discussions for questions
-- Pull Requests for contributions
-
-### Enterprise Support
-Contact the maintainers for enterprise support options.
-
-## Proxmox Web Console Access
-
-### Status: [SUCCESS] All Web Consoles Are Accessible
-
-The Proxmox web consoles are functioning correctly on all cluster nodes.
-
-### Access URLs
-
-- **Node1**: https://10.10.1.21:8006/
-- **Node2**: https://10.10.1.22:8006/
-- **Node3**: https://10.10.1.23:8006/
-- **Node4**: https://10.10.1.24:8006/
-
-### Login Credentials
-
-- **Username**: `root`
-- **Password**: The password you set during Proxmox installation
-
-### Browser Access Notes
-
-#### Certificate Warning
-You will see a certificate warning in your browser because Proxmox uses self-signed certificates. This is normal and expected. To proceed:
-
-1. **Chrome/Edge**: Click "Advanced" → "Proceed to [IP] (unsafe)"
-2. **Firefox**: Click "Advanced" → "Accept the Risk and Continue"
-3. **Safari**: Click "Show Details" → "visit this website"
-
-#### Network Requirements
-Ensure your client machine can reach the management network (10.10.1.0/24) on port 8006.
-
-### Troubleshooting Web Console Access
-
-If you cannot access the web console, check the following:
-
-#### 1. Service Status
-```bash
-ssh root@<node-ip> 'systemctl status pveproxy pvedaemon'
-```
-
-#### 2. Port Listening
-```bash
-ssh root@<node-ip> 'ss -tlnp | grep 8006'
-```
-Should show: `*:8006` (listening on all interfaces)
-
-#### 3. Firewall Rules
-```bash
-ssh root@<node-ip> 'pve-firewall status'
-```
-
-If firewall is enabled, ensure port 8006 is allowed:
-```bash
-ssh root@<node-ip> 'cat /etc/pve/firewall/cluster.fw | grep 8006'
-```
-
-#### 4. Test Connectivity
-From your client machine:
-```bash
-curl -k https://<node-ip>:8006/
-```
-
-#### 5. Check Logs
-```bash
-ssh root@<node-ip> 'journalctl -u pveproxy -n 50'
-```
-
-### Common Issues and Solutions
-
-#### Issue: "Connection Refused"
-**Solution**: Check if pveproxy service is running:
-```bash
-ssh root@<node-ip> 'systemctl restart pveproxy'
-```
-
-#### Issue: "Timeout"
-**Solution**: Check firewall on both client and server:
-```bash
-# On node
-iptables -L INPUT -n | grep 8006
-
-# On client
-telnet <node-ip> 8006
-```
-
-#### Issue: "Certificate Error Prevents Access"
-**Solution**: For testing, use curl with -k flag or add certificate exception in browser.
-
-#### Issue: "Login Failed"
-**Solution**: 
-1. Verify you're using the correct password from installation
-2. If password was changed via script, check:
-```bash
-ssh root@<node-ip> 'grep "root:" /etc/shadow'
-```
-
-### Cluster Web Console Features
-
-Once logged in, you can:
-
-1. **Manage all nodes** from any single node's web interface
-2. **Create and manage VMs** and containers
-3. **Configure storage** (local, Ceph, NFS, etc.)
-4. **Set up High Availability** for VMs
-5. **Monitor resource usage** across the cluster
-6. **Configure networking** and firewall rules
-7. **Manage users and permissions**
-8. **Set up backup schedules**
-
-### Web Console Security Best Practices
-
-1. **Replace self-signed certificates** with proper SSL certificates:
-```bash
-# Place certificates in:
-/etc/pve/nodes/<nodename>/pveproxy-ssl.pem  # Certificate
-/etc/pve/nodes/<nodename>/pveproxy-ssl.key  # Private key
-
-# Restart proxy
-systemctl restart pveproxy
-```
-
-2. **Restrict access** to management network only:
-```bash
-# In /etc/pve/firewall/cluster.fw
-[RULES]
-IN ACCEPT -source 10.10.1.0/24 -p tcp -dport 8006  # Only management network
-```
-
-3. **Enable two-factor authentication**:
-- Go to Datacenter → Permissions → Two Factor
-- Configure TOTP or U2F
-
-4. **Create non-root users** for daily operations:
-```bash
-pveum user add admin@pve
-pveum acl modify / -user admin@pve -role PVEAdmin
-```
-
-### API Access
-
-The same endpoints serve both the web GUI and API:
-
-```bash
-# Get API ticket
-curl -k -d "username=root@pam&password=yourpassword" \
-  https://10.10.1.21:8006/api2/json/access/ticket
-
-# Use API with ticket
-curl -k -H "CSRFPreventionToken: <token>" \
-  -H "Cookie: PVEAuthCookie=<ticket>" \
-  https://10.10.1.21:8006/api2/json/nodes
-```
-
----
-
-This unified provisioning system provides a complete solution for bare-metal server and Proxmox VE cluster deployment with enterprise-grade features, security, and performance optimization.
