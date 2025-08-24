@@ -368,6 +368,14 @@ def join_node_to_cluster(node_name: str, node_config: Dict, primary_ip: str, exp
     logging.info(f"  link0: {join_data['link0']}")
     logging.info(f"  link1: {join_data['link1']}")
     
+    # Force fresh API session for join request to avoid stale data
+    api.session.close()
+    api.authenticated = False
+    if not api.authenticate():
+        logging.error(f"[FAIL] Cannot re-authenticate to {node_name} for join")
+        return False
+    
+    logging.info(f"Sending join request to {node_name} with verified fresh session...")
     result = api.post('cluster/config/join', join_data, timeout=120)
     if not result:
         logging.error(f"[FAIL] No response from join request for {node_name}")
