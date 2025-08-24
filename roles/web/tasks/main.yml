@@ -533,12 +533,39 @@
     - web_files_only
 
 - name: Deploy Python-based Proxmox cluster formation script
-  template:
-    src: proxmox-form-cluster.py.j2
+  copy:
+    src: /home/sysadmin/claude/ansible-provisioning-server/scripts/proxmox-form-cluster.py
     dest: "{{ nginx_web_root }}/scripts/proxmox-form-cluster.py"
     owner: www-data
     group: www-data
     mode: "0755"
+    remote_src: yes
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+- name: Deploy cluster status summary script
+  copy:
+    src: /home/sysadmin/claude/ansible-provisioning-server/scripts/cluster-status-summary.py
+    dest: "{{ nginx_web_root }}/scripts/cluster-status-summary.py"
+    owner: www-data
+    group: www-data
+    mode: "0755"
+    remote_src: yes
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+- name: Deploy reboot nodes script
+  copy:
+    src: /home/sysadmin/claude/ansible-provisioning-server/scripts/reboot-nodes-for-reprovision.py
+    dest: "{{ nginx_web_root }}/scripts/reboot-nodes-for-reprovision.py"
+    owner: www-data
+    group: www-data
+    mode: "0755"
+    remote_src: yes
   tags:
     - web_config
     - templates
