@@ -62,9 +62,9 @@ class NodeReprovisioner:
         self.server_ip = "10.10.1.1"
         self.provisioning_api_url = f"http://{self.server_ip}/index.php"
         self.ssh_opts = [
-            "-o", "ConnectTimeout=8",
-            "-o", "ServerAliveInterval=3",
-            "-o", "ServerAliveCountMax=2",
+            "-o", "ConnectTimeout=15",
+            "-o", "ServerAliveInterval=5",
+            "-o", "ServerAliveCountMax=3",
             "-o", "StrictHostKeyChecking=no",
             "-o", "PasswordAuthentication=no",
             "-o", "BatchMode=yes",
@@ -191,61 +191,60 @@ class NodeReprovisioner:
             return AccessibilityStatus.UNREACHABLE
     
     def set_pxe_boot(self, node_name: str, node_ip: str) -> bool:
-        """Set EFI boot order to PXE with fallback options"""
+        """Set EFI boot order to PXE with fallback options and retries"""
         self.log(f"Setting {node_name} to boot from PXE...")
         
-        # Try primary EFI boot entry
-        ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", "efibootmgr -n 000E"]
-        success, _, _ = self.run_command(ssh_cmd, timeout=12)
+        # Boot entries to try in order of preference
+        boot_entries = ["000E", "14", "0014", "000F", "0E"]
         
-        if success:
-            self.log(f"[OK] EFI boot order set to PXE (000E) for {node_name}", Colors.GREEN)
-            return True
-        
-        self.log(f"[WARNING] Primary PXE boot entry (000E) failed for {node_name}, trying alternatives...", Colors.YELLOW)
-        
-        # Try alternative boot entries
-        for boot_entry in ["14", "0014", "000F", "0E"]:
-            ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", f"efibootmgr -n {boot_entry}"]
-            success, _, _ = self.run_command(ssh_cmd, timeout=10)
+        for attempt in range(3):  # Try up to 3 times
+            if attempt > 0:
+                self.log(f"Retry {attempt} for {node_name} PXE boot setup...", Colors.YELLOW)
+                time.sleep(2)  # Wait before retry
             
-            if success:
-                self.log(f"[OK] Alternative EFI boot entry ({boot_entry}) set for {node_name}", Colors.GREEN)
-                return True
+            for boot_entry in boot_entries:
+                self.log(f"Trying boot entry {boot_entry} on {node_name}...")
+                ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", f"efibootmgr -n {boot_entry}"]
+                success, stdout, stderr = self.run_command(ssh_cmd, timeout=15)
+                
+                if success:
+                    self.log(f"[OK] EFI boot entry ({boot_entry}) set for {node_name}", Colors.GREEN)
+                    return True
+                else:
+                    self.log(f"Boot entry {boot_entry} failed on {node_name}: {stderr.strip()}", Colors.YELLOW)
         
-        self.log(f"[WARNING] Could not set any PXE boot entry for {node_name}", Colors.YELLOW)
+        self.log(f"[WARNING] Could not set any PXE boot entry for {node_name} after 3 attempts", Colors.YELLOW)
         self.log(f"[INFO] Node may still boot to PXE if configured as default boot option", Colors.YELLOW)
         return False
     
     def reboot_node(self, node_name: str, node_ip: str) -> bool:
-        """Reboot a node with multiple fallback methods"""
+        """Reboot a node with multiple fallback methods and retries"""
         self.log(f"Initiating reboot for {node_name}...")
         
-        # Try graceful reboot first
-        ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", "systemctl reboot"]
-        success, _, _ = self.run_command(ssh_cmd, timeout=8)
+        # Reboot commands to try in order
+        reboot_commands = [
+            ("systemctl reboot", "Graceful reboot"),
+            ("nohup reboot >/dev/null 2>&1 &", "Immediate reboot"),
+            ("echo b > /proc/sysrq-trigger", "Emergency reboot")
+        ]
         
-        if success:
-            self.log(f"[OK] Graceful reboot command sent to {node_name}", Colors.GREEN)
-            return True
+        for attempt in range(2):  # Try twice
+            if attempt > 0:
+                self.log(f"Retry {attempt} for {node_name} reboot...", Colors.YELLOW)
+                time.sleep(3)  # Wait before retry
+            
+            for cmd, description in reboot_commands:
+                self.log(f"Trying {description.lower()} on {node_name}...")
+                ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", cmd]
+                success, stdout, stderr = self.run_command(ssh_cmd, timeout=12)
+                
+                if success:
+                    self.log(f"[OK] {description} command sent to {node_name}", Colors.GREEN)
+                    return True
+                else:
+                    self.log(f"{description} failed on {node_name}: {stderr.strip()}", Colors.YELLOW)
         
-        # Fall back to immediate reboot
-        ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", "nohup reboot >/dev/null 2>&1 &"]
-        success, _, _ = self.run_command(ssh_cmd, timeout=8)
-        
-        if success:
-            self.log(f"[OK] Immediate reboot command sent to {node_name}", Colors.GREEN)
-            return True
-        
-        # Try emergency reboot
-        ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", "echo b > /proc/sysrq-trigger"]
-        success, _, _ = self.run_command(ssh_cmd, timeout=8)
-        
-        if success:
-            self.log(f"[WARNING] Emergency reboot triggered for {node_name}", Colors.YELLOW)
-            return True
-        
-        self.log(f"[FAIL] All reboot methods failed for {node_name}", Colors.RED)
+        self.log(f"[FAIL] All reboot methods failed for {node_name} after 2 attempts", Colors.RED)
         return False
     
     def process_node(self, node_name: str) -> bool:
@@ -266,13 +265,11 @@ class NodeReprovisioner:
         accessibility = self.check_node_accessibility(node_name, node.os_ip)
         
         if accessibility == AccessibilityStatus.UNREACHABLE:
-            self.log(f"[INFO] {node_name} is unreachable - possibly already rebooting or powered off", Colors.YELLOW)
-            self.log(f"[OK] {node_name} API status reset completed (node unreachable)", Colors.GREEN)
-            return True
+            self.log(f"[WARNING] {node_name} doesn't respond to ping - trying SSH anyway", Colors.YELLOW)
+            # Don't return early - try SSH commands anyway
         elif accessibility == AccessibilityStatus.SSH_UNREACHABLE:
-            self.log(f"[INFO] {node_name} SSH is unreachable but responds to ping - likely shutting down", Colors.YELLOW)
-            self.log(f"[OK] {node_name} API status reset completed (SSH unreachable)", Colors.GREEN)
-            return True
+            self.log(f"[WARNING] {node_name} SSH was unreachable but ping worked - trying commands anyway", Colors.YELLOW)
+            # Don't return early - try SSH commands anyway
         
         # Step 3: Set EFI boot order (best effort)
         self.log(f"Step 3: Configuring PXE boot for {node_name}...")
