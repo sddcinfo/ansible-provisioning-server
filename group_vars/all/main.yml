@@ -1,0 +1,79 @@
+---
+# Multi-OS Provisioning Configuration
+# This file defines the supported operating systems and their configurations
+
+# Default operating system for new installations
+default_os_type: "ubuntu2404"
+
+# Supported Operating Systems Configuration
+supported_operating_systems:
+  ubuntu2404:
+    name: "Ubuntu 24.04 LTS"
+    iso_url: "https://ftp.riken.jp/Linux/ubuntu-releases/noble/ubuntu-24.04.3-live-server-amd64.iso"
+    iso_name: "ubuntu-24.04.3-live-server-amd64.iso"
+    iso_download_dir: "/tmp"
+    iso_mount_point: "{{ playbook_dir }}/../../iso_builder/ubuntu_iso"
+    provisioning_dir: "/var/www/html/provisioning/ubuntu24.04"
+    config_type: "autoinstall"
+    boot_files:
+      kernel: "casper/vmlinuz"
+      initrd: "casper/initrd"
+    kernel_params: "modprobe.blacklist=nvme autoinstall ip=dhcp"
+    config_dirs:
+      - ".disk"
+      - "dists" 
+      - "EFI"
+      - "install"
+      - "pool"
+      - "boot"
+      - "casper"
+    config_files:
+      - "md5sum.txt"
+      - "boot.catalog"
+    
+  proxmox9:
+    name: "Proxmox VE 9"
+    iso_url: "https://enterprise.proxmox.com/iso/proxmox-ve_9.0-1.iso"
+    iso_name: "proxmox-ve_9.0-1.iso"
+    iso_download_dir: "/tmp"
+    iso_mount_point: "{{ playbook_dir }}/../../iso_builder/proxmox_iso"
+    provisioning_dir: "/var/www/html/provisioning/proxmox9"
+    config_type: "answer"
+    boot_files:
+      kernel: "boot/linux26"
+      initrd: "boot/initrd.img"
+    kernel_params: "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer"
+    config_dirs:
+      - "boot"
+      - "pve"
+      - ".disk"
+      - "efi"
+      - "isolinux"
+    config_files:
+      - "proxmox-ve_9.0-1.iso"
+      - "VERSION.txt"
+      - "checksum.txt"
+    disk_devices: ["sda", "nvme0n1", "vda", "hda"]
+
+# Network Configuration (existing)
+provisioning_ip: "10.10.1.1"
+provisioning_bridge: "br-prov"
+
+# Default credentials and SSH key
+sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
+sysadmin_pub_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPBG18KoYrX7WQA9FQGOZhLgsgpALC2TNGnWxswPJgYZ root@mgmt"
+
+# Server configuration
+server_ip: "{{ provisioning_ip }}"
+nginx_web_root: "/var/www/html"
+
+# Default auto-installer node configurations
+default_autoinstall_nodes:
+  proxmox9:
+    hostname: "pve-node"
+    mac: "ac:1f:6b:6c:5a:28"
+    
+# OS base URLs for PHP template
+os_base_urls:
+  ubuntu2404: "http://{{ provisioning_ip }}/provisioning/ubuntu24.04"
+  proxmox9: "http://{{ provisioning_ip }}/provisioning/proxmox9"

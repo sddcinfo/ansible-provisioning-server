@@ -1,14 +1,12 @@
-# Ansible Provisioning Server
+# Bare-Metal Provisioning Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Ansible](https://img.shields.io/badge/ansible-%3E%3D2.9-blue.svg)](https://www.ansible.com/)
+[![Proxmox](https://img.shields.io/badge/Proxmox-9.x-orange.svg)](https://www.proxmox.com/)
 [![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%20%7C%2022.04%20%7C%2024.04-orange.svg)](https://ubuntu.com/)
 
-> **Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers**
+Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9 clusters.
 
-An Ansible-based automation solution that deploys and manages a comprehensive provisioning infrastructure for zero-touch deployment of Ubuntu servers on bare-metal hardware using iPXE and cloud-init technologies.
-
----
+A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE 9 clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation via the Proxmox API.
 
 ## Table of Contents
 
@@ -17,19 +15,22 @@ An Ansible-based automation solution that deploys and manages a comprehensive pr
 - [Architecture](#architecture)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
+- [Ubuntu Server Provisioning](#ubuntu-server-provisioning)
+- [Proxmox VE Cluster Provisioning](#proxmox-ve-cluster-provisioning)
 - [Configuration](#configuration)
-- [Usage](#usage)
 - [Web Management Interface](#web-management-interface)
+- [SSH Key Management](#ssh-key-management)
+- [API Endpoints](#api-endpoints)
 - [Testing & Validation](#testing--validation)
-- [Customization](#customization)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [License](#license)
-- [Support](#support)
 
 ## Overview
 
-The Ansible Provisioning Server automates the deployment of a complete bare-metal provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
+The Bare-Metal Provisioning Server automates the deployment of a complete provisioning infrastructure, enabling organizations to perform zero-touch installations of Ubuntu servers and Proxmox VE 9 clusters at scale. This solution combines industry-standard technologies including DHCP, DNS, TFTP, iPXE, and cloud-init to provide a robust, enterprise-ready provisioning platform.
+
+**Note**: Ansible is used only for initial setup of the provisioning server infrastructure. Proxmox node configuration is handled by self-contained Python and shell scripts that run directly on the nodes after installation.
 
 ## Features
 
@@ -39,564 +40,350 @@ The Ansible Provisioning Server automates the deployment of a complete bare-meta
 - **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
 - **Web Dashboard**: Real-time provisioning status monitoring and management
 - **Hardware Management**: Redfish API integration for server power and boot control
-- **Kubernetes Management**: Automated Kubespray setup and cluster deployment
+- **Multi-OS Support**: Ubuntu 24.04 and Proxmox VE 9 automated installation
 
 ### Enterprise Capabilities  
 - **Security**: Hardened input validation, path sanitization, and encrypted credential management
 - **Scalability**: Multi-node provisioning with dynamic network interface detection
 - **Flexibility**: Support for multiple Ubuntu versions and hardware platforms
 - **Observability**: Comprehensive logging, health monitoring, and status tracking
-- **Performance**: Optimized for high-throughput with systemd resource limits
-- **Reliability**: Automated error handling, service recovery, and rollback mechanisms
-- **Monitoring**: Automated health checks with service status verification
-- **Validation**: End-to-end system validation with comprehensive verification checks
+
+### Proxmox VE Cluster Features
+- **API-Driven Cluster Formation**: Reliable, sequential cluster creation and node joining using the Proxmox API.
+- **High-Performance Networking**: 10Gbit Ceph network with MTU 9000 optimization
+- **Dual Network Links**: Management and Ceph networks for redundancy and performance
+- **Automated Repository Configuration**: Enterprise/community repository management
 
 ## Architecture
 
-```mermaid
-graph TB
-    Internet([Internet])
-    PS[Provisioning Server<br/>10.10.1.1]
-    MN[Management Network<br/>10.10.1.0/24]
-    KN[Kubernetes Network<br/>10.10.1.0/24]
-    CN[Ceph Network<br/>10.10.2.0/24]
-    
-    N1[console-node1<br/>10.10.1.11]
-    N2[console-node2<br/>10.10.1.12]
-    N3[console-node3<br/>10.10.1.13]
-    N4[console-node4<br/>10.10.1.14]
-    
-    Internet --> PS
-    PS --> MN
-    MN --> N1
-    MN --> N2
-    MN --> N3
-    MN --> N4
-    PS --> KN
-    PS --> CN
+### Network Design
+```
+Internet -> WAN (enp1s0) -> NAT -> Provisioning Network (10.10.1.0/24)
+                                  |
+                                  +-- Management Server (10.10.1.1)
+                                  +-- Node1 (10.10.1.21) <-> Ceph Network (10.10.2.21)
+                                  +-- Node2 (10.10.1.22) <-> Ceph Network (10.10.2.22) 
+                                  +-- Node3 (10.10.1.23) <-> Ceph Network (10.10.2.23)
+                                  +-- Node4 (10.10.1.24) <-> Ceph Network (10.10.2.24)
 ```
 
-### System Components
-
-| Component | Technology | Purpose |
-|-----------|------------|---------|
-| **DHCP Server** | dnsmasq | IP address allocation and PXE boot orchestration |
-| **DNS Server** | dnsmasq | Name resolution for provisioning network |
-| **TFTP Server** | dnsmasq with integrated TFTP | iPXE bootloader distribution |
-| **Web Server** | nginx + PHP-FPM | Hardened autoinstall hosting and dashboard |
-| **NAT Gateway** | iptables + dynamic detection | Internet connectivity with interface auto-detection |
-| **Management API** | Python/Redfish | Hardware control and monitoring |
-| **Health Monitor** | systemd timers | Automated service health checks and recovery |
-| **Validation Engine** | Ansible tasks | End-to-end system verification and testing |
-| **Kubespray Manager** | Python/Ansible | Kubernetes cluster deployment automation |
+### Service Stack
+- **Base OS**: Ubuntu 24.04 LTS
+- **Web Server**: Nginx + PHP-FPM
+- **Network Services**: dnsmasq (DHCP/DNS/TFTP)
+- **Boot Loader**: iPXE with EFI support
+- **Configuration Management**: cloud-init/autoinstall
+- **Monitoring**: Node Exporter + Health checks
 
 ## Prerequisites
 
-### System Requirements
+### Hardware Requirements
+- **Management Server**: 2 CPU cores, 4GB RAM, 50GB storage
+- **Network**: Dedicated provisioning VLAN/network
+- **Target Nodes**: UEFI boot, network boot capability
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| **Operating System** | Ubuntu 20.04 LTS | Ubuntu 24.04 LTS |
-| **Memory** | 4 GB RAM | 8 GB RAM |
-| **Storage** | 50 GB | 100 GB SSD |
-| **Network** | 2x GbE interfaces | 2x 10GbE interfaces |
-| **Python** | 3.8+ | 3.10+ |
-| **Ansible** | 2.9+ | 6.0+ |
+### Software Requirements
+- Ubuntu 24.04 LTS (management server)
+- Ansible >= 2.9
+- Internet connectivity for ISO downloads
 
-### Network Infrastructure
-
-- **Management Network**: Dedicated VLAN for provisioning operations (default: 10.10.1.0/24)
-- **Internet Connectivity**: Required for package downloads and external services
-- **IPMI/BMC Access**: Network reachability to target server management interfaces
-- **Firewall Configuration**: DHCP (67/68), TFTP (69), HTTP (80), HTTPS (443) ports
+### Network Requirements
+- Isolated provisioning network (recommended: 10.10.1.0/24)
+- DHCP range available for target nodes
+- Management server with static IP
 
 ## Quick Start
 
-### 1. Environment Preparation
-
+### 1. Clone Repository
 ```bash
-# System update and dependency installation
-sudo apt update && sudo apt upgrade -y
-sudo apt install -y ansible git python3-pip curl wget
-
-# Repository cloning
-git clone https://github.com/sddcinfo/ansible-provisioning-server.git
+git clone https://github.com/your-org/ansible-provisioning-server.git
 cd ansible-provisioning-server
 ```
 
-### 2. Configuration Setup
-
-```bash
-# Node inventory configuration
-cp nodes.json.example nodes.json
-${EDITOR:-nano} nodes.json
-
-# Configure Redfish/BMC credentials for hardware management
-cp .redfish_credentials.example .redfish_credentials
-${EDITOR:-nano} .redfish_credentials
-chmod 600 .redfish_credentials
+### 2. Configure Network Settings
+Edit `inventory/host_vars/localhost.yml`:
+```yaml
+# Network configuration
+external_interface: "enp1s0"  # WAN interface
+provisioning_network: "10.10.1.0/24"
+server_ip: "10.10.1.1"
+dhcp_range_start: "10.10.1.100"
+dhcp_range_end: "10.10.1.199"
+gateway_ip: "10.10.1.1"
 ```
 
-### 3. Infrastructure Deployment
-
-```bash
-# Core provisioning infrastructure with validation
-sudo ansible-playbook site.yml 
-# Target server boot configuration
-sudo ansible-playbook set_boot_order.yml --limit console-node1
-```
-
-### 4. Deployment Verification
-
-```bash
-# Service health validation (automated during deployment)
-sudo systemctl status dnsmasq nginx php8.3-fpm
-
-# Health monitoring status
-sudo systemctl status provisioning-health-check.timer
-
-# Web interface connectivity
-curl -I http://localhost
-
-# Hardware management verification
-./redfish.py console-node1 sensors
-
-# View health monitoring logs
-sudo journalctl -u provisioning-health-check.service -f
-```
-
-## Configuration
-
-### Node Inventory Schema
-
-The `nodes.json` file serves as the single source of truth for infrastructure topology:
-
+### 3. Configure Node Inventory
+Edit `nodes.json`:
 ```json
 {
-  "console_nodes": [
+  "nodes": [
     {
-      "hostname": "console-node1",
-      "ip": "10.10.1.11",
-      "mac": "aa:bb:cc:dd:ee:ff",
-      "k8s_ip": "10.10.1.21",
+      "mac": "ac:1f:6b:6c:5a:76",
+      "os_ip": "10.10.1.21",
+      "os_hostname": "node1",
       "ceph_ip": "10.10.2.21"
     }
   ]
 }
 ```
 
-#### Field Specifications
-
-| Field | Type | Description | Validation |
-|-------|------|-------------|------------|
-| `hostname` | string | Unique node identifier | Must match Ansible inventory |
-| `ip` | IPv4 | Management network address | Within provisioning subnet |
-| `mac` | MAC | Network interface identifier | Lowercase, colon-separated |
-| `k8s_ip` | IPv4 | Kubernetes cluster address | Unique within cluster subnet |
-| `ceph_ip` | IPv4 | Storage network address | Unique within storage subnet |
-
-### Credential Management
-
-#### Ansible Inventory Credentials
-Credentials can be configured directly in inventory files:
-
-```yaml
-# In inventory or group_vars files
----
-ipmi_user: "admin"
-ipmi_pass: "secure_password"
+### 4. Deploy Infrastructure
+```bash
+ansible-playbook -i inventory/hosts site.yml
 ```
 
-#### Redfish/BMC Credentials
-For the redfish.py script, configure BMC credentials:
+## Ubuntu Server Provisioning
 
+### Supported Versions
+- Ubuntu 24.04 LTS (default)
+- Ubuntu 22.04 LTS
+- Ubuntu 20.04 LTS
+
+### Node Configuration
+Nodes are configured via the `nodes.json` file with MAC address to IP mapping.
+
+### Installation Process
+1. Node boots via PXE/UEFI
+2. iPXE loads and contacts provisioning server
+3. Autoinstall configuration is generated dynamically
+4. Ubuntu installs with cloud-init configuration
+5. Post-install hooks configure services
+
+## Proxmox VE Cluster Provisioning
+
+### Unified Cluster Setup
+
+The system uses a comprehensive approach that handles both node preparation and intelligent cluster formation automatically.
+
+### Network Architecture
+- **Management Network**: vmbr0 - 10.10.1.x/24 (default route, broadcast 10.10.1.255)
+- **Ceph Storage Network**: vmbr1 - 10.10.2.x/24 (MTU 9000, bridged to eno3, broadcast 10.10.2.255)
+- **Physical Interface**: eno3 - Bridge member (10Gbit, MTU 9000, no IP)
+- **Routing**: Management handles internet, Ceph handles storage (no default route)
+
+### Automatic Installation Process
+
+#### 1. Boot and Initial Configuration
+- Node boots with Proxmox auto-installer ISO
+- `answer.php` generates node-specific configuration
+- First boot automatically runs `proxmox-post-install.sh`
+
+#### 2. Node Preparation
+The unified script performs:
+- Repository configuration (disables enterprise repos, adds no-subscription)
+- Package installation and system updates
+- High-performance network configuration (Ceph network with MTU 9000)
+- Proper broadcast address configuration for both networks
+- Performance tuning for high-speed networks
+- Storage and backup configuration
+- GRUB settings for IOMMU
+- Monitoring tools installation
+
+### Cluster Formation
+
+The cluster formation process is handled by a Python script that runs on the management server and uses the Proxmox API. This method is reliable and ensures that nodes are joined to the cluster sequentially and with verification at each step.
+
+To form the cluster, run the following command from the provisioning server:
 ```bash
-# Copy example and configure
-cp .redfish_credentials.example .redfish_credentials
-chmod 600 .redfish_credentials
-
-# Edit with your BMC credentials
-# Format: REDFISH_AUTH="username:password"
-echo 'REDFISH_AUTH="admin:your_bmc_password"' > .redfish_credentials
+./scripts/proxmox-form-cluster.py
 ```
 
-**Security Best Practices:**
-- Use strong, unique passwords for all accounts
-- Rotate credentials regularly
-- Restrict file permissions (600) for sensitive files
-- Never commit unencrypted credentials to version control
+The script will:
+1.  Check the status of all nodes.
+2.  Create the cluster on the primary node (`node1`).
+3.  Join the remaining nodes to the cluster one by one.
+4.  Verify that each node has successfully joined the cluster.
 
-### Enterprise Security Features
+#### Manual Fallback
+If the automated script fails, you can still form the cluster manually using `pvecm` commands from the nodes themselves.
 
-This solution implements comprehensive security hardening:
-
-**Input Validation & Sanitization:**
-- Strict MAC address format validation
-- Path traversal attack prevention
-- Parameter whitelist validation
-- Command injection protection
-
-**Error Handling:**
-- No sensitive information in error messages
-- Comprehensive logging without data exposure
-- Graceful failure handling with rollback
-
-**File System Security:**
-- Secure directory permissions (0750)
-- Safe file operations with verification
-- Protected session directory cleanup
-
-### Automated Monitoring & Health Checks
-
-**Health Monitoring System:**
+From `node1` to add `node2`:
 ```bash
-# View current health status
-sudo systemctl status provisioning-health-check.timer
-
-# Check recent health check results
-sudo tail -f /var/log/provisioning_health.log
-
-# Manual health check execution
-sudo /usr/local/bin/monitoring/health_check.sh
+pvecm add 10.10.1.22 --link0 10.10.1.22 --link1 10.10.2.22
 ```
 
-**Monitoring Features:**
-- **Service Recovery**: Automatic restart of failed services
-- **Resource Monitoring**: Disk usage and memory alerts
-- **Network Validation**: Connectivity checks every 5 minutes
-- **Log Management**: Automatic log rotation (30 days retention)
-
-**Performance Limits:**
-- systemd resource limits for all critical services
-- File handle limits: 65536 per service
-- Process limits: 4096 per service
-
-## Usage
-
-### Primary Playbooks
-
-#### Infrastructure Deployment
+From `node2` to join the cluster:
 ```bash
-# Complete provisioning server setup with validation
-sudo ansible-playbook site.yml 
-# Selective role execution
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --tags "netboot,web,validation"
-
-# Skip validation if needed (not recommended)
-sudo ansible-playbook site.yml --vault-password-file ~/.vault_pass --skip-tags "validation"
+pvecm add 10.10.1.21 --use_ssh
 ```
 
-#### Hardware Management
-```bash
-# Boot order configuration (per node)
-sudo ansible-playbook set_boot_order.yml --vault-password-file ~/.vault_pass --limit <hostname>
+### Cluster Configuration
+- **Cluster Name**: sddc-cluster
+- **Primary Link**: Management network (10.10.1.x)
+- **Secondary Link**: Ceph network (10.10.2.x) for redundancy and performance
+- **Migration Network**: Ceph network (10Gbit for fast VM migrations)
 
-# Bulk boot configuration
-sudo ansible-playbook set_boot_order.yml ```
+## Configuration
 
-### Kubernetes Cluster Management
+### Global Settings
+Located in `inventory/group_vars/all.yml`:
+- Network configuration
+- OS support matrix
+- Security settings
 
-#### Kubespray Setup
-```bash
-# Setup Kubespray management environment
-sudo ansible-playbook site.yml --tags kubespray_mgmt --vault-password-file ~/.vault_pass
+### Node-Specific Settings  
+Located in `nodes.json`:
+- MAC to IP mapping
+- Hostname assignment
+- Network interface configuration
 
-# Generated deployment script usage
-cd /mnt/github/kubespray
-./deploy-cluster.sh
-
-# Check deployment status
-./deploy-cluster.sh --check
-
-# Deploy with specific tags
-./deploy-cluster.sh --tags apps
-```
-
-#### Kubespray Management Role (`kubespray_mgmt`)
-
-This role automates the setup of the Kubespray management environment on the provisioning server. It handles the installation of necessary tools, cloning the Kubespray repository, and configuring the environment for cluster deployment.
-
-**Key Features:**
-- Installs `uv` package manager for isolated Python environment management.
-- Clones the Kubespray repository to `{{ kubespray_path }}` (default: `/mnt/github/kubespray`).
-- Creates a dedicated Python virtual environment (`{{ kubespray_path }}/venv`) and installs Kubespray's Python dependencies.
-- Configures the Kubespray inventory (`{{ kubespray_path }}/inventory/{{ cluster_name }}/inventory.ini`) based on the `kubernetes_nodes` variable.
-- Generates cluster-specific configuration files (`{{ kubespray_path }}/inventory/{{ cluster_name }}/group_vars/k8s_cluster/k8s-cluster.yml`) using variables defined in this project.
-- Creates a `deploy-cluster.sh` script (`{{ kubespray_path }}/deploy-cluster.sh`) for simplified cluster deployment.
-
-**Configuration Variables:**
-
-The `kubespray_mgmt` role uses variables defined in `roles/kubespray_mgmt/vars/main.yml` to customize the Kubespray setup and cluster configuration.
-
-| Variable Name        | Description                                                              | Default Value (in `vars/main.yml`) |
-|----------------------|--------------------------------------------------------------------------|------------------------------------|
-| `kubespray_path`     | Absolute path where the Kubespray repository will be cloned.             | `/mnt/github/kubespray`            |
-| `cluster_name`       | Name of the Kubernetes cluster. Used for inventory and configuration.    | `mycluster`                        |
-| `pod_network_cidr`   | CIDR for the Kubernetes pod network.                                     | `172.16.0.0/12`                    |
-| `kube_pods_subnet`   | Alias for `pod_network_cidr` used internally by Kubespray.               | `172.16.0.0/12`                    |
-| `kube_service_addresses` | CIDR for the Kubernetes service network.                                 | `10.233.0.0/18`                    |
-| `kube_network_plugin`| Kubernetes CNI plugin to use (e.g., `calico`, `flannel`).                | `calico`                           |
-| `kubernetes_nodes`   | List of dictionaries defining Kubernetes nodes (name, IP, role, etc.).   | (Defined in `vars/main.yml`)       |
-
-**Usage:**
-
-To set up the Kubespray management environment, run the following command:
-
-```bash
-sudo ansible-playbook site.yml --tags kubespray_mgmt
-```
-
-After successful execution, navigate to the Kubespray directory and use the generated `deploy-cluster.sh` script to deploy the Kubernetes cluster:
-
-```bash
-cd /mnt/github/kubespray
-./deploy-cluster.sh
-```
-
-#### Cluster Configuration
-The kubespray_mgmt role automatically:
-- Installs uv package manager for Python environment management
-- Clones latest Kubespray repository
-- Creates isolated Python virtual environment
-- Configures cluster inventory from node definitions
-- Generates cluster-specific configuration files
-- Creates deployment script for cluster management
-
-### Management Scripts
-
-#### Redfish Hardware Control
-```bash
-# System monitoring
-./redfish.py <hostname> sensors [--filter cpu] [--json]
-
-# Power management
-./redfish.py <hostname> power-on|power-off|power-cycle|power-reboot
-
-# Boot configuration
-./redfish.py <hostname> set-boot-to-bios
-```
-
-#### Provisioning Operations
-```bash
-# Boot order management
-./set_boot_order.py <hostname> pxe hdd
-
-# Status verification
-./verify_provisioning.py <hostname>
-```
+### Web Interface Customization
+- Modify templates in `roles/web/templates/`
+- Custom styling in web assets
+- API endpoint configuration
 
 ## Web Management Interface
 
-### Dashboard Access
-Navigate to `http://<provisioning-server-ip>` for the management interface.
+Access the web interface at `http://10.10.1.1` (or your configured server IP).
 
-### Feature Overview
+### Features
+- Real-time node status monitoring
+- Installation progress tracking
+- Log file access
+- Redfish power management
+- Network boot configuration
 
-| Feature | Description | Capability |
-|---------|-------------|------------|
-| **Status Monitoring** | Real-time node state tracking | `NEW`, `INSTALLING`, `DONE`, `FAILED` |
-| **Provisioning Control** | One-click reprovisioning | State reset and reinstallation trigger |
-| **Configuration Access** | Direct autoinstall links | Per-node cloud-init configurations |
-| **Timestamp Tracking** | Last update monitoring | Activity auditing and debugging |
+## SSH Key Management
 
-### API Endpoints
+Initial SSH access to the Proxmox nodes from the management server is configured during the automated installation process. However, the cluster formation and ongoing management are primarily handled through the Proxmox API using `root@pam` authentication.
 
-- `GET /` - Main dashboard interface
-- `GET /autoinstall_configs/<mac>/user-data` - Node-specific autoinstall configuration
-- `GET /autoinstall_configs/<mac>/meta-data` - Cloud-init metadata
-- `POST /api/reprovision` - Trigger node reprovisioning
+Proxmox automatically manages the SSH keys required for intra-cluster communication (e.g., for migrations). The `proxmox-form-cluster.py` script does not rely on SSH for cluster operations, using it only as an emergency fallback to restart services if a node's API becomes unresponsive.
+
+## API Endpoints
+
+The provisioning server exposes several API endpoints to facilitate the automated installation process.
+
+- `/api/answer.php` - Dynamic Proxmox answer file generation.
+- `/api/register-node.php` - Used by nodes to register themselves with the provisioning server after installation.
+- `/api/node-status.php` - Used to update the status of a node during the provisioning process.
 
 ## Testing & Validation
 
-### Automated Testing Suite
+### Network Configuration Test
 ```bash
-# Python script validation
-cd test
-python3 -m pytest test_redfish.py -v
-python3 -m pytest test_web_actions.py -v
-
-# Ansible syntax validation
-ansible-playbook --syntax-check site.yml
-ansible-playbook --syntax-check set_boot_order.yml
+# Test Proxmox network configuration
+./scripts/test-network-config.sh
 ```
 
-### Integration Testing Checklist
-
-- [ ] **Network Services**: DHCP lease assignment and DNS resolution
-- [ ] **Boot Services**: iPXE bootloader serving and chainloading
-- [ ] **Web Services**: Autoinstall configuration accessibility
-- [ ] **Hardware Management**: Redfish API connectivity and control
-- [ ] **Dashboard Functionality**: Status updates and reprovisioning
-- [ ] **End-to-End**: Complete provisioning workflow validation
-
-### Performance Benchmarks
-
-| Metric | Target | Measurement Method |
-|--------|--------|--------------------|
-| DHCP Response Time | < 100ms | `dhcping` utility |
-| TFTP Transfer Rate | > 10 MB/s | iPXE boot timing |
-| Web Response Time | < 200ms | HTTP load testing |
-| Concurrent Provisions | 10+ nodes | Parallel deployment |
-
-## Customization
-
-### Network Topology Adaptation
-
-**DHCP Configuration** (`roles/netboot/vars/main.yml`):
-```yaml
-dnsmasq_dhcp_range: "192.168.1.100,192.168.1.200,12h"
-dnsmasq_listen_address: "192.168.1.1"
+### Answer File Validation
+```bash  
+# Validate Proxmox answer file syntax
+./verify_proxmox_config.sh node1
 ```
 
-**NAT Configuration** (`roles/common/tasks/main.yml`):
-```yaml
-nat_source_network: "192.168.1.0/24"
-nat_output_interface: "ens160"
+### SSH Connectivity Test
+```bash
+# Test SSH key deployment
+ssh root@10.10.1.21 'ls -la /root/.ssh/id_ed25519*'
 ```
 
-### Autoinstall Customization
+### Web Interface Test
+```bash
+# Test web services
+curl http://10.10.1.1/
 
-Templates located in `roles/web/templates/`:
-- `autoinstall-user-data.j2`: Ubuntu installer configuration
-- `autoinstall-meta-data.j2`: Cloud-init metadata configuration
-
-### Hardware Platform Support
-
-**Supermicro Servers**: Native support via SUM utility
-**Dell PowerEdge**: iDRAC Redfish compatibility
-**HPE ProLiant**: iLO Redfish integration
-**Generic IPMI**: Standard BMC functionality
+# Test API endpoints
+curl http://10.10.1.1/api/register-node.php
+```
 
 ## Troubleshooting
 
-### Automated Diagnostics
+### Common Issues
 
-#### Health Monitoring System
+#### SSH Connection Timeouts During Setup
+The post-install scripts include comprehensive timeout protection to prevent hanging:
+- SSH commands use `timeout` wrapper and `BatchMode=yes` to prevent interactive prompts
+- ConnectTimeout and ServerAliveInterval settings prevent indefinite waiting
+- If connectivity tests fail, they're logged as INFO/WARN rather than causing script failure
+- Normal during initial setup when other nodes haven't completed installation yet
+
+#### Ubuntu Installation Problems
 ```bash
-# Check automated health monitoring
-sudo systemctl status provisioning-health-check.timer
-sudo tail -f /var/log/provisioning_health.log
-
-# View recent service recovery actions
-sudo journalctl -u provisioning-health-check.service --since "1 hour ago"
-
-# Manual health check execution
-sudo /usr/local/bin/monitoring/health_check.sh
-```
-
-#### Validation Framework
-```bash
-# Run system validation manually
-sudo ansible-playbook site.yml --tags "validation" 
-# Check validation failure flags
-ls -la /tmp/ansible_validation_failed
-
-# View validation troubleshooting info
-sudo journalctl | grep "validation failed"
-```
-
-### Service Diagnostics
-
-#### Network Services Issues
-```bash
-# DHCP service validation with enhanced debugging
-sudo systemctl status dnsmasq
-sudo journalctl -u dnsmasq --since "1 hour ago"
-
-# TFTP service verification (dnsmasq native)
-sudo netstat -ulnp | grep ':69'
-echo "quit" | tftp 127.0.0.1 69
-
-# Network connectivity testing
-sudo tcpdump -i <interface> port 67 or port 68
-```
-
-#### Web Services Issues
-```bash
-# Application stack health with resource monitoring
-sudo systemctl status nginx php8.3-fpm
+# Check web server logs
 sudo tail -f /var/log/nginx/error.log
 
-# PHP-FPM diagnostics with performance limits
-sudo tail -f /var/log/php8.3-fpm.log
-sudo systemctl show php8.3-fpm --property=LimitNOFILE,LimitNPROC
+# Check cloud-init logs on target node
+tail -f /var/log/cloud-init.log
 ```
 
-#### Hardware Management Issues
+#### Network Boot Issues
 ```bash
-# Redfish connectivity testing
-curl -k -u <user>:<pass> https://<node-ip>/redfish/v1/Systems/1
+# Check TFTP service
+sudo systemctl status dnsmasq
 
-# Network reachability verification
-ping <node-ip>
-nmap -p 443 <node-ip>
+# Test TFTP connectivity
+tftp 10.10.1.1 -c get ipxe.efi
 ```
 
-### Common Resolution Patterns
+#### Proxmox Installation Issues
+```bash
+# Check primary installation log
+tail -f /var/log/proxmox-post-install.log
 
-| Issue Category | Symptoms | Resolution Strategy |
-|----------------|----------|-------------------|
-| **DHCP Failures** | No IP assignment | Interface binding, firewall rules, dynamic interface detection |
-| **TFTP Conflicts** | Port 69 binding errors | Remove conflicting TFTP daemons, use dnsmasq integrated TFTP |
-| **PXE Boot Issues** | Boot loop/timeout | TFTP permissions, bootloader integrity, service conflicts |
-| **Provisioning Stalls** | Install hangs | Network connectivity, repository access, validation checks |
-| **Hardware Control** | API timeouts | Credential validation, network paths, Redfish compatibility |
-| **Service Recovery** | Services down | Check health monitoring logs, automatic restart status |
-| **Validation Failures** | Deployment issues | Review validation logs, check system requirements, manual verification |
+# Verify SSH key deployment
+ssh root@10.10.1.21 'ls -la /root/.ssh/id_ed25519*'
 
-### Log Analysis Locations
+# Check network configuration  
+ssh root@10.10.1.21 'ip addr show vmbr0 | grep brd'  # Should show 10.10.1.255
+ssh root@10.10.1.21 'ip addr show vmbr1 | grep brd'  # Should show 10.10.2.255
 
-| Service | Log Location | Analysis Focus |
-|---------|-------------|----------------|
-| **dnsmasq** | `journalctl -u dnsmasq` | DHCP leases, DNS queries, TFTP transfers |
-| **nginx** | `/var/log/nginx/` | HTTP requests, errors, security events |
-| **PHP-FPM** | `/var/log/php8.3-fpm.log` | Application errors, performance issues |
-| **Health Monitor** | `/var/log/provisioning_health.log` | Service recovery, resource alerts |
-| **Validation** | `journalctl \| grep validation` | System validation results, failures |
-| **System** | `/var/log/syslog` | General system events, security logs |
+# Test Ceph network connectivity
+ping 10.10.2.21  # from any node
+```
+
+#### Cluster Formation Issues
+```bash
+# Check cluster status
+ssh root@10.10.1.21 'pvecm status'
+
+# Check corosync rings  
+ssh root@10.10.1.21 'corosync-cfgtool -s'
+
+# Manual cluster formation log (if used)
+tail -f /var/log/proxmox-cluster-formation.log
+```
+
+## File Structure
+
+### Scripts
+- `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed.
+- `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.
+- `scripts/test-network-config.sh` - Network configuration validation.
+
+### APIs
+- `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator.
+- `roles/web/templates/register-node.php.j2` - Node registration API.
+- `roles/web/templates/node-status.php.j2` - Status update API.
+
+### Configuration
+- `nodes.json` - Node inventory and configuration.
+- `inventory/group_vars/all.yml` - Global configuration.
+- `inventory/host_vars/localhost.yml` - Server-specific settings.
+
+### Web Assets
+- `roles/web/templates/index.php.j2` - Main dashboard.
+- `roles/web/templates/nginx.conf.j2` - Web server configuration.
 
 ## Contributing
 
-We welcome contributions from the community. Please review our contribution guidelines:
-
-### Development Workflow
-1. **Fork** the repository and create a feature branch
-2. **Test** changes in an isolated environment
-3. **Document** new features and configuration options
-4. **Submit** pull request with comprehensive description
+### Development Setup
+1. Fork the repository
+2. Create feature branch
+3. Test changes thoroughly
+4. Submit pull request
 
 ### Code Standards
-- **Ansible**: Follow official best practices and use `ansible-lint`
-- **Python**: Adhere to PEP 8 standards with `black` formatting
-- **Documentation**: Update relevant README sections and role documentation
+- Follow existing code style
+- Include comprehensive testing
+- Document all changes
+- Remove debug code before committing
 
-### Testing Requirements
-- All Ansible playbooks must pass syntax validation
-- Python scripts require unit test coverage
-- Integration tests for end-to-end workflows
+### Testing Guidelines
+- Test on clean Ubuntu 24.04 installation
+- Verify both Ubuntu and Proxmox provisioning
+- Test network configurations
+- Validate security implementations
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-### Community Support
-- **GitHub Issues**: Bug reports and feature requests
-- **Documentation**: Comprehensive guides and examples
-- **Community Forums**: Discussion and knowledge sharing
-
-### Enterprise Support
-For production deployments and enterprise support:
-- **Professional Services**: Implementation and customization
-- **Training Programs**: Team education and certification
-- **SLA Agreements**: Guaranteed response times and resolution
-
-### Contact Information
-- **Project Maintainer**: SDDC.info Team
-- **GitHub Repository**: https://github.com/sddcinfo/ansible-provisioning-server
-- **Documentation Site**: https://docs.sddc.info/provisioning
-
----
-
-*Built by the SDDC.info community*
+MIT License - see LICENSE file for details.

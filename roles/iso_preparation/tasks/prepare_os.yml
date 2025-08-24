@@ -1,0 +1,282 @@
+---
+# OS-agnostic ISO preparation task
+# Called for each operating system in supported_operating_systems
+
+- name: "Stat the source unattended ISO for timestamp comparison"
+  stat:
+    path: "{{ playbook_dir }}/../../../iso_builder/output/proxmox-ve-unattended.iso"
+  register: unattended_iso_stat
+  when: os_item.key == 'proxmox9'
+
+- name: "Stat the sentinel file for timestamp comparison"
+  stat:
+    path: "{{ os_item.value.provisioning_dir }}/.extraction_complete"
+  register: sentinel_file_stat_for_compare
+  when: os_item.key == 'proxmox9'
+
+- name: "Force Proxmox ISO update if source ISO is newer"
+  ansible.builtin.file:
+    path: "{{ os_item.value.provisioning_dir }}/.extraction_complete"
+    state: absent
+  when:
+    - os_item.key == 'proxmox9'
+    - unattended_iso_stat.stat.exists
+    - sentinel_file_stat_for_compare.stat.exists
+    - unattended_iso_stat.stat.mtime > sentinel_file_stat_for_compare.stat.mtime
+
+- name: Set OS-specific variables
+  set_fact:
+    current_os: "{{ os_item.key }}"
+    os_config: "{{ os_item.value }}"
+    extraction_sentinel_file: "{{ os_item.value.provisioning_dir }}/.extraction_complete"
+
+- name: "Check if {{ os_config.name }} ISO extraction is already complete"
+  stat:
+    path: "{{ extraction_sentinel_file }}"
+  register: sentinel_file_stat
+
+- name: "Ensure {{ os_config.name }} provisioning directory exists"
+  ansible.builtin.file:
+    path: "{{ os_config.provisioning_dir }}"
+    state: directory
+    mode: '0755'
+  tags:
+    - foundation
+    - iso_management
+
+- name: "Check if {{ os_config.name }} ISO already exists"
+  stat:
+    path: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+  register: iso_exists
+  
+- name: "Download {{ os_config.name }} ISO (expensive operation)"
+  ansible.builtin.get_url:
+    url: "{{ os_config.iso_url }}"
+    dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+    mode: '0644'
+    timeout: 3600
+    force: no  # Don't re-download if file exists
+  register: download_iso
+  when: 
+    - not sentinel_file_stat.stat.exists
+    - not iso_exists.stat.exists or force_iso_download | default(false)
+  tags:
+    - expensive
+    - iso_download
+
+- name: "Use original Proxmox ISO for PXE extraction (not unattended ISO)"
+  copy:
+    src: "{{ playbook_dir }}/../iso_builder/input/proxmox-ve_9.0-1.iso"
+    dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+    remote_src: yes
+  when: 
+    - not sentinel_file_stat.stat.exists
+    - current_os == 'proxmox9'
+
+- name: "Ensure {{ os_config.name }} ISO mount point exists"
+  ansible.builtin.file:
+    path: "{{ os_config.iso_mount_point }}"
+    state: directory
+    mode: '0755'
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Mount {{ os_config.name }} ISO with verification"
+  block:
+    - name: "Mount {{ os_config.name }} ISO"
+      ansible.posix.mount:
+        src: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+        path: "{{ os_config.iso_mount_point }}"
+        fstype: iso9660
+        opts: loop
+        state: mounted
+      register: mount_result
+      
+    - name: "Verify {{ os_config.name }} ISO is mounted and accessible"
+      ansible.builtin.stat:
+        path: "{{ os_config.iso_mount_point }}/{{ os_config.boot_files.kernel | dirname }}"
+      register: mount_verification
+      
+    - name: "Fail if {{ os_config.name }} mount verification failed"
+      ansible.builtin.fail:
+        msg: "{{ os_config.name }} ISO mount failed or boot directory not accessible"
+      when: not mount_verification.stat.exists or not mount_verification.stat.isdir
+      
+    - name: "Log {{ os_config.name }} mount success"
+      ansible.builtin.debug:
+        msg: "{{ os_config.name }} ISO successfully mounted at {{ os_config.iso_mount_point }}"
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Create boot directory for {{ os_config.name }} PXE boot files"
+  ansible.builtin.file:
+    path: "{{ os_config.provisioning_dir }}/{{ os_config.boot_files.kernel | dirname }}"
+    state: directory
+    mode: '0755'
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Copy kernel and initrd files for {{ os_config.name }} PXE boot"
+  block:
+    - name: "Copy {{ os_config.name }} kernel and initrd files"
+      ansible.builtin.copy:
+        src: "{{ os_config.iso_mount_point }}/{{ item }}"
+        dest: "{{ os_config.provisioning_dir }}/{{ item }}"
+        remote_src: yes
+        mode: preserve
+      loop:
+        - "{{ os_config.boot_files.kernel }}"
+        - "{{ os_config.boot_files.initrd }}"
+      register: copy_boot_files
+      
+    - name: "Verify {{ os_config.name }} kernel and initrd files were copied"
+      ansible.builtin.stat:
+        path: "{{ os_config.provisioning_dir }}/{{ item }}"
+      loop:
+        - "{{ os_config.boot_files.kernel }}"
+        - "{{ os_config.boot_files.initrd }}"
+      register: boot_files_verification
+      
+    - name: "Fail if {{ os_config.name }} critical boot files are missing"
+      ansible.builtin.fail:
+        msg: "{{ os_config.name }} critical boot file missing: {{ item.item }}"
+      loop: "{{ boot_files_verification.results }}"
+      when: not item.stat.exists
+      
+    - name: "Log {{ os_config.name }} boot files copy success"
+      ansible.builtin.debug:
+        msg: "{{ os_config.name }} kernel and initrd files successfully copied"
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Copy necessary directories from {{ os_config.name }} ISO to provisioning directory"
+  ansible.builtin.copy:
+    src: "{{ os_config.iso_mount_point }}/{{ item }}"
+    dest: "{{ os_config.provisioning_dir }}/{{ item }}"
+    remote_src: yes
+    mode: preserve
+  loop: "{{ os_config.config_dirs }}"
+  when: not sentinel_file_stat.stat.exists
+  ignore_errors: yes # Some directories might not exist on all ISOs
+  tags:
+    - expensive
+    - iso_management
+
+- name: "Copy necessary files from {{ os_config.name }} ISO to provisioning directory"
+  ansible.builtin.copy:
+    src: "{{ os_config.iso_mount_point }}/{{ item }}"
+    dest: "{{ os_config.provisioning_dir }}/{{ item }}"
+    remote_src: yes
+    mode: preserve
+  loop: "{{ os_config.config_files }}"
+  when: not sentinel_file_stat.stat.exists
+  ignore_errors: yes # Some files might not exist on all ISOs
+
+- name: "Prepare Proxmox ISO with auto-install-assistant for HTTP fetch"
+  block:
+    - name: "Check if Docker is available for Proxmox ISO preparation"
+      ansible.builtin.command: docker --version
+      register: docker_check
+      changed_when: false
+      failed_when: docker_check.rc != 0
+      when: current_os == 'proxmox9'
+      
+    - name: "Ensure Docker service is running for Proxmox preparation"
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+      when: current_os == 'proxmox9'
+      
+    - name: "Create Proxmox auto-installer ISO with HTTP fetch using proper Docker container"
+      ansible.builtin.shell: |
+        docker run --rm \
+          -v "{{ os_config.iso_download_dir }}:/input" \
+          -v "{{ os_config.provisioning_dir }}:/output" \
+          --name proxmox-prepare-iso \
+          jamestalmage/proxmox-auto-install-assistant \
+          proxmox-auto-install-assistant prepare-iso \
+          --fetch-from http \
+          --url "http://{{ provisioning_ip }}/api/answer.php" \
+          --output /output/{{ os_config.iso_name }} \
+          /input/{{ os_config.iso_name }}
+      register: proxmox_prepare_result
+      when: current_os == 'proxmox9'
+      timeout: 1800
+      
+    - name: "Log Proxmox ISO preparation result"
+      ansible.builtin.debug:
+        msg: "Proxmox auto-installer ISO copied successfully"
+      when: current_os == 'proxmox9' and proxmox_prepare_result.changed
+      
+    - name: "Copy other OS ISOs directly (non-Proxmox)"
+      ansible.builtin.copy:
+        src: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+        dest: "{{ os_config.provisioning_dir }}/{{ os_config.iso_name }}"
+        remote_src: yes
+        mode: '0644'
+      when: current_os != 'proxmox9'
+      
+  when: not sentinel_file_stat.stat.exists
+  tags:
+    - expensive
+    - iso_management
+
+- name: "Create sentinel file to mark {{ os_config.name }} extraction as complete"
+  ansible.builtin.file:
+    path: "{{ extraction_sentinel_file }}"
+    state: touch
+    mode: '0644'
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Unmount {{ os_config.name }} ISO with verification"
+  block:
+    - name: "Unmount {{ os_config.name }} ISO"
+      ansible.posix.mount:
+        path: "{{ os_config.iso_mount_point }}"
+        state: unmounted
+      register: unmount_result
+      
+    - name: "Wait for {{ os_config.name }} unmount to complete"
+      ansible.builtin.wait_for:
+        path: "{{ os_config.iso_mount_point }}/{{ os_config.boot_files.kernel | dirname }}"
+        state: absent
+        timeout: 30
+      ignore_errors: true
+      
+    - name: "Verify {{ os_config.name }} ISO is fully unmounted"
+      ansible.builtin.shell: "mountpoint -q '{{ os_config.iso_mount_point }}'"
+      register: mountpoint_check
+      failed_when: false
+      changed_when: false
+      
+    - name: "Force unmount {{ os_config.name }} if still mounted"
+      ansible.builtin.command: "umount -f '{{ os_config.iso_mount_point }}'"
+      when: mountpoint_check.rc == 0
+      register: force_unmount
+      
+    - name: "Log {{ os_config.name }} unmount result"
+      ansible.builtin.debug:
+        msg: "{{ os_config.name }} ISO unmount: {{ 'successful' if mountpoint_check.rc != 0 else 'required force unmount' }}"
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Clean up {{ os_config.name }} ISO mount point directory"
+  block:
+    - name: "Final verification that {{ os_config.name }} mount point is not in use"
+      ansible.builtin.shell: "mountpoint -q '{{ os_config.iso_mount_point }}'"
+      register: final_mountpoint_check
+      failed_when: false
+      changed_when: false
+      
+    - name: "Remove {{ os_config.name }} ISO mount point directory"
+      ansible.builtin.file:
+        path: "{{ os_config.iso_mount_point }}"
+        state: absent
+      when: final_mountpoint_check.rc != 0
+      
+    - name: "Warn if {{ os_config.name }} mount point could not be removed"
+      ansible.builtin.debug:
+        msg: "WARNING: Could not remove {{ os_config.name }} mount point directory - still mounted"
+      when: final_mountpoint_check.rc == 0
+  when: not sentinel_file_stat.stat.exists
+
+- name: "Clean up downloaded {{ os_config.name }} ISO (optional)"
+  ansible.builtin.file:
+    path: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+    state: absent
+  when: delete_iso_after_copy | default(false)

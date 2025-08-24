@@ -1,10 +1,69 @@
 ---
 - name: restart nginx
-  service:
-    name: nginx
-    state: restarted
+  block:
+    - name: Test nginx configuration before restart
+      command: nginx -t
+      changed_when: false
+      
+    - name: Restart nginx service
+      service:
+        name: nginx
+        state: restarted
+      register: nginx_restart_result
+      
+    - name: Wait for nginx to be ready
+      wait_for:
+        port: 80
+        host: "{{ server_ip | default('127.0.0.1') }}"
+        state: started
+        timeout: 30
+        
+    - name: Verify nginx is serving requests
+      uri:
+        url: "http://{{ server_ip | default('127.0.0.1') }}/"
+        method: GET
+        status_code: 200
+        timeout: 10
+      ignore_errors: true
+      
+  rescue:
+    - name: Log nginx restart failure
+      debug:
+        msg: "Nginx restart failed - check configuration and logs"
+        
+    - name: Attempt to start nginx if stopped
+      service:
+        name: nginx
+        state: started
+      ignore_errors: true
 
 - name: restart php-fpm
-  service:
-    name: php8.3-fpm
-    state: restarted
+  block:
+    - name: Restart php-fpm service
+      service:
+        name: php8.3-fpm
+        state: restarted
+      register: php_fpm_restart_result
+      
+    - name: Wait for php-fpm socket to be available
+      wait_for:
+        path: /var/run/php/php8.3-fpm.sock
+        state: present
+        timeout: 30
+        
+    - name: Verify php-fpm service is active
+      command: systemctl is-active php8.3-fpm
+      changed_when: false
+      register: php_fpm_status
+      failed_when: php_fpm_status.stdout != "active"
+      
+  rescue:
+    - name: Log php-fpm restart failure
+      debug:
+        msg: "PHP-FPM restart failed - check configuration and logs"
+        
+    - name: Attempt to start php-fpm if stopped
+      service:
+        name: php8.3-fpm
+        state: started
+      ignore_errors: true

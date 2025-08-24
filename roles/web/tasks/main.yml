@@ -1,23 +1,34 @@
 ---
-- name: Install nginx and php-fpm
+- name: Install nginx, php-fpm and Python dependencies
   apt:
     name:
       - nginx
       - php-fpm
       - php-json
+      - python3
+      - python3-pip
+      - python3-requests
     state: present
   tags:
-    - nginx
-    - php
+    - services_install
+    - foundation
+    - packages
 
 - name: Ensure php-fpm is running with verification
   block:
+    - name: Check php-fpm current status
+      systemd:
+        name: php8.3-fpm
+      register: php_fpm_current_status
+      ignore_errors: true
+      
     - name: Start and enable php-fpm
       service:
         name: php8.3-fpm
         state: started
         enabled: yes
       register: php_fpm_start_result
+      when: php_fpm_current_status.status is not defined or php_fpm_current_status.status.ActiveState != 'active'
       
     - name: Wait for php-fpm socket to be available
       ansible.builtin.wait_for:
@@ -35,23 +46,44 @@
       ansible.builtin.debug:
         msg: "PHP-FPM successfully started and socket is available"
   tags:
-    - php
+    - services_install
+    - validation
 
 - name: Configure php-fpm
   template:
     src: www.conf.j2
     dest: /etc/php/8.3/fpm/pool.d/www.conf
-  notify: restart php-fpm
+  register: php_fpm_config_changed
   tags:
-    - php
+    - web_config
+    - maintenance
+
+- name: Restart php-fpm when configuration changes
+  service:
+    name: php8.3-fpm
+    state: restarted
+  when: php_fpm_config_changed.changed
+  tags:
+    - web_config
+    - maintenance
 
 - name: Remove default nginx site
   file:
     path: /etc/nginx/sites-enabled/default
     state: absent
-  notify: restart nginx
+  register: nginx_default_removed
   tags:
-    - nginx
+    - web_config
+    - services_install
+
+- name: Restart nginx when default site removed
+  service:
+    name: nginx
+    state: restarted
+  when: nginx_default_removed.changed
+  tags:
+    - web_config
+    - services_install
 
 - name: Configure nginx with verification
   block:
@@ -77,11 +109,21 @@
         dest: /etc/nginx/sites-enabled/default
         state: link
       
-    - name: Force nginx restart to apply new configuration
+    - name: Stop nginx for clean restart
       service:
         name: nginx
-        state: restarted
-      register: nginx_restart_result
+        state: stopped
+      
+    - name: Start nginx and ensure it's enabled
+      service:
+        name: nginx
+        state: started
+        enabled: yes
+      register: nginx_start_result
+      
+    - name: Wait a moment for nginx to fully initialize
+      pause:
+        seconds: 2
       
     - name: Wait for nginx to be ready
       wait_for:
@@ -94,14 +136,16 @@
       debug:
         msg: "Nginx configuration deployed and service restarted successfully"
   tags:
-    - nginx
+    - web_config
+    - services_install
 
 - name: Remove default nginx page
   file:
     path: /var/www/html/index.nginx-debian.html
     state: absent
   tags:
-    - nginx
+    - web_config
+    - services_install
 
 - name: Ensure web directory has proper permissions
   file:
@@ -111,7 +155,45 @@
     mode: "0755"
     state: directory
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
+
+- name: Copy nodes.json to the web root
+  copy:
+    src: "{{ playbook_dir }}/nodes.json"
+    dest: "/var/www/html/nodes.json"
+    owner: www-data
+    group: www-data
+    mode: '0644'
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+- name: Create lib directory for PHP libraries
+  file:
+    path: /var/www/html/lib
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - foundation
+    - permissions
+
+- name: Copy shared PHP node library
+  template:
+    src: lib/nodes.php.j2
+    dest: /var/www/html/lib/nodes.php
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - web_config
+    - templates
+    - web_files_only
 
 - name: Copy web root with verification
   block:
@@ -144,7 +226,10 @@
           - Mode: {{ index_php_check.stat.mode }}
           - Readable by nginx: {{ 'Yes' if nginx_read_test.rc == 0 else 'No' }}
   tags:
-    - www_content
+    - web_config
+    - templates
+    - permissions
+    - web_files_only
 
 - name: Ensure sessions directory exists and has correct permissions
   file:
@@ -154,7 +239,9 @@
     group: www-data
     mode: "0775"
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
 
 - name: Ensure state file exists and has correct permissions
   file:
@@ -164,7 +251,9 @@
     group: www-data
     mode: "0664"
   tags:
-    - www_content
+    - web_config
+    - permissions
+    - foundation
 
 - name: Create autoinstall templates base directory
   file:
@@ -174,7 +263,9 @@
     group: www-data
     mode: "0755"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - foundation
+    - permissions
 
 - name: Create node-specific autoinstall directories
   file:
@@ -209,7 +300,10 @@
     hostname: "{{ item.hostname }}"
     mac: "{{ item.mac }}"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - templates
+    - maintenance
+    - web_files_only
 
 - name: Template out meta-data for each node
   template:
@@ -222,7 +316,10 @@
   vars:
     hostname: "{{ item.hostname }}"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - templates
+    - maintenance
+    - web_files_only
 
 - name: Template out user-data for default
   template:
@@ -235,7 +332,9 @@
     hostname: "{{ default_autoinstall_node.hostname }}"
     mac: "{{ default_autoinstall_node.mac }}"
   tags:
-    - autoinstall_configs
+    - autoinstall_config
+    - templates
+    - foundation
 
 - name: Template out meta-data for default
   template:
@@ -248,8 +347,144 @@
     hostname: "{{ default_autoinstall_node.hostname }}"
   tags:
     - autoinstall_configs
+    - web_files_only
 
-- name: Generate redfish script
+# Multi-OS configuration support
+- name: Create multi-OS default configuration directories
+  file:
+    path: "{{ nginx_web_root }}/autoinstall_configs/{{ os_key }}_default"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  loop: "{{ supported_operating_systems | dict2items }}"
+  loop_control:
+    loop_var: os_item
+  vars:
+    os_key: "{{ os_item.key }}"
+  tags:
+    - autoinstall_config
+    - foundation
+    - permissions
+    - web_files_only
+
+- name: Template out Ubuntu default configurations (for backward compatibility)
+  template:
+    src: "{{ item.template }}"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/ubuntu2404_default/{{ item.filename }}"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop:
+    - { template: "autoinstall-user-data.j2", filename: "user-data" }
+    - { template: "autoinstall-meta-data.j2", filename: "meta-data" }
+  vars:
+    hostname: "{{ default_autoinstall_nodes.ubuntu2404.hostname }}"
+    mac: "{{ default_autoinstall_nodes.ubuntu2404.mac }}"
+  tags:
+    - autoinstall_config
+    - templates
+    - foundation
+    - web_files_only
+
+- name: Template out Proxmox default configurations
+  template:
+    src: "{{ item.template }}"
+    dest: "{{ nginx_web_root }}/autoinstall_configs/proxmox9_default/{{ item.filename }}"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  loop:
+    - { template: "proxmox-preseed.cfg.j2", filename: "answer.toml" }
+    - { template: "proxmox-meta-data.j2", filename: "meta-data" }
+  vars:
+    hostname: "{{ default_autoinstall_nodes.proxmox9.hostname | default('node-default') }}"
+    mac: "{{ default_autoinstall_nodes.proxmox9.mac }}"
+    os_ip: "{{ default_autoinstall_nodes.proxmox9.os_ip | default('10.10.1.100') }}"
+  tags:
+    - autoinstall_config
+    - templates
+    - foundation
+    - web_files_only
+
+- name: Create API directory
+  file:
+    path: "{{ nginx_web_root }}/api"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - foundation
+    - permissions
+    - web_files_only
+
+- name: Generate Proxmox answer API endpoint
+  template:
+    src: answer.php.j2
+    dest: "{{ nginx_web_root }}/api/answer.php"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - templates
+    - web_config
+    - web_files_only
+
+- name: Deploy node registration API endpoint
+  template:
+    src: register-node.php.j2
+    dest: "{{ nginx_web_root }}/api/register-node.php"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+- name: Deploy node status API endpoint
+  template:
+    src: node-status.php.j2
+    dest: "{{ nginx_web_root }}/api/node-status.php"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+# SSH key APIs removed - SSH keys are now managed via answer file during installation
+# and Proxmox automatically manages cluster SSH keys
+
+# SSH key directory and copying removed - keys are configured via nodes.json during installation
+
+- name: Create data directory for node registrations
+  file:
+    path: "{{ nginx_web_root }}/data"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - web_files_only
+
+- name: Create logs directory for API logs
+  file:
+    path: "{{ nginx_web_root }}/logs"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - web_files_only
+    - foundation
+
+- name: Generate redfish script for sysadmin user
   template:
     src: ../../templates/redfish.py.j2
     dest: /home/sysadmin/redfish.py
@@ -257,7 +492,52 @@
     group: sysadmin
     mode: "0755"
   tags:
-    - redfish_script
+    - templates
+    - foundation
+    - permissions
+
+- name: Deploy redfish script for web interface
+  template:
+    src: redfish.py.j2
+    dest: /var/www/html/redfish.py
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - templates
+    - permissions
+    - web_files_only
+
+- name: Create scripts directory for post-install automation
+  file:
+    path: "{{ nginx_web_root }}/scripts"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - web_files_only
+
+- name: Deploy Proxmox post-install script
+  copy:
+    src: /home/sysadmin/claude/ansible-provisioning-server/scripts/proxmox-post-install.sh
+    dest: "{{ nginx_web_root }}/scripts/proxmox-post-install.sh"
+    owner: www-data
+    group: www-data
+    mode: "0755"
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+# Management scripts (cluster formation, status, reboot) are kept in sysadmin home directory only
+# Only proxmox-post-install.sh needs to be web-accessible for node downloads
+
+# Note: Ansible playbooks removed - Proxmox configuration is now handled by
+# self-contained scripts (proxmox-post-install.sh and proxmox-form-cluster.py)
+# that run directly on the nodes without Ansible dependencies
 
 - name: Generate verification script with error handling
   block:
@@ -301,7 +581,7 @@
       debug:
         msg: |
           Web service test:
-          - Status: {{ 'SUCCESS' if final_web_test.status == 200 else 'FAILED' }}
+          - Status: {{ 'SUCCESS' if (final_web_test.status | default(0)) == 200 else 'FAILED' }}
           - HTTP Status: {{ final_web_test.status | default('N/A') }}
           - Content Type: {{ final_web_test.content_type | default('N/A') }}
           
@@ -314,6 +594,6 @@
           3. nginx error logs: tail -f /var/log/nginx/error.log
           4. PHP-FPM logs: tail -f /var/log/php8.3-fpm.log
           5. File permissions: ls -la /var/www/html/index.php
-      when: final_web_test.status != 200
+      when: (final_web_test.status | default(0)) != 200
   tags:
-    - web_validation
+    - validation

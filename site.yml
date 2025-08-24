@@ -6,12 +6,106 @@
 
   roles:
     - role: common
-      tags: ['common']
-    - network_config
-    - netboot
-    - web
-    - iso_preparation
-    - validation
-    - role: kubespray_mgmt
-      tags: ['kubespray_mgmt']
-      become: no
+      tags: 
+        # Legacy tags (backward compatibility)
+        - common
+        - packages
+        - ssh_setup  
+        - network_setup
+        - docker_setup
+        # Optimized infrastructure tags
+        - foundation
+        - services_install
+        - system_config
+        # Operation-specific tags
+        - package_upgrade
+        - maintenance
+
+    - role: network_config
+      tags:
+        # Legacy tags (backward compatibility)
+        - network_config
+        - network_setup
+        # Optimized infrastructure tags
+        - network_infra
+        - foundation
+        # Configuration tags
+        - network_config_update
+        - maintenance
+
+    - role: netboot  
+      tags:
+        # Legacy tags (backward compatibility)
+        - netboot
+        - pxe_setup
+        # Optimized service tags
+        - services_install
+        - dns_config
+        - dns_dhcp
+        # Operation-specific tags
+        - validation
+
+    - role: web
+      tags:
+        # Legacy tags (backward compatibility)
+        - web
+        - web_setup
+        - autoinstall_templates
+        # Optimized service tags
+        - services_install
+        - web_config
+        - autoinstall_config
+        # Operation-specific tags
+        - templates
+        - permissions
+        - validation
+
+    - role: iso_preparation
+      tags:
+        # Legacy tags (backward compatibility)
+        - iso_preparation
+        - iso_processing  
+        # Optimized operation tags
+        - iso_download
+        - iso_management
+        - expensive
+
+    - role: validation
+      tags:
+        # Legacy tags (backward compatibility)
+        - validation
+        # Optimized operation tags
+        - validation
+        - health_check
+        
+  tasks:
+    - name: Quick system health check (isolated)
+      block:
+        - name: Check critical services are active
+          ansible.builtin.command: "systemctl is-active {{ item }}"
+          register: service_status
+          loop:
+            - dnsmasq
+            - nginx
+            - php8.3-fpm
+          changed_when: false
+          failed_when: service_status.stdout != "active"
+          
+        - name: Quick DNS resolution test
+          ansible.builtin.command: "dig @127.0.0.1 google.com A +short +time=2"
+          register: quick_dns_test
+          changed_when: false
+          failed_when: quick_dns_test.rc != 0 or quick_dns_test.stdout == ""
+          
+        - name: Quick web service test
+          ansible.builtin.uri:
+            url: "http://127.0.0.1/"
+            method: GET
+            status_code: 200
+            timeout: 3
+            
+        - name: Quick validation complete
+          ansible.builtin.debug:
+            msg: "[OK] Quick validation passed: Services active, DNS resolving, web responding"
+      tags:
+        - quick

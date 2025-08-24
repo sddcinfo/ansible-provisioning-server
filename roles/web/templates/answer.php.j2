@@ -1,0 +1,107 @@
+<?php
+header('Content-Type: text/plain');
+header('Cache-Control: no-cache, no-store, must-revalidate');
+
+require_once __DIR__ . '/../lib/nodes.php';
+
+// Also load nodes.json directly for SSH keys
+$nodes_json_path = __DIR__ . '/../nodes.json';
+$nodes_full_data = json_decode(file_get_contents($nodes_json_path), true);
+
+// Get client IP for hostname determination
+$client_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+
+// Proxmox auto-installer sends POST data with system information
+// Parse POST data to extract MAC address
+$post_data = file_get_contents('php://input');
+$system_info = json_decode($post_data, true);
+
+// Extract MAC address from system info or fallback to GET parameter
+$mac = '';
+if ($system_info && isset($system_info['network_interfaces'])) {
+    foreach ($system_info['network_interfaces'] as $interface) {
+        if (isset($interface['mac']) && !empty($interface['mac'])) {
+            $mac = strtolower($interface['mac']);
+            break; // Use first available MAC address
+        }
+    }
+}
+
+// Fallback to GET parameter if available
+if (empty($mac)) {
+    $mac = $_GET['mac'] ?? '';
+}
+
+// Normalize MAC address format (convert semicolons to colons if needed)
+$mac = str_replace(';', ':', $mac);
+
+// Log the request for debugging
+error_log("Proxmox answer request - IP: {$client_ip}, MAC: {$mac}, POST data: " . substr($post_data, 0, 500));
+
+// Debug logging for answer file generation
+file_put_contents('/var/www/html/answer_debug.log', 
+    date('Y-m-d H:i:s') . " - MAC: {$mac}, Client IP: {$client_ip}\n" .
+    "POST Data: " . $post_data . "\n\n", 
+    FILE_APPEND);
+
+$node = get_node_by_mac($mac);
+$hostname = $node['os_hostname'] ?? 'unknown-node'; // Use OS hostname (node1, node2, etc)
+$os_ip = $node['os_ip'] ?? '10.10.1.100'; // OS network IP
+$gateway = '{{ gateway_ip | default("10.10.1.1") }}';
+$dns = '{{ dns_servers | default("10.10.1.1") }}';
+$netmask = '24'; // /24 network
+
+// Get SSH key from the loaded nodes data
+$ssh_key = $nodes_full_data['ssh_keys']['root'] ?? '';
+
+// Extract last 8 characters of MAC for filter (e.g., "6c:5a:76" from "ac:1f:6b:6c:5a:76")
+// This provides enough uniqueness while keeping the filter simple
+$mac_parts = explode(':', $mac);
+$mac_suffix = implode('', array_slice($mac_parts, -3)); // Last 3 octets without colons
+
+// Generate dynamic answer file
+$config = <<<TOML
+# Proxmox VE 9.0 Auto-Installer Configuration (answer.toml format)
+# This file configures the Proxmox VE auto-installer for unattended installation
+
+[global]
+keyboard = "en-us"
+country = "jp"
+fqdn = "{$hostname}.{{ domain | default('local') }}"
+mailto = "{{ mailto | default('admin@' + domain) }}"
+timezone = "{{ timezone | default('UTC') }}"
+root-password = "{{ root_password }}"
+root-ssh-keys = [
+    "{$ssh_key}"
+]
+
+[network]
+source = "from-answer"
+cidr = "{$os_ip}/{$netmask}"
+gateway = "{$gateway}"
+dns = "{$dns}"
+# Match network interface by MAC address (most reliable method)
+# The MAC address is specific to each node's OS network interface
+filter.ID_NET_NAME_MAC = "*{$mac_suffix}"
+
+[disk-setup]
+filesystem = "zfs"
+disk_list = ["sda"]
+zfs.raid = "raid0"
+zfs.compress = "on"
+zfs.checksum = "on"
+zfs.copies = 1
+zfs.hdsize = 32
+
+[post-installation-webhook]
+url = "http://{{ server_ip }}/index.php?action=callback&status=DONE&mac={$mac}"
+
+[first-boot]
+source = "from-url"
+ordering = "network-online"
+url = "http://{{ server_ip }}/scripts/proxmox-post-install.sh"
+
+TOML;
+
+echo $config;
+?>

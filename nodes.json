@@ -1,31 +1,42 @@
 {
-  "console_nodes": [
+  "ssh_keys": {
+    "root": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPBG18KoYrX7WQA9FQGOZhLgsgpALC2TNGnWxswPJgYZ root@mgmt"
+  },
+  "nodes": [
     {
       "hostname": "console-node1",
-      "ip": "10.10.1.11",
-      "mac": "ac:1f:6b:6c:58:31",
-      "k8s_ip": "10.10.1.21",
+      "console_ip": "10.10.1.11",
+      "console_mac": "ac:1f:6b:6c:58:31",
+      "os_ip": "10.10.1.21",
+      "os_mac": "ac:1f:6b:6c:5a:76",
+      "os_hostname": "node1",
       "ceph_ip": "10.10.2.21"
     },
     {
       "hostname": "console-node2",
-      "ip": "10.10.1.12",
-      "mac": "ac:1f:6b:6c:58:06",
-      "k8s_ip": "10.10.1.22",
+      "console_ip": "10.10.1.12",
+      "console_mac": "ac:1f:6b:6c:58:06",
+      "os_ip": "10.10.1.22",
+      "os_mac": "ac:1f:6b:6c:5a:6c",
+      "os_hostname": "node2",
       "ceph_ip": "10.10.2.22"
     },
     {
       "hostname": "console-node3",
-      "ip": "10.10.1.13",
-      "mac": "ac:1f:6b:6c:58:2c",
-      "k8s_ip": "10.10.1.23",
+      "console_ip": "10.10.1.13",
+      "console_mac": "ac:1f:6b:6c:58:2c",
+      "os_ip": "10.10.1.23",
+      "os_mac": "ac:1f:6b:6c:5a:20",
+      "os_hostname": "node3",
       "ceph_ip": "10.10.2.23"
     },
     {
       "hostname": "console-node4",
-      "ip": "10.10.1.14",
-      "mac": "ac:1f:6b:6c:58:0a",
-      "k8s_ip": "10.10.1.24",
+      "console_ip": "10.10.1.14",
+      "console_mac": "ac:1f:6b:6c:58:0a",
+      "os_ip": "10.10.1.24",
+      "os_mac": "ac:1f:6b:6c:5a:28",
+      "os_hostname": "node4",
       "ceph_ip": "10.10.2.24"
     }
   ]

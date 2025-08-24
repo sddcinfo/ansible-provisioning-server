@@ -4,7 +4,8 @@
     name: bridge-utils
     state: present
   tags:
-    - network_config
+    - foundation
+    - network_infra
     - packages
 
 - name: Detect and validate specific network interfaces for provisioning server
@@ -44,18 +45,29 @@
           {% for item in interface_check.results %}
           - {{ item.item }}: {{ item.stdout }}
           {% endfor %}
+  tags:
+    - network_infra
+    - foundation
+    - validation
 
 - name: Find existing netplan configuration files
   ansible.builtin.find:
     paths: /etc/netplan
     patterns: "*.yaml,*.yml"
   register: netplan_files
+  tags:
+    - network_infra
+    - network_config_update
 
 - name: Install ethtool for network interface configuration
   ansible.builtin.apt:
     name: ethtool
     state: present
     update_cache: yes
+  tags:
+    - foundation
+    - network_infra
+    - packages
 
 - name: Backup existing netplan configuration files
   ansible.builtin.copy:
@@ -64,12 +76,18 @@
     remote_src: yes
   with_items: "{{ netplan_files.files }}"
   when: netplan_files.files | length > 0
+  tags:
+    - network_infra
+    - network_config_update
 
 - name: Remove existing netplan configuration files
   ansible.builtin.file:
     path: "{{ item.path }}"
     state: absent
   with_items: "{{ netplan_files.files }}"
+  tags:
+    - network_infra
+    - network_config_update
 
 - name: Deploy unified netplan configuration
   ansible.builtin.template:
@@ -78,10 +96,39 @@
     owner: root
     group: root
     mode: '0600'
-  notify: Apply netplan with verification
+  register: netplan_config_deployed
+  tags:
+    - network_infra
+    - network_config_update
+    - maintenance
+
+- name: Apply netplan configuration when changed
+  block:
+    - name: Test netplan configuration before apply
+      ansible.builtin.command: netplan generate
+      changed_when: false
+      
+    - name: Apply netplan configuration
+      ansible.builtin.command: netplan apply
+      register: netplan_apply_result
+      
+    - name: Wait for network stabilization
+      ansible.builtin.pause:
+        seconds: 5
+        
+  when: netplan_config_deployed.changed
+  tags:
+    - network_infra
+    - network_config_update
+    - maintenance
 
 - name: Validate and apply netplan configuration
   block:
+    - name: Check if netplan configuration already exists and is current
+      stat:
+        path: /etc/netplan/00-unified-netcfg.yaml
+      register: current_netplan_config
+      
     - name: Validate netplan configuration syntax (YAML only)
       shell: "netplan generate --debug 2>&1 || netplan --help > /dev/null"
       register: netplan_syntax_check
@@ -98,6 +145,20 @@
       
     - name: Flush handlers to apply netplan directly
       meta: flush_handlers
+      
+    - name: Apply netplan directly if handler didn't run
+      block:
+        - name: Check if netplan needs to be applied
+          command: netplan generate
+          changed_when: false
+          register: netplan_generate_check
+          
+        - name: Apply netplan configuration directly
+          command: netplan apply
+          when: netplan_config_deployed.changed
+          register: netplan_apply_direct
+          
+      when: netplan_config_deployed.changed
       
     - name: Wait for network interfaces to stabilize after netplan apply
       pause:
@@ -142,6 +203,10 @@
           - "Bridge members: {{ bridge_members.stdout if bridge_members.stdout != 'No bridge members found' else 'Bridge created but members may be attaching' }}"
           - "WAN Interface {{ wan_interface | default('enp1s0') }}: {{ 'CONNECTED' if wan_connectivity_test.rc == 0 else 'DISCONNECTED (may be expected)' }}"
           - "Active routes: {{ route_verification.stdout_lines | length }}"
+  tags:
+    - network_infra
+    - network_config_update
+    - validation
 
 - name: Force 1000/full duplex on bridge interfaces
   ansible.builtin.command: ethtool -s {{ item }} speed 1000 duplex full autoneg off
@@ -149,4 +214,9 @@
     - "{{ bridge_interface_1 | default('enp2s0') }}"
     - "{{ bridge_interface_2 | default('enp3s0') }}"
   changed_when: true
+  ignore_errors: yes  # Some interfaces may not support forced settings
   notify: Restart systemd-networkd
+  tags:
+    - network_infra
+    - network_config_update
+    - maintenance

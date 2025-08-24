@@ -1,0 +1,28 @@
+# Proxmox VE 9.0 Auto-Installer Configuration (answer.toml format)
+# This file configures the Proxmox VE auto-installer for unattended installation
+
+[global]
+keyboard = "en-us"
+country = "jp"
+fqdn = "{{ hostname }}.{{ domain | default('sddc.info') }}"
+mailto = "{{ mailto | default('admin@sddc.info') }}"
+timezone = "{{ timezone | default('Asia/Tokyo') }}"
+root-password = "{{ root_password | default('proxmox') }}"
+
+[network]
+source = "from-answer"
+cidr = "{{ os_ip | default('10.10.1.24') }}/24"
+gateway = "{{ gateway_ip | default('10.10.1.1') }}"
+dns = "{{ dns_servers | default('10.10.1.1') }}"
+# For default configuration, match any network interface
+# In production, use filter.ID_NET_NAME_MAC = "*suffix" for specific MAC
+filter = "*"
+
+[disk-setup]
+filesystem = "zfs"
+disk_list = ["sda"]
+zfs.raid = "raid0"
+zfs.compress = "on"
+zfs.checksum = "on"
+zfs.copies = 1
+zfs.hdsize = 32

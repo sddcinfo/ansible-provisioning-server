@@ -2,29 +2,13 @@
 # Final system validation after all components are installed
 - name: Load netboot configuration variables
   include_vars: "{{ playbook_dir }}/roles/netboot/vars/main.yml"
+  tags:
+    - validation
+    - health_check
 
-- name: Final system validation and health checks
+- name: Quick validation checks (fast operations only)
   block:
-    - name: Validate required directories exist
-      ansible.builtin.stat:
-        path: "{{ item }}"
-      register: directory_checks
-      loop:
-        - /var/www/html
-        - /var/www/html/sessions
-        - /var/www/html/autoinstall_configs
-        - /var/lib/tftpboot
-
-    - name: Check if all required directories exist
-      ansible.builtin.fail:
-        msg: "Required directory does not exist: {{ item.item }}"
-      loop: "{{ directory_checks.results }}"
-      when: not item.stat.exists
-
-    - name: Validate critical services are installed and running
-      ansible.builtin.service_facts:
-    
-    - name: Check critical services status
+    - name: Check critical services status (quick check)
       ansible.builtin.command: "systemctl is-active {{ item }}"
       register: service_status
       loop:
@@ -33,17 +17,44 @@
         - php8.3-fpm
       changed_when: false
       failed_when: service_status.stdout != "active"
+      
+    - name: Quick DNS test
+      ansible.builtin.command: "dig @127.0.0.1 google.com A +short +time=2"
+      register: quick_dns_test
+      changed_when: false
+      failed_when: quick_dns_test.rc != 0 or quick_dns_test.stdout == ""
+      
+    - name: Quick web test
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        method: GET
+        status_code: 200
+        timeout: 3
+      register: quick_web_test
+      
+    - name: Quick validation summary
+      ansible.builtin.debug:
+        msg: "Quick validation passed: All critical services active, DNS resolving, web responding"
+  tags:
+    - health_check
 
+- name: Network connectivity validation
+  block:
     - name: Validate network connectivity on critical ports
       ansible.builtin.wait_for:
         host: "{{ dnsmasq_listen_address }}"
         port: "{{ item.port }}"
-        timeout: 10
+        timeout: 5
       loop:
         - { port: 53, service: "DNS" }   
         - { port: 80, service: "HTTP" }   
       register: port_tests
+  tags:
+    - validation
+    - health_check
 
+- name: TFTP validation (comprehensive)
+  block:
     - name: Check if TFTP port is bound by dnsmasq
       ansible.builtin.shell: "netstat -ulnp | grep ':69 ' | grep dnsmasq || ss -ulnp | grep ':69 ' | grep dnsmasq"
       register: tftp_port_bound
@@ -61,13 +72,39 @@
     - name: Set TFTP port test result
       set_fact:
         tftp_port_test: "{{ {'failed': false} if tftp_port_bound.rc == 0 else {'failed': true} }}"
+        
+    - name: Validate TFTP directory is accessible
+      ansible.builtin.stat:
+        path: /var/lib/tftpboot
+      register: tftp_dir
+      failed_when: not tftp_dir.stat.exists or not tftp_dir.stat.readable
       
+    - name: Test TFTP functionality if port is accessible
+      ansible.builtin.shell: |
+        echo "quit" | tftp {{ dnsmasq_listen_address }} 69 2>&1
+      register: tftp_test
+      when: tftp_port_test is not failed
+      changed_when: false
+      ignore_errors: true
+  tags:
+    - validation
+    - maintenance
+    - health_check
+      
+- name: DNS validation (comprehensive)
+  block:
     - name: Validate IPv4 DNS resolution works
-      ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com A +short +time=5"
+      ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com A +short +time=3"
       register: dns_ipv4_test
       changed_when: false
       failed_when: dns_ipv4_test.rc != 0 or dns_ipv4_test.stdout == ""
+  tags:
+    - validation
+    - health_check
+
       
+- name: Comprehensive DNS validation (slower)
+  block:
     - name: Validate IPv6 DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com AAAA +short +time=5"
       register: dns_ipv6_test
@@ -82,36 +119,21 @@
       failed_when: false
       ignore_errors: yes
 
+- name: Web service validation (comprehensive)
+  block:
     - name: Validate web service responds
       ansible.builtin.uri:
         url: "http://{{ dnsmasq_listen_address }}/"
         method: GET
         status_code: 200
-        timeout: 10
+        timeout: 5
       register: web_test
+  tags:
+    - validation
+    - health_check
 
-    - name: Validate TFTP directory is accessible
-      ansible.builtin.stat:
-        path: /var/lib/tftpboot
-      register: tftp_dir
-      failed_when: not tftp_dir.stat.exists or not tftp_dir.stat.readable
-      
-    - name: Test TFTP functionality if port is accessible
-      ansible.builtin.shell: |
-        echo "quit" | tftp {{ dnsmasq_listen_address }} 69 2>&1
-      register: tftp_test
-      when: tftp_port_test is not failed
-      changed_when: false
-      ignore_errors: true
-      
-    - name: Log TFTP status
-      ansible.builtin.debug:
-        msg: |
-          TFTP Status:
-          - Port 69 bound by dnsmasq: {{ 'Yes' if tftp_port_bound.rc == 0 else 'No' }}
-          - Port binding details: {{ tftp_port_bound.stdout if tftp_port_bound.stdout != '' else 'No dnsmasq TFTP binding found' }}
-          - TFTP connectivity test: {{ tftp_connectivity.stdout if (tftp_connectivity is defined and tftp_connectivity.stdout is defined) else 'Not tested - port not bound' }}
-          
+- name: Comprehensive diagnostic checks
+  block:
     - name: Check dnsmasq TFTP configuration
       ansible.builtin.shell: "grep -E '^enable-tftp|^tftp-root' /etc/dnsmasq.d/provisioning.conf"
       register: tftp_config_check
@@ -130,36 +152,29 @@
       changed_when: false
       ignore_errors: true
       
-    - name: Log comprehensive TFTP diagnostics
+    - name: Log comprehensive system diagnostics
       ansible.builtin.debug:
         msg: |
-          TFTP Diagnostics:
+          System Validation Results:
           
-          Configuration:
-          {{ tftp_config_check.stdout_lines | join('\n          ') if tftp_config_check.rc == 0 else '          TFTP not configured in dnsmasq' }}
-          
-          Dnsmasq Port Bindings:
-          {{ dnsmasq_ports_check.stdout_lines | join('\n          ') if dnsmasq_ports_check.rc == 0 else '          No dnsmasq port bindings found' }}
-          
-          Service Status:
-          {{ dnsmasq_status_check.stdout_lines[-10:] | join('\n          ') if dnsmasq_status_check.rc == 0 else '          Could not get dnsmasq status' }}
-
-    - name: Log DNS validation results
-      ansible.builtin.debug:
-        msg: |
-          DNS Validation Results:
+          DNS Status:
           - IPv4 DNS ({{ dnsmasq_listen_address }}): {{ 'PASSED' if dns_ipv4_test.rc == 0 else 'FAILED' }}
-          - IPv6 DNS AAAA query ({{ dnsmasq_listen_address }}): {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
-          - IPv6 DNS localhost (::1): {{ 'PASSED' if dns_localhost_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
+          - IPv6 DNS AAAA query: {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
+          - IPv6 DNS localhost: {{ 'PASSED' if dns_localhost_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
           
-          IPv6 Support Status:
-          - dnsmasq configured for IPv6: YES
-          - IPv6 upstream servers: Google (2001:4860:4860::8888, 2001:4860:4860::8844)
-          - IPv6 DHCP range: ::1000 to ::2000 (if IPv6 available)
-
+          TFTP Status:
+          - Port 69 bound by dnsmasq: {{ 'Yes' if tftp_port_bound.rc == 0 else 'No' }}
+          - Configuration: {{ 'OK' if tftp_config_check.rc == 0 else 'Missing' }}
+          
+          Service Status: All critical services running
+          
     - name: Log validation success
       ansible.builtin.debug:
-        msg: "System validation checks completed - IPv6 DNS support enabled and tested"
+        msg: "System validation checks completed successfully"
+  tags:
+    - validation
+    - maintenance
+    - health_check
 
   rescue:
     - name: Log validation failure details

@@ -1,6 +1,8 @@
 <?php
 // /srv/http/index.php
 
+require_once __DIR__ . '/lib/nodes.php';
+
 // --- Configuration & Testability ---
 function get_state_file_path(): string {
     $test_state_file = $_GET['test_state_file'] ?? null;
@@ -26,8 +28,34 @@ define('STATE_FILE', get_state_file_path());
 define('SERVER_IP', '{{ server_ip }}');
 define('CONFIG_DIR', __DIR__ . '/autoinstall_configs');
 define('SESSION_DIR', __DIR__ . '/sessions');
-define('ISO_BASE_URL', '{{ iso_base_url }}');
-define('ISO_NAME', 'ubuntu-24.04.3-live-server-amd64.iso');
+
+// Multi-OS Configuration
+$os_configs = [
+    'ubuntu2404' => [
+        'name' => 'Ubuntu 24.04 LTS',
+        'iso_base_url' => '{{ os_base_urls.ubuntu2404 }}',
+        'iso_name' => 'ubuntu-24.04.3-live-server-amd64.iso',
+        'kernel_path' => 'casper/vmlinuz',
+        'initrd_path' => 'casper/initrd',
+        'kernel_params' => 'modprobe.blacklist=nvme autoinstall ip=dhcp',
+        'config_type' => 'autoinstall',
+        'default_config' => 'ubuntu2404_default'
+    ],
+    'proxmox9' => [
+        'name' => 'Proxmox VE 9',
+        'iso_base_url' => '{{ os_base_urls.proxmox9 }}',
+        'iso_name' => 'proxmox-ve_9.0-1.iso',
+        'kernel_path' => 'boot/linux26',
+        'initrd_path' => 'boot/initrd.img',
+        'kernel_params' => '{{ supported_operating_systems.proxmox9.kernel_params }}',
+        'config_type' => 'answer',
+        'default_config' => 'proxmox9_default'
+    ]
+];
+
+// Legacy compatibility
+define('ISO_BASE_URL', $os_configs['ubuntu2404']['iso_base_url']);
+define('ISO_NAME', $os_configs['ubuntu2404']['iso_name']);
 // --- End Configuration ---
 
 
@@ -48,6 +76,35 @@ function get_status(string $mac): string {
     return $db[strtolower($mac)]['status'] ?? 'NEW';
 }
 
+function get_os_type(string $mac): string {
+    $db = read_state_db();
+    return $db[strtolower($mac)]['os_type'] ?? 'ubuntu2404';
+}
+
+function set_os_type(string $mac, string $os_type): bool {
+    $mac = strtolower($mac);
+    $fp = fopen(STATE_FILE, 'c+');
+    if (!$fp) { return false; }
+    if (flock($fp, LOCK_EX)) {
+        $raw_data = stream_get_contents($fp);
+        $db = json_decode($raw_data, true) ?: [];
+        if (!isset($db[$mac])) {
+            $db[$mac] = ['status' => 'NEW', 'timestamp' => date('c')];
+        }
+        $db[$mac]['os_type'] = $os_type;
+        $db[$mac]['timestamp'] = date('c');
+        ftruncate($fp, 0);
+        rewind($fp);
+        fwrite($fp, json_encode($db, JSON_PRETTY_PRINT));
+        fflush($fp);
+        flock($fp, LOCK_UN);
+        fclose($fp);
+        return true;
+    }
+    fclose($fp);
+    return false;
+}
+
 function set_status(string $mac, string $status): bool {
     $mac = strtolower($mac);
     $fp = fopen(STATE_FILE, 'c+');
@@ -55,7 +112,11 @@ function set_status(string $mac, string $status): bool {
     if (flock($fp, LOCK_EX)) {
         $raw_data = stream_get_contents($fp);
         $db = json_decode($raw_data, true) ?: [];
-        $db[$mac] = ['status' => $status, 'timestamp' => date('c')];
+        if (!isset($db[$mac])) {
+            $db[$mac] = ['os_type' => 'ubuntu2404'];
+        }
+        $db[$mac]['status'] = $status;
+        $db[$mac]['timestamp'] = date('c');
         ftruncate($fp, 0);
         rewind($fp);
         fwrite($fp, json_encode($db, JSON_PRETTY_PRINT));
@@ -94,6 +155,7 @@ function delete_entry(string $mac): bool {
 // --- Action Handlers ---
 
 function handle_boot_request(): void {
+    global $os_configs;
     $mac = strtolower($_GET['mac'] ?? '');
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
@@ -102,26 +164,41 @@ function handle_boot_request(): void {
     }
     header("Content-Type: text/plain");
     $status = get_status($mac);
+    $os_type = get_os_type($mac);
+    
     if ($status === 'DONE') {
         echo "#!ipxe\n";
         echo "echo Installation is DONE for {$mac}. Booting from local disk.\n";
         echo "exit\n";
     } else {
-        if (!prepare_session($mac)) {
+        if (!prepare_session($mac, $os_type)) {
             echo "#!ipxe\n";
             echo "echo ERROR: Could not prepare installation session. Check server logs.\n";
             echo "reboot\n";
-            error_log("Failed to prepare session for MAC: {$mac}");
+            error_log("Failed to prepare session for MAC: {$mac}, OS: {$os_type}");
             return;
         }
         set_status($mac, 'INSTALLING');
+        
+        $os_config = $os_configs[$os_type];
         $seed_url = "http://" . SERVER_IP . "/sessions/" . $mac . "/";
-        $kernel_params = "modprobe.blacklist=nvme autoinstall ip=dhcp url=" . ISO_BASE_URL . "/" . ISO_NAME;
-        $kernel_params .= " ds=nocloud;seedfrom=" . $seed_url;
+        
         echo "#!ipxe\n";
-        echo "echo Starting Ubuntu 24.04 installation for {$mac}...\n";
-        echo "kernel " . ISO_BASE_URL . "/casper/vmlinuz {$kernel_params}\n";
-        echo "initrd " . ISO_BASE_URL . "/casper/initrd\n";
+        echo "echo Starting {$os_config['name']} installation for {$mac}...\n";
+        echo "imgfree\n";
+        
+        if ($os_type === 'ubuntu2404') {
+            $kernel_params = $os_config['kernel_params'] . " url=" . $os_config['iso_base_url'] . "/" . $os_config['iso_name'];
+            $kernel_params .= " ds=nocloud;seedfrom=" . $seed_url;
+            echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        } elseif ($os_type === 'proxmox9') {
+            // Use basic kernel params - ISO is pre-configured for HTTP fetch via proxmox-auto-install-assistant
+            $kernel_params = "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer";
+            echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        }
+        
         echo "boot || goto error\n";
         echo ":error\n";
         echo "echo Critical boot error. Please check server logs. Rebooting in 10s.\n";
@@ -131,14 +208,18 @@ function handle_boot_request(): void {
 }
 
 function handle_callback_request(): void {
-    $mac = strtolower($_GET['mac'] ?? '');
-    $status = strtoupper($_GET['status'] ?? '');
+    // Support both GET and POST methods
+    $mac = strtolower($_GET['mac'] ?? $_POST['mac'] ?? '');
+    $status = strtoupper($_GET['status'] ?? $_POST['status'] ?? '');
+    
+    // Normalize MAC address format (convert semicolons to colons)
+    $mac = str_replace(';', ':', $mac);
     
     // Validate MAC address
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
         echo "ERROR: Invalid MAC address format.";
-        error_log("Invalid MAC address in callback: " . ($_GET['mac'] ?? 'empty'));
+        error_log("Invalid MAC address in callback: " . ($_GET['mac'] ?? $_POST['mac'] ?? 'empty') . " (normalized: {$mac})");
         return;
     }
     
@@ -147,7 +228,7 @@ function handle_callback_request(): void {
     if (empty($status) || !in_array($status, $allowed_statuses, true)) {
         header("HTTP/1.1 400 Bad Request");
         echo "ERROR: Invalid status parameter.";
-        error_log("Invalid status in callback: " . ($_GET['status'] ?? 'empty'));
+        error_log("Invalid status in callback: " . ($_GET['status'] ?? $_POST['status'] ?? 'empty'));
         return;
     }
     
@@ -204,7 +285,156 @@ function handle_delete_request(): void {
     }
 }
 
+function handle_set_os_request(): void {
+    global $os_configs;
+    $mac = strtolower($_GET['mac'] ?? '');
+    $os_type = $_GET['os_type'] ?? '';
+    
+    if (!is_valid_mac($mac)) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "Invalid or missing MAC address.";
+        return;
+    }
+    
+    if (!isset($os_configs[$os_type])) {
+        header("HTTP/1.1 400 Bad Request");
+        echo "Invalid OS type.";
+        return;
+    }
+    
+    if (set_os_type($mac, $os_type)) {
+        $redirect_url = '?action=status';
+        if (isset($_GET['test_state_file'])) {
+            $redirect_url .= '&test_state_file=' . urlencode($_GET['test_state_file']);
+        }
+        header("Location: " . $redirect_url);
+        exit();
+    } else {
+        header("HTTP/1.1 500 Internal Server Error");
+        echo "ERROR: Failed to set OS type.";
+        error_log("Failed to set OS type for MAC: {$mac}");
+    }
+}
+
+function handle_reboot_request(): void {
+    $mac = strtolower($_GET['mac'] ?? '');
+    if (!is_valid_mac($mac)) {
+        header("HTTP/1.1 400 Bad Request");
+        header("Content-Type: application/json");
+        echo json_encode(['success' => false, 'message' => 'Invalid or missing MAC address.']);
+        return;
+    }
+    
+    $hostname = get_console_hostname_by_mac($mac);
+
+    if (!$hostname) {
+        header("Content-Type: application/json");
+        echo json_encode(['success' => false, 'message' => 'Unknown MAC address - no hostname mapping found.']);
+        return;
+    }
+    
+    // Execute redfish script via secure wrapper for reboot
+    $command = sprintf(
+        'sudo /usr/local/bin/redfish-web-wrapper.sh %s power-reboot --json 2>&1',
+        escapeshellarg($hostname)
+    );
+    
+    $output = [];
+    $return_code = 0;
+    exec($command, $output, $return_code);
+    
+    header("Content-Type: application/json");
+    
+    if ($return_code === 0) {
+        // Try to parse the JSON output from redfish.py
+        $output_str = implode("\n", $output);
+        $json_output = json_decode($output_str, true);
+        
+        if ($json_output && isset($json_output['success']) && $json_output['success']) {
+            echo json_encode([
+                'success' => true, 
+                'message' => "Successfully initiated reboot of {$hostname}.",
+                'details' => $json_output
+            ]);
+        } else {
+            echo json_encode([
+                'success' => true, 
+                'message' => "Reboot command sent to {$hostname}.",
+                'raw_output' => $output_str
+            ]);
+        }
+    } else {
+        echo json_encode([
+            'success' => false, 
+            'message' => "Failed to reboot {$hostname}. Check server logs.",
+            'error' => implode("\n", $output),
+            'return_code' => $return_code
+        ]);
+        error_log("Reboot failed for {$hostname} (MAC: {$mac}): " . implode(" ", $output));
+    }
+}
+
+function handle_boot_to_bios_request(): void {
+    $mac = strtolower($_GET['mac'] ?? '');
+    if (!is_valid_mac($mac)) {
+        header("HTTP/1.1 400 Bad Request");
+        header("Content-Type: application/json");
+        echo json_encode(['success' => false, 'message' => 'Invalid or missing MAC address.']);
+        return;
+    }
+    
+    $hostname = get_console_hostname_by_mac($mac);
+
+    if (!$hostname) {
+        header("Content-Type: application/json");
+        echo json_encode(['success' => false, 'message' => 'Unknown MAC address - no hostname mapping found.']);
+        return;
+    }
+    
+    // Execute redfish script via secure wrapper
+    $command = sprintf(
+        'sudo /usr/local/bin/redfish-web-wrapper.sh %s set-boot-to-bios --json 2>&1',
+        escapeshellarg($hostname)
+    );
+    
+    $output = [];
+    $return_code = 0;
+    exec($command, $output, $return_code);
+    
+    header("Content-Type: application/json");
+    
+    if ($return_code === 0) {
+        // Try to parse the JSON output from redfish.py
+        $output_string = implode("\n", $output);
+        $json_output = json_decode($output_string, true);
+        
+        if ($json_output && isset($json_output['Success'])) {
+            echo json_encode([
+                'success' => true, 
+                'message' => "Successfully set {$hostname} to boot to BIOS setup on next restart.",
+                'details' => $json_output
+            ]);
+        } else {
+            // Fallback for non-JSON output
+            echo json_encode([
+                'success' => true,
+                'message' => "Command executed successfully for {$hostname}.",
+                'output' => $output_string
+            ]);
+        }
+    } else {
+        echo json_encode([
+            'success' => false, 
+            'message' => "Failed to set {$hostname} boot to BIOS. Check server logs.",
+            'error' => implode("\n", $output),
+            'return_code' => $return_code
+        ]);
+        error_log("Boot to BIOS failed for {$hostname} (MAC: {$mac}): " . implode(" ", $output));
+    }
+}
+
 function handle_status_request(): void {
+    global $os_configs;
     header("Content-Type: text/html");
     $db = read_state_db();
 ?>
@@ -242,6 +472,7 @@ function handle_status_request(): void {
                 <thead class="table-dark">
                     <tr>
                         <th>MAC Address</th>
+                        <th>OS Type</th>
                         <th>Status</th>
                         <th>Last Update</th>
                         <th>Actions</th>
@@ -249,11 +480,20 @@ function handle_status_request(): void {
                 </thead>
                 <tbody>
                     <?php if (empty($db)): ?>
-                        <tr><td colspan="4" class="text-center">No systems have been provisioned yet.</td></tr>
+                        <tr><td colspan="5" class="text-center">No systems have been provisioned yet.</td></tr>
                     <?php else: ?>
                         <?php foreach ($db as $mac => $data): ?>
                             <tr>
                                 <td><?php echo htmlspecialchars($mac); ?></td>
+                                <td>
+                                    <select class="form-select form-select-sm" onchange="setOsType('<?php echo $mac; ?>', this.value)">
+                                        <?php foreach ($os_configs as $os_key => $os_config): ?>
+                                            <option value="<?php echo $os_key; ?>" <?php echo ($data['os_type'] ?? 'ubuntu2404') === $os_key ? 'selected' : ''; ?>>
+                                                <?php echo htmlspecialchars($os_config['name']); ?>
+                                            </option>
+                                        <?php endforeach; ?>
+                                    </select>
+                                </td>
                                 <td><span class="badge rounded-pill status-<?php echo htmlspecialchars($data['status']); ?>"><?php echo htmlspecialchars($data['status']); ?></span></td>
                                 <td><?php echo htmlspecialchars($data['timestamp'] ?? 'N/A'); ?></td>
                                 <td>
@@ -267,6 +507,12 @@ function handle_status_request(): void {
                                     <?php else: ?>
                                         <button class="btn btn-secondary btn-sm" disabled>Reprovision</button>
                                     <?php endif; ?>
+                                    <button class="btn btn-warning btn-sm" onclick="bootToBios('<?php echo $mac; ?>', this)" title="Set server to boot into BIOS setup on next restart">
+                                        Boot to BIOS
+                                    </button>
+                                    <button class="btn btn-info btn-sm" onclick="rebootServer('<?php echo $mac; ?>', this)" title="Gracefully restart the server">
+                                        Reboot
+                                    </button>
                                     <a href="<?php echo $delete_url; ?>" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to permanently delete this entry?');">Delete</a>
                                 </td>
                             </tr>
@@ -277,12 +523,177 @@ function handle_status_request(): void {
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function setOsType(mac, osType) {
+            const testParam = new URLSearchParams(window.location.search).get('test_state_file');
+            let url = '?action=set_os&mac=' + encodeURIComponent(mac) + '&os_type=' + encodeURIComponent(osType);
+            if (testParam) {
+                url += '&test_state_file=' + encodeURIComponent(testParam);
+            }
+            window.location.href = url;
+        }
+        
+        async function rebootServer(mac, button) {
+            // Disable button and show loading state
+            const originalText = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Rebooting...';
+            
+            try {
+                const testParam = new URLSearchParams(window.location.search).get('test_state_file');
+                let url = '?action=reboot&mac=' + encodeURIComponent(mac);
+                if (testParam) {
+                    url += '&test_state_file=' + encodeURIComponent(testParam);
+                }
+                
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    }
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Show success message
+                    button.classList.remove('btn-info');
+                    button.classList.add('btn-success');
+                    button.innerHTML = '[OK] Reboot Initiated';
+                    
+                    // Show alert with details
+                    alert(data.message);
+                    
+                    // Reset button after delay
+                    setTimeout(() => {
+                        button.classList.remove('btn-success');
+                        button.classList.add('btn-info');
+                        button.innerHTML = originalText;
+                        button.disabled = false;
+                    }, 5000);
+                } else {
+                    // Show error
+                    button.classList.remove('btn-info');
+                    button.classList.add('btn-danger');
+                    button.innerHTML = '[FAIL] Failed';
+                    
+                    alert('Reboot failed: ' + (data.message || 'Unknown error'));
+                    
+                    // Reset button after delay
+                    setTimeout(() => {
+                        button.classList.remove('btn-danger');
+                        button.classList.add('btn-info');
+                        button.innerHTML = originalText;
+                        button.disabled = false;
+                    }, 3000);
+                }
+            } catch (error) {
+                console.error('Reboot request failed:', error);
+                button.classList.remove('btn-info');
+                button.classList.add('btn-danger');
+                button.innerHTML = '[ERROR] Error';
+                
+                alert('Failed to send reboot command: ' + error.message);
+                
+                // Reset button after delay
+                setTimeout(() => {
+                    button.classList.remove('btn-danger');
+                    button.classList.add('btn-info');
+                    button.innerHTML = originalText;
+                    button.disabled = false;
+                }, 3000);
+            }
+        }
+        
+        async function bootToBios(mac, button) {
+            // Disable button and show loading state
+            const originalText = button.innerHTML;
+            button.disabled = true;
+            button.innerHTML = '<span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span> Setting...';
+            
+            try {
+                const testParam = new URLSearchParams(window.location.search).get('test_state_file');
+                let url = '?action=boot_to_bios&mac=' + encodeURIComponent(mac);
+                if (testParam) {
+                    url += '&test_state_file=' + encodeURIComponent(testParam);
+                }
+                
+                const response = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                // Show result message
+                if (result.success) {
+                    // Success - show green toast/alert
+                    showAlert('success', result.message);
+                    button.innerHTML = '[OK] BIOS Set';
+                    button.classList.remove('btn-warning');
+                    button.classList.add('btn-success');
+                    
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        button.innerHTML = originalText;
+                        button.classList.remove('btn-success');
+                        button.classList.add('btn-warning');
+                        button.disabled = false;
+                    }, 3000);
+                } else {
+                    // Error - show red toast/alert
+                    showAlert('danger', 'Error: ' + result.message);
+                    button.innerHTML = '[FAIL] Failed';
+                    button.classList.remove('btn-warning');
+                    button.classList.add('btn-danger');
+                    
+                    // Reset button after 3 seconds
+                    setTimeout(() => {
+                        button.innerHTML = originalText;
+                        button.classList.remove('btn-danger');
+                        button.classList.add('btn-warning');
+                        button.disabled = false;
+                    }, 3000);
+                }
+                
+            } catch (error) {
+                console.error('Network error:', error);
+                showAlert('danger', 'Network error: Could not connect to server');
+                button.innerHTML = originalText;
+                button.disabled = false;
+            }
+        }
+        
+        function showAlert(type, message) {
+            // Create alert element
+            const alertDiv = document.createElement('div');
+            alertDiv.className = `alert alert-${type} alert-dismissible fade show position-fixed`;
+            alertDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+            alertDiv.innerHTML = `
+                ${message}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            `;
+            
+            // Add to page
+            document.body.appendChild(alertDiv);
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (alertDiv.parentNode) {
+                    alertDiv.remove();
+                }
+            }, 5000);
+        }
+    </script>
 </body>
 </html>
 <?php
 }
 
-function prepare_session(string $mac): bool {
+function prepare_session(string $mac, string $os_type = 'ubuntu2404'): bool {
+    global $os_configs;
     // Additional MAC validation to prevent path traversal
     if (!is_valid_mac($mac)) {
         error_log("Invalid MAC address in prepare_session: {$mac}");
@@ -297,8 +708,17 @@ function prepare_session(string $mac): bool {
     }
     
     $mac_config_dir = CONFIG_DIR . '/' . $safe_mac;
+    $os_default_config_dir = CONFIG_DIR . '/' . $os_configs[$os_type]['default_config'];
     $default_config_dir = CONFIG_DIR . '/default';
-    $source_dir = is_dir($mac_config_dir) ? $mac_config_dir : $default_config_dir;
+    
+    // Priority: MAC-specific -> OS-specific default -> global default
+    if (is_dir($mac_config_dir)) {
+        $source_dir = $mac_config_dir;
+    } elseif (is_dir($os_default_config_dir)) {
+        $source_dir = $os_default_config_dir;
+    } else {
+        $source_dir = $default_config_dir;
+    }
     
     if (!is_dir($source_dir)) {
         error_log("Source directory not found: {$source_dir}");
@@ -343,18 +763,38 @@ function prepare_session(string $mac): bool {
         return false;
     }
     
-    // Process template files with error handling
-    $user_data_template_path = $source_dir . '/user-data';
-    if (file_exists($user_data_template_path)) {
-        $template_content = file_get_contents($user_data_template_path);
-        if ($template_content === false) {
-            error_log("Failed to read user-data template: {$user_data_template_path}");
-            return false;
+    // Process template files with error handling - OS-specific
+    $os_config = $os_configs[$os_type];
+    
+    if ($os_config['config_type'] === 'autoinstall') {
+        // Ubuntu autoinstall configuration
+        $user_data_template_path = $source_dir . '/user-data';
+        if (file_exists($user_data_template_path)) {
+            $template_content = file_get_contents($user_data_template_path);
+            if ($template_content === false) {
+                error_log("Failed to read user-data template: {$user_data_template_path}");
+                return false;
+            }
+            $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
+            if (file_put_contents($session_path . '/user-data', $final_content) === false) {
+                error_log("Failed to write user-data for session: {$session_path}");
+                return false;
+            }
         }
-        $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
-        if (file_put_contents($session_path . '/user-data', $final_content) === false) {
-            error_log("Failed to write user-data for session: {$session_path}");
-            return false;
+    } elseif ($os_config['config_type'] === 'preseed') {
+        // Proxmox preseed configuration
+        $preseed_template_path = $source_dir . '/preseed.cfg';
+        if (file_exists($preseed_template_path)) {
+            $template_content = file_get_contents($preseed_template_path);
+            if ($template_content === false) {
+                error_log("Failed to read preseed template: {$preseed_template_path}");
+                return false;
+            }
+            $final_content = str_replace('__MAC_ADDRESS__', $safe_mac, $template_content);
+            if (file_put_contents($session_path . '/preseed.cfg', $final_content) === false) {
+                error_log("Failed to write preseed.cfg for session: {$session_path}");
+                return false;
+            }
         }
     }
     
@@ -404,6 +844,15 @@ switch ($action) {
         break;
     case 'delete':
         handle_delete_request();
+        break;
+    case 'set_os':
+        handle_set_os_request();
+        break;
+    case 'reboot':
+        handle_reboot_request();
+        break;
+    case 'boot_to_bios':
+        handle_boot_to_bios_request();
         break;
     case 'status':
     default:
