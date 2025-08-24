@@ -27,14 +27,14 @@ def run_ssh_command(host: str, command: str) -> tuple:
 def main():
     """Display cluster status summary"""
     print("=" * 60)
-    print("🏗️  Proxmox Cluster Status Summary")
+    print("Proxmox Cluster Status Summary")
     print("=" * 60)
     print()
     
     # Get cluster status from primary node
     primary_ip = NODES["node1"]["mgmt_ip"]
     
-    print("📊 Cluster Membership:")
+    print("Cluster Membership:")
     success, stdout, stderr = run_ssh_command(primary_ip, "pvecm nodes")
     if success:
         lines = stdout.strip().split('\n')
@@ -42,42 +42,42 @@ def main():
             if 'node' in line.lower():
                 print(f"   {line.strip()}")
     else:
-        print("   ❌ Could not retrieve cluster membership")
+        print("   ERROR: Could not retrieve cluster membership")
     
     print()
-    print("🔍 Cluster Status:")
+    print("Cluster Status:")
     success, stdout, stderr = run_ssh_command(primary_ip, "pvecm status")
     if success:
         for line in stdout.split('\n'):
             if any(key in line for key in ['Name:', 'Nodes:', 'Quorate:', 'Expected votes:']):
                 print(f"   {line.strip()}")
     else:
-        print("   ❌ Could not retrieve cluster status")
+        print("   ERROR: Could not retrieve cluster status")
     
     print()
-    print("🌐 Node Configuration:")
+    print("Node Configuration:")
     for node_name, config in NODES.items():
         mgmt_ip = config["mgmt_ip"]
         ceph_ip = config["ceph_ip"]
         
         # Test connectivity
         success, _, _ = run_ssh_command(mgmt_ip, "echo test")
-        status = "🟢 Online" if success else "🔴 Offline"
+        status = "Online" if success else "Offline"
         
         print(f"   {node_name:<6} - Management: {mgmt_ip:<15} Ceph: {ceph_ip:<15} {status}")
     
     print()
-    print("🔧 Access Information:")
+    print("Access Information:")
     print(f"   Web GUI:     https://{primary_ip}:8006")
     print(f"   SSH Access:  ssh root@{primary_ip}")
     print(f"   Root Password: proxmox123")
     print()
     
-    print("📝 Next Steps:")
-    print("   • Access Proxmox web interface to configure VMs")
-    print("   • Set up Ceph storage if needed")
-    print("   • Change root passwords for security")
-    print("   • Configure firewall rules as needed")
+    print("Next Steps:")
+    print("   - Access Proxmox web interface to configure VMs")
+    print("   - Set up Ceph storage if needed")
+    print("   - Change root passwords for security")
+    print("   - Configure firewall rules as needed")
     print()
 
 if __name__ == "__main__":

@@ -702,13 +702,13 @@ def main():
     # Summary
     logging.info("=== Cluster Formation Summary ===")
     if all_verified and not failed_nodes:
-        logging.info("✅ SUCCESS: All nodes successfully joined the cluster")
+        logging.info("[SUCCESS] All nodes successfully joined the cluster")
         sys.exit(0)
     elif failed_nodes:
-        logging.error(f"❌ PARTIAL SUCCESS: Failed nodes: {failed_nodes}")
+        logging.error(f"[PARTIAL SUCCESS] Failed nodes: {failed_nodes}")
         sys.exit(1)
     else:
-        logging.warning("⚠️  COMPLETE: Cluster formed but verification incomplete")
+        logging.warning("[COMPLETE] Cluster formed but verification incomplete")
         sys.exit(0)
 
 if __name__ == "__main__":

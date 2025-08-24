@@ -559,7 +559,7 @@ function handle_status_request(): void {
                     // Show success message
                     button.classList.remove('btn-info');
                     button.classList.add('btn-success');
-                    button.innerHTML = '✓ Reboot Initiated';
+                    button.innerHTML = '[OK] Reboot Initiated';
                     
                     // Show alert with details
                     alert(data.message);
@@ -575,7 +575,7 @@ function handle_status_request(): void {
                     // Show error
                     button.classList.remove('btn-info');
                     button.classList.add('btn-danger');
-                    button.innerHTML = '✗ Failed';
+                    button.innerHTML = '[FAIL] Failed';
                     
                     alert('Reboot failed: ' + (data.message || 'Unknown error'));
                     
@@ -591,7 +591,7 @@ function handle_status_request(): void {
                 console.error('Reboot request failed:', error);
                 button.classList.remove('btn-info');
                 button.classList.add('btn-danger');
-                button.innerHTML = '✗ Error';
+                button.innerHTML = '[ERROR] Error';
                 
                 alert('Failed to send reboot command: ' + error.message);
                 
@@ -631,7 +631,7 @@ function handle_status_request(): void {
                 if (result.success) {
                     // Success - show green toast/alert
                     showAlert('success', result.message);
-                    button.innerHTML = '✓ BIOS Set';
+                    button.innerHTML = '[OK] BIOS Set';
                     button.classList.remove('btn-warning');
                     button.classList.add('btn-success');
                     
@@ -645,7 +645,7 @@ function handle_status_request(): void {
                 } else {
                     // Error - show red toast/alert
                     showAlert('danger', 'Error: ' + result.message);
-                    button.innerHTML = '✗ Failed';
+                    button.innerHTML = '[FAIL] Failed';
                     button.classList.remove('btn-warning');
                     button.classList.add('btn-danger');
                     

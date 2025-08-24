@@ -205,7 +205,7 @@ EOF
     ip route add 10.10.2.0/24 dev vmbr1 src ${CEPH_IPS[$HOSTNAME]} 2>/dev/null || true
     
     # Network validation and logging
-    log "Configured Ceph network: eno3 → vmbr1 (${CEPH_IPS[$HOSTNAME]}) with MTU 9000"
+    log "Configured Ceph network: eno3 -> vmbr1 (${CEPH_IPS[$HOSTNAME]}) with MTU 9000"
     log "Default route remains on management network (vmbr0)"
     
     # Log current network configuration for debugging
@@ -330,14 +330,14 @@ for attempt in 1 2 3; do
             log "Token secret format: ${TOKEN_SECRET:0:8}-****-****-****-${TOKEN_SECRET:32:4}"
             break
         else
-            log "⚠️  Token parsing failed, extracted: '$TOKEN_SECRET' (length: ${#TOKEN_SECRET})"
+            log "WARNING: Token parsing failed, extracted: '$TOKEN_SECRET' (length: ${#TOKEN_SECRET})"
             if [ $attempt -lt 3 ]; then
                 sleep 2
                 continue
             fi
         fi
     else
-        log "⚠️  Token creation failed: $TOKEN_OUTPUT"
+        log "WARNING: Token creation failed: $TOKEN_OUTPUT"
     fi
 done
 
@@ -354,9 +354,9 @@ else
         "https://localhost:8006/api2/json/version" 2>/dev/null | grep -o '"version"' | head -1)
     
     if [ "$TEST_RESULT" = '"version"' ]; then
-        log "✅ API token validation successful"
+        log "SUCCESS: API token validation successful"
     else
-        log "⚠️  API token validation failed, cluster formation may use root authentication"
+        log "WARNING: API token validation failed, cluster formation may use root authentication"
     fi
 fi
 
@@ -678,9 +678,9 @@ log "Default credentials: root / <password-from-install>"
 log ""
 
 if grep -q "intel_iommu=on\|amd_iommu=on" /etc/default/grub && ! grep -q "intel_iommu=on\|amd_iommu=on" /proc/cmdline; then
-    log "⚠️  REBOOT REQUIRED for IOMMU changes to take effect"
+    log "WARNING: REBOOT REQUIRED for IOMMU changes to take effect"
 fi
 
-log "✅ Post-installation script completed successfully!"
+log "SUCCESS: Post-installation script completed successfully!"
 
 exit 0

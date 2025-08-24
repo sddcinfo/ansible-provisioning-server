@@ -1,6 +1,6 @@
 # Proxmox Web Console Access Guide
 
-## Status: ✅ All Web Consoles Are Accessible
+## Status: [SUCCESS] All Web Consoles Are Accessible
 
 The Proxmox web consoles are functioning correctly on all cluster nodes.
 
