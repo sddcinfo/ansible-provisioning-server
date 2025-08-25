@@ -42,6 +42,36 @@ error_exit() {
     exit 1
 }
 
+# Retry function with exponential backoff
+retry_with_backoff() {
+    local max_attempts=$1
+    local delay=$2
+    local max_delay=$3
+    shift 3
+    local command="$@"
+    local attempt=1
+    
+    while [ $attempt -le $max_attempts ]; do
+        log "Attempt $attempt/$max_attempts: $command"
+        if eval "$command"; then
+            log "Command succeeded on attempt $attempt"
+            return 0
+        else
+            if [ $attempt -eq $max_attempts ]; then
+                log "ERROR: Command failed after $max_attempts attempts: $command"
+                return 1
+            fi
+            log "Command failed on attempt $attempt, retrying in ${delay}s..."
+            sleep $delay
+            # Exponential backoff with max delay
+            delay=$((delay * 2))
+            [ $delay -gt $max_delay ] && delay=$max_delay
+            attempt=$((attempt + 1))
+        fi
+    done
+    return 1
+}
+
 # Validate Proxmox version
 validate_proxmox_version() {
     local pve_version=$(pveversion | grep -oP 'pve-manager/\K[0-9]+' || echo "0")
@@ -51,6 +81,36 @@ validate_proxmox_version() {
     log "Proxmox version $pve_version validated"
 }
 
+# Check network connectivity
+check_network_connectivity() {
+    log "Checking network connectivity..."
+    
+    # Check DNS resolution
+    if ! host download.proxmox.com >/dev/null 2>&1; then
+        log "Warning: DNS resolution not working, trying to fix..."
+        echo "nameserver 8.8.8.8" >> /etc/resolv.conf
+        echo "nameserver 1.1.1.1" >> /etc/resolv.conf
+        
+        if ! host download.proxmox.com >/dev/null 2>&1; then
+            log "ERROR: DNS resolution still not working"
+            return 1
+        fi
+    fi
+    
+    # Check internet connectivity with retry
+    for i in 1 2 3; do
+        if ping -c 1 -W 5 8.8.8.8 >/dev/null 2>&1; then
+            log "Network connectivity verified"
+            return 0
+        fi
+        log "Network check attempt $i/3 failed, waiting..."
+        sleep 5
+    done
+    
+    log "Warning: Network connectivity issues detected"
+    return 1
+}
+
 log "=========================================="
 log "Starting Proxmox 9 post-installation for $HOSTNAME"
 log "IP: $IP_ADDRESS, Node Number: $NODE_NUM"
@@ -58,6 +118,11 @@ log "=========================================="
 
 # Validate we're running on Proxmox 9
 validate_proxmox_version
+
+# Check network connectivity early
+if ! check_network_connectivity; then
+    log "Warning: Network issues detected - script will attempt to continue with retries"
+fi
 
 # 1. Fix Repository Configuration
 log "Step 1: Configuring Proxmox repositories..."
@@ -86,32 +151,57 @@ fi
 
 # 2. Update and Install Packages
 log "Step 2: Updating system and installing packages..."
-apt-get update || error_exit "Failed to update package repositories"
 
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    curl \
-    wget \
-    vim \
-    htop \
-    iotop \
-    net-tools \
-    python3 \
-    python3-pip \
-    python3-proxmoxer \
-    python3-requests \
-    jq \
-    lvm2 \
-    thin-provisioning-tools \
-    bridge-utils \
-    ifupdown2 \
-    chrony \
-    zfsutils-linux \
-    ceph-common \
-    fail2ban \
-    libguestfs-tools \
-    pve-edk2-firmware \
-    proxmox-backup-client \
-    || error_exit "Failed to install essential packages"
+# Retry apt-get update with backoff (5 attempts, starting at 5s delay, max 60s)
+if ! retry_with_backoff 5 5 60 "apt-get update"; then
+    error_exit "Failed to update package repositories after multiple attempts"
+fi
+
+# Define package installation function
+install_packages() {
+    DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        curl \
+        wget \
+        vim \
+        htop \
+        iotop \
+        net-tools \
+        python3 \
+        python3-pip \
+        python3-proxmoxer \
+        python3-requests \
+        jq \
+        lvm2 \
+        thin-provisioning-tools \
+        bridge-utils \
+        ifupdown2 \
+        chrony \
+        zfsutils-linux \
+        ceph-common \
+        fail2ban \
+        libguestfs-tools \
+        pve-edk2-firmware \
+        proxmox-backup-client
+}
+
+# Try to install packages with retry logic
+log "Installing essential packages (with retry on failure)..."
+if ! retry_with_backoff 5 10 120 "install_packages"; then
+    log "ERROR: Package installation failed after multiple attempts"
+    log "Attempting to fix potential dpkg issues..."
+    
+    # Try to fix common dpkg issues
+    dpkg --configure -a
+    apt-get install -f -y
+    
+    # Try one more time after cleanup
+    log "Retrying package installation after cleanup..."
+    if ! retry_with_backoff 3 5 30 "install_packages"; then
+        error_exit "Failed to install essential packages after recovery attempts"
+    fi
+fi
+
+log "Successfully installed all essential packages"
 
 # 3. Configure NTP
 log "Step 3: Configuring NTP..."
@@ -377,18 +467,25 @@ systemctl enable --now fail2ban
 log "fail2ban configured and started"
 
 # 9. Install Monitoring
-log "Step 9: Setting up monitoring..."
+log "Step 9: Setting up monitoring (optional)..."
 if [ ! -f /usr/local/bin/node_exporter ]; then
-    wget -q -O /tmp/node_exporter.tar.gz \
-        "https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz" || \
-        log "Warning: Failed to download node_exporter"
-    
-    if [ -f /tmp/node_exporter.tar.gz ]; then
-        tar -xzf /tmp/node_exporter.tar.gz -C /tmp/
-        cp /tmp/node_exporter-*/node_exporter /usr/local/bin/ 2>/dev/null
-        rm -rf /tmp/node_exporter*
+    # Check if GitHub is reachable first
+    if ! wget --timeout=5 --tries=1 --spider https://github.com 2>/dev/null; then
+        log "Warning: GitHub is not reachable, skipping node_exporter installation"
+    else
+        # Function to download node_exporter
+        download_node_exporter() {
+            wget --timeout=30 --tries=1 -O /tmp/node_exporter.tar.gz \
+                "https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz"
+        }
         
-        cat > /etc/systemd/system/node_exporter.service <<EOF
+        # Try downloading with retry logic (but with shorter retries)
+        if retry_with_backoff 2 5 15 "download_node_exporter"; then
+            tar -xzf /tmp/node_exporter.tar.gz -C /tmp/
+            cp /tmp/node_exporter-*/node_exporter /usr/local/bin/ 2>/dev/null
+            rm -rf /tmp/node_exporter*
+            
+            cat > /etc/systemd/system/node_exporter.service <<EOF
 [Unit]
 Description=Node Exporter
 After=network.target
@@ -402,11 +499,16 @@ ExecStart=/usr/local/bin/node_exporter
 [Install]
 WantedBy=multi-user.target
 EOF
-        
-        systemctl daemon-reload
-        systemctl enable --now node_exporter
-        log "Node exporter installed and started"
+            
+            systemctl daemon-reload
+            systemctl enable --now node_exporter
+            log "Node exporter installed and started"
+        else
+            log "Warning: Node exporter download failed after retries - monitoring will not be available"
+        fi
     fi
+else
+    log "Node exporter already installed"
 fi
 
 # 10. Configure Backup Schedule
@@ -426,23 +528,46 @@ if [ "$HOSTNAME" == "$CLUSTER_PRIMARY" ]; then
     (
         cd /var/lib/vz/template/iso/ 
         
+        # Function to download with retry
+        download_with_retry() {
+            local url=$1
+            local output=$2
+            local description=$3
+            local attempts=3
+            local delay=5
+            
+            for i in $(seq 1 $attempts); do
+                if wget --timeout=30 --tries=1 -q -O "$output.tmp" "$url"; then
+                    mv "$output.tmp" "$output"
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$HOSTNAME] Successfully downloaded $description" >> "$LOG_FILE"
+                    return 0
+                else
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$HOSTNAME] Attempt $i/$attempts failed for $description" >> "$LOG_FILE"
+                    rm -f "$output.tmp"
+                    [ $i -lt $attempts ] && sleep $delay
+                fi
+            done
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$HOSTNAME] Failed to download $description after $attempts attempts" >> "$LOG_FILE"
+            return 1
+        }
+        
         # Ubuntu 24.04 cloud image
         if [ ! -f ubuntu-24.04-cloudimg.img ]; then
-            wget -q -O ubuntu-24.04-cloudimg.img \
+            download_with_retry \
                 "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img" \
-                && log "Downloaded Ubuntu 24.04 cloud image" \
-                || log "Failed to download Ubuntu 24.04 cloud image"
+                "ubuntu-24.04-cloudimg.img" \
+                "Ubuntu 24.04 cloud image"
         fi
         
         # Debian 12 cloud image
         if [ ! -f debian-12-cloudimg.qcow2 ]; then
-            wget -q -O debian-12-cloudimg.qcow2 \
+            download_with_retry \
                 "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-generic-amd64.qcow2" \
-                && log "Downloaded Debian 12 cloud image" \
-                || log "Failed to download Debian 12 cloud image"
+                "debian-12-cloudimg.qcow2" \
+                "Debian 12 cloud image"
         fi
     ) &
-    log "VM template downloads started in background"
+    log "VM template downloads started in background with retry logic"
 fi
 
 # 12. GRUB Configuration for IOMMU
@@ -484,11 +609,22 @@ REGISTER_DATA=$(cat <<EOF
 EOF
 )
 
-curl -X POST \
-    -H "Content-Type: application/json" \
-    -d "$REGISTER_DATA" \
-    "http://$PROVISION_SERVER/api/register-node.php" \
-    || log "Warning: Failed to register with provisioning server"
+# Function to register with provisioning server
+register_node() {
+    curl -X POST \
+        -H "Content-Type: application/json" \
+        -d "$REGISTER_DATA" \
+        --connect-timeout 10 \
+        --max-time 30 \
+        "http://$PROVISION_SERVER/api/register-node.php"
+}
+
+# Try registration with retry logic
+if retry_with_backoff 3 5 20 "register_node"; then
+    log "Successfully registered with provisioning server"
+else
+    log "Warning: Failed to register with provisioning server after retries - continuing anyway"
+fi
 
 # 14. Final Cleanup
 log "Step 14: Performing cleanup..."

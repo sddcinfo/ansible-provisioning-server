@@ -9,7 +9,9 @@ import json
 import time
 import sys
 import logging
-from typing import Dict, List, Optional
+import argparse
+import subprocess
+from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
 # Disable SSL warnings
@@ -262,6 +264,99 @@ def join_node_to_cluster(node_name: str, primary_ip: str) -> bool:
     logging.error(f"✗ Failed to join {node_name} to cluster")
     return False
 
+def check_post_install_completion(node_name: str, node_ip: str) -> Tuple[bool, str]:
+    """Check if post-installation script completed successfully via SSH"""
+    try:
+        # Check for success/error message in log file
+        cmd = [
+            'ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+            f'root@{node_ip}',
+            "tail -n 50 /var/log/proxmox-post-install.log 2>/dev/null | grep -E 'SUCCESS:|ERROR:' | tail -1"
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            if "SUCCESS: Post-installation script completed successfully!" in output:
+                return True, "completed"
+            elif "ERROR:" in output:
+                return False, f"error: {output[:100]}"
+        
+        # Check if script is still running
+        cmd_check = [
+            'ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+            f'root@{node_ip}',
+            "pgrep -f proxmox-post-install.sh"
+        ]
+        
+        result_check = subprocess.run(cmd_check, capture_output=True, text=True, timeout=15)
+        
+        if result_check.returncode == 0 and result_check.stdout.strip():
+            return False, "running"
+        else:
+            return False, "not started"
+                
+    except subprocess.TimeoutExpired:
+        return False, "connection timeout"
+    except Exception as e:
+        return False, f"connection failed: {str(e)}"
+
+def wait_for_post_install_completion(timeout: int = 600, check_interval: int = 10) -> bool:
+    """Wait for all nodes to complete post-installation"""
+    logging.info("\n=== Waiting for Post-Installation Completion ===")
+    logging.info(f"Monitoring /var/log/proxmox-post-install.log on all nodes...")
+    logging.info(f"Timeout: {timeout}s, Check interval: {check_interval}s")
+    
+    start_time = time.time()
+    completed_nodes = set()
+    failed_nodes = set()
+    
+    while time.time() - start_time < timeout:
+        all_completed = True
+        status_summary = []
+        
+        for node_name, node_config in NODES.items():
+            if node_name in completed_nodes:
+                continue
+                
+            completed, status = check_post_install_completion(node_name, node_config['mgmt_ip'])
+            
+            if completed:
+                if node_name not in completed_nodes:
+                    logging.info(f"✓ {node_name}: Post-installation completed successfully")
+                    completed_nodes.add(node_name)
+            else:
+                all_completed = False
+                if "error" in status:
+                    if node_name not in failed_nodes:
+                        logging.error(f"✗ {node_name}: Post-installation failed - {status}")
+                        failed_nodes.add(node_name)
+                else:
+                    status_summary.append(f"{node_name}: {status}")
+        
+        if all_completed:
+            logging.info(f"\n✓ All {len(NODES)} nodes completed post-installation successfully!")
+            return True
+        
+        if failed_nodes:
+            logging.error(f"\n✗ {len(failed_nodes)} node(s) failed post-installation")
+            return False
+        
+        # Show current status
+        if status_summary:
+            remaining = len(NODES) - len(completed_nodes)
+            elapsed = int(time.time() - start_time)
+            logging.info(f"[{elapsed}s] Waiting for {remaining} node(s): {', '.join(status_summary)}")
+        
+        time.sleep(check_interval)
+    
+    logging.error(f"\n✗ Timeout: Not all nodes completed post-installation within {timeout}s")
+    logging.error(f"Completed: {completed_nodes}")
+    logging.error(f"Failed: {failed_nodes}")
+    logging.error(f"Incomplete: {set(NODES.keys()) - completed_nodes - failed_nodes}")
+    return False
+
 def verify_cluster() -> bool:
     """Verify final cluster state"""
     logging.info("\n=== Verifying Cluster ===")
@@ -284,11 +379,43 @@ def verify_cluster() -> bool:
 
 def main():
     """Main execution"""
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Proxmox Cluster Formation Script',
+        epilog='''
+Examples:
+  %(prog)s                                    # Form cluster immediately
+  %(prog)s --wait-post-install               # Wait for post-install completion first
+  %(prog)s --wait-post-install --post-install-timeout 900  # Wait up to 15 minutes
+  
+The script will SSH to each node and check /var/log/proxmox-post-install.log for:
+- SUCCESS: Post-installation script completed successfully!
+- ERROR: messages indicating failures
+        ''',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('--wait-post-install', action='store_true',
+                        help='Wait for post-installation to complete on all nodes before proceeding')
+    parser.add_argument('--post-install-timeout', type=int, default=600,
+                        help='Timeout in seconds for post-installation completion (default: 600)')
+    parser.add_argument('--check-interval', type=int, default=10,
+                        help='Interval in seconds between post-install checks (default: 10)')
+    args = parser.parse_args()
+    
     start_time = datetime.now()
     
     logging.info("=== Proxmox Cluster Formation (Improved) ===")
     logging.info(f"Target: {len(NODES)} nodes")
     logging.info(f"Cluster: {CLUSTER_NAME}")
+    
+    # Optional: Wait for post-installation completion
+    if args.wait_post_install:
+        if not wait_for_post_install_completion(args.post_install_timeout, args.check_interval):
+            logging.error("Post-installation did not complete successfully on all nodes")
+            return False
+        # Add a small delay after post-install completion
+        logging.info("Waiting 10 seconds for services to stabilize...")
+        time.sleep(10)
     
     # Step 1: Check all nodes and look for existing cluster
     logging.info("\nStep 1: Checking node status...")
