@@ -579,7 +579,7 @@ def check_post_install_completion(node_name: str, node_ip: str) -> Tuple[bool, s
     except Exception as e:
         return False, f"connection failed: {str(e)}"
 
-def wait_for_post_install_completion(timeout: int = 600, check_interval: int = 10) -> bool:
+def wait_for_post_install_completion(timeout: int = 900, check_interval: int = 10) -> bool:
     """Wait for all nodes to complete post-installation"""
     logging.info("\n=== Waiting for Post-Installation Completion ===")
     logging.info(f"Monitoring /var/log/proxmox-post-install.log on all nodes...")
@@ -716,7 +716,7 @@ def main():
 Examples:
   %(prog)s                                    # Form cluster immediately
   %(prog)s --wait-post-install               # Wait for post-install completion first
-  %(prog)s --wait-post-install --post-install-timeout 900  # Wait up to 15 minutes
+  %(prog)s --wait-post-install --post-install-timeout 1200  # Wait up to 20 minutes
   %(prog)s --max-join-attempts 5 --join-retry-delay 45     # More aggressive retry settings
   
 The script includes robust retry logic:
@@ -734,8 +734,8 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
     )
     parser.add_argument('--wait-post-install', action='store_true',
                         help='Wait for post-installation to complete on all nodes before proceeding')
-    parser.add_argument('--post-install-timeout', type=int, default=600,
-                        help='Timeout in seconds for post-installation completion (default: 600)')
+    parser.add_argument('--post-install-timeout', type=int, default=900,
+                        help='Timeout in seconds for post-installation completion (default: 900)')
     parser.add_argument('--check-interval', type=int, default=10,
                         help='Interval in seconds between post-install checks (default: 10)')
     parser.add_argument('--max-join-attempts', type=int, default=3,
