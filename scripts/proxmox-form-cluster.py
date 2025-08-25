@@ -162,7 +162,7 @@ def check_node_status(node_name: str, node_ip: str) -> Dict:
     return {"accessible": True, "in_cluster": False}
 
 def create_cluster(node_name: str, node_ip: str, max_attempts: int = 2) -> bool:
-    """Create cluster on first node with retry logic"""
+    """Create cluster on first node with smart verification"""
     for attempt in range(1, max_attempts + 1):
         logging.info(f"Creating cluster '{CLUSTER_NAME}' on {node_name} (attempt {attempt}/{max_attempts})...")
         
@@ -170,7 +170,7 @@ def create_cluster(node_name: str, node_ip: str, max_attempts: int = 2) -> bool:
         if not api.authenticate():
             logging.error(f"Cannot authenticate to {node_name}")
             if attempt < max_attempts:
-                time.sleep(10)
+                time.sleep(5)  # Short wait for auth issues
                 continue
             return False
         
@@ -187,21 +187,26 @@ def create_cluster(node_name: str, node_ip: str, max_attempts: int = 2) -> bool:
         if result:
             logging.info(f"✓ Cluster '{CLUSTER_NAME}' created on {node_name}")
             
-            # Verify cluster was actually created
-            time.sleep(5)
-            status = check_node_status(node_name, node_ip)
-            if status['in_cluster']:
-                logging.info(f"✓ Cluster creation verified on {node_name}")
-                return True
-            else:
-                logging.error(f"✗ Cluster creation not verified on {node_name}")
-                if attempt < max_attempts:
-                    time.sleep(15)
-                    continue
+            # Smart verification with progressive delays
+            for verify_attempt in range(1, 4):  # Max 3 verification attempts
+                delay = verify_attempt + 1  # 2s, 3s, 4s
+                time.sleep(delay)
+                
+                status = check_node_status(node_name, node_ip)
+                if status['in_cluster']:
+                    logging.info(f"✓ Cluster creation verified on {node_name} (after {verify_attempt} attempts)")
+                    return True
+                
+                logging.debug(f"Cluster verification attempt {verify_attempt}/3 for creation")
+            
+            logging.error(f"✗ Cluster creation not verified on {node_name}")
+            if attempt < max_attempts:
+                time.sleep(10)  # Only if we're retrying the whole creation
+                continue
         else:
             logging.error(f"✗ Failed to create cluster on {node_name} (attempt {attempt})")
             if attempt < max_attempts:
-                time.sleep(15)
+                time.sleep(10)
     
     return False
 
@@ -231,56 +236,45 @@ def get_cluster_fingerprint(node_ip: str) -> Optional[str]:
     
     return None
 
-def wait_for_stable_fingerprint(primary_ip: str, timeout: int = 60) -> Optional[str]:
-    """Wait for cluster fingerprint to stabilize after changes"""
-    logging.info("Waiting for cluster certificate to stabilize...")
+def get_stable_fingerprint(primary_ip: str, max_attempts: int = 10, min_stable: int = 2) -> Optional[str]:
+    """Get stable fingerprint with smart verification strategy"""
+    logging.info("Getting stable cluster certificate fingerprint...")
     
-    stable_count = 0
-    last_fingerprint = None
-    fingerprint_history = []
+    fingerprint_counts = {}
+    attempts = 0
     
-    for i in range(timeout // 3):  # Check every 3 seconds instead of 2
+    while attempts < max_attempts:
         current_fingerprint = get_cluster_fingerprint(primary_ip)
+        attempts += 1
         
         if current_fingerprint:
-            fingerprint_history.append(current_fingerprint)
-            # Keep only last 5 entries
-            if len(fingerprint_history) > 5:
-                fingerprint_history.pop(0)
+            # Count occurrences of each fingerprint
+            fingerprint_counts[current_fingerprint] = fingerprint_counts.get(current_fingerprint, 0) + 1
             
-            if current_fingerprint == last_fingerprint:
-                stable_count += 1
-                if stable_count >= 3:  # Require 3 consecutive stable checks (9 seconds)
-                    logging.info(f"✓ Certificate stabilized: {current_fingerprint[:20]}...")
-                    
-                    # Double-check by getting it one more time
-                    time.sleep(2)
-                    verify_fingerprint = get_cluster_fingerprint(primary_ip)
-                    if verify_fingerprint == current_fingerprint:
-                        logging.info("✓ Certificate stability verified")
-                        return current_fingerprint
-                    else:
-                        logging.warning("Certificate changed during verification, continuing to wait...")
-                        stable_count = 0
-                        last_fingerprint = verify_fingerprint
-                        continue
-            else:
-                if last_fingerprint:
-                    logging.debug(f"Certificate changed: {last_fingerprint[:20]} → {current_fingerprint[:20]}")
-                stable_count = 0
-                last_fingerprint = current_fingerprint
+            # If we have enough stable occurrences, return it
+            if fingerprint_counts[current_fingerprint] >= min_stable:
+                logging.info(f"✓ Certificate stable after {attempts} attempts: {current_fingerprint[:20]}...")
+                return current_fingerprint
+            
+            logging.debug(f"Fingerprint attempt {attempts}: {current_fingerprint[:20]}... (count: {fingerprint_counts[current_fingerprint]})")
         else:
-            logging.debug("No fingerprint returned, retrying...")
-            stable_count = 0
+            logging.debug(f"No fingerprint returned on attempt {attempts}")
         
-        time.sleep(3)
+        # Smart delay - shorter intervals for first few attempts
+        if attempts < 3:
+            time.sleep(1)  # Quick checks first
+        elif attempts < 6:
+            time.sleep(2)  # Medium delay
+        else:
+            time.sleep(3)  # Longer delay for later attempts
     
-    logging.warning("Certificate did not stabilize in time")
-    if fingerprint_history:
-        # Return the most recent fingerprint even if not fully stable
-        logging.info(f"Using most recent fingerprint: {fingerprint_history[-1][:20]}...")
-        return fingerprint_history[-1]
+    # If no fingerprint was stable enough, return the most common one
+    if fingerprint_counts:
+        most_common = max(fingerprint_counts.keys(), key=lambda k: fingerprint_counts[k])
+        logging.warning(f"No fully stable fingerprint found, using most common: {most_common[:20]}...")
+        return most_common
     
+    logging.error("Could not obtain any valid fingerprint")
     return None
 
 def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
@@ -367,7 +361,7 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
     fingerprint = None
     
     # Method 1: Get fingerprint from primary node
-    primary_fingerprint = wait_for_stable_fingerprint(primary_ip)
+    primary_fingerprint = get_stable_fingerprint(primary_ip)
     
     # Method 2: Get fingerprint from joining node's perspective
     joining_fingerprint = get_fingerprint_from_joining_node(mgmt_ip, primary_ip)
@@ -430,35 +424,47 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
             success, message = monitor_task_completion(mgmt_ip, task_id, timeout=180)
             
             if success:
-                # Verify node is actually in cluster
-                for retry in range(3):  # Quick retries for verification
-                    time.sleep(5)  # Brief pause for cluster state propagation
-                    status = check_node_status(node_name, mgmt_ip)
-                    if status['in_cluster']:
-                        return True, "Successfully joined cluster"
-                    logging.debug(f"Cluster verification attempt {retry + 1}/3 failed, retrying...")
-                
-                # Try to get more diagnostic info
-                diagnostic_info = ""
-                try:
-                    api_diag = SimpleProxmoxAPI(mgmt_ip)
-                    if api_diag.authenticate():
-                        cluster_info = api_diag.get('cluster/status')
-                        if cluster_info and 'data' in cluster_info:
-                            cluster_nodes = [item.get('name', '') for item in cluster_info['data'] 
-                                           if item.get('type') == 'node']
-                            diagnostic_info = f" (cluster has nodes: {', '.join(cluster_nodes)})"
-                        api_diag.close()
-                except Exception:
-                    pass
-                
-                return False, f"Task completed but cluster verification failed{diagnostic_info}"
+                # Verify node is actually in cluster with smart retries
+                return verify_node_in_cluster(node_name, mgmt_ip)
             else:
                 return False, f"Join task failed: {message}"
         else:
             return False, f"Unexpected join response: {result}"
     
     return False, "No response from join API call"
+
+def verify_node_in_cluster(node_name: str, mgmt_ip: str, max_attempts: int = 3) -> Tuple[bool, str]:
+    """Smart verification that node is actually in cluster"""
+    for attempt in range(1, max_attempts + 1):
+        # Progressive delay: 2s, 5s, 10s
+        if attempt > 1:
+            delay = attempt * 2 + 1
+            time.sleep(delay)
+        
+        status = check_node_status(node_name, mgmt_ip)
+        if status['in_cluster']:
+            return True, "Successfully joined cluster"
+        
+        logging.debug(f"Cluster verification attempt {attempt}/{max_attempts} failed")
+        
+        # On final attempt, get diagnostic info
+        if attempt == max_attempts:
+            diagnostic_info = ""
+            try:
+                api_diag = SimpleProxmoxAPI(mgmt_ip)
+                if api_diag.authenticate():
+                    cluster_info = api_diag.get('cluster/status')
+                    if cluster_info and 'data' in cluster_info:
+                        cluster_nodes = [item.get('name', '') for item in cluster_info['data'] 
+                                       if item.get('type') == 'node']
+                        diagnostic_info = f" (cluster has nodes: {', '.join(cluster_nodes)})"
+                    api_diag.close()
+            except Exception:
+                pass
+            
+            return False, f"Task completed but cluster verification failed{diagnostic_info}"
+    
+    return False, "Verification failed after all attempts"
 
 def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30) -> bool:
     """Join a node to cluster with retry logic"""
@@ -483,36 +489,57 @@ def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3,
                     logging.info(f"✓ {node_name} is already in cluster (race condition)")
                     return True
                 
-                # Determine if we should retry based on error type
-                if "fingerprint" in message.lower():
-                    if "not verified" in message.lower():
-                        logging.info(f"Fingerprint verification failed - waiting {backoff_delay + 10}s for certificate to fully stabilize...")
-                        time.sleep(backoff_delay + 10)  # Extra time for fingerprint issues
-                    else:
-                        logging.info(f"Fingerprint issue - waiting {backoff_delay}s for certificate stabilization...")
-                        time.sleep(backoff_delay)
-                elif "authenticate" in message.lower():
-                    logging.info(f"Authentication issue - waiting {backoff_delay//2}s and retrying...")
-                    time.sleep(backoff_delay // 2)
-                elif "task failed" in message.lower() and "fingerprint" in message.lower():
-                    # Special case: task failed due to fingerprint - need longer wait
-                    logging.info(f"Task failed with fingerprint error - waiting {backoff_delay + 15}s for certificate synchronization...")
-                    time.sleep(backoff_delay + 15)
-                elif "task failed" in message.lower():
-                    logging.info(f"Task execution failed - waiting {backoff_delay}s before retry...")
-                    time.sleep(backoff_delay)
-                elif "verification failed" in message.lower():
-                    logging.info(f"Verification failed - waiting {backoff_delay//3}s for cluster sync...")
-                    time.sleep(backoff_delay // 3)
-                else:
-                    logging.info(f"Generic failure - waiting {backoff_delay}s before retry...")
-                    time.sleep(backoff_delay)
+                # Smart retry delay based on error type
+                delay = calculate_retry_delay(message, backoff_delay, attempt)
+                logging.info(f"Waiting {delay}s before retry (error type: {get_error_category(message)})...")
+                time.sleep(delay)
                 
                 backoff_delay = min(backoff_delay * 2, 180)  # Exponential backoff, max 3 minutes
             else:
                 logging.error(f"✗ {node_name} failed to join after {max_attempts} attempts")
     
     return False
+
+def get_error_category(message: str) -> str:
+    """Categorize error messages for smart retry logic"""
+    message_lower = message.lower()
+    if "fingerprint" in message_lower:
+        if "not verified" in message_lower:
+            return "fingerprint_verification"
+        return "fingerprint_generic"
+    elif "authenticate" in message_lower:
+        return "authentication"
+    elif "task failed" in message_lower and "fingerprint" in message_lower:
+        return "task_fingerprint"
+    elif "task failed" in message_lower:
+        return "task_execution"
+    elif "verification failed" in message_lower:
+        return "cluster_verification"
+    else:
+        return "generic"
+
+def calculate_retry_delay(message: str, base_delay: int, attempt: int) -> int:
+    """Calculate optimal retry delay based on error type and attempt number"""
+    category = get_error_category(message)
+    
+    # Base delays for different error categories
+    delay_multipliers = {
+        "fingerprint_verification": 1.5,  # Need extra time for cert stabilization
+        "fingerprint_generic": 1.2,
+        "authentication": 0.3,            # Quick retry for auth issues
+        "task_fingerprint": 1.8,          # Task failed due to fingerprint
+        "task_execution": 1.0,            # Standard delay
+        "cluster_verification": 0.5,      # Quick retry for verification
+        "generic": 1.0
+    }
+    
+    multiplier = delay_multipliers.get(category, 1.0)
+    calculated_delay = int(base_delay * multiplier)
+    
+    # Minimum delays based on attempt number
+    min_delay = max(3, attempt * 2)
+    
+    return max(calculated_delay, min_delay)
 
 def check_post_install_completion(node_name: str, node_ip: str) -> Tuple[bool, str]:
     """Check if post-installation script completed successfully via SSH"""
@@ -632,6 +659,24 @@ def verify_cluster() -> bool:
         logging.info(f"Failed nodes: {', '.join(failed_nodes)}")
         return False
 
+def verify_cluster_with_retry(max_attempts: int = 3) -> bool:
+    """Smart cluster verification with progressive delays"""
+    for attempt in range(1, max_attempts + 1):
+        if attempt > 1:
+            delay = attempt * 2  # 2s, 4s, 6s
+            logging.info(f"Waiting {delay}s before verification attempt {attempt}...")
+            time.sleep(delay)
+        
+        if verify_cluster():
+            if attempt > 1:
+                logging.info(f"✓ Cluster verified successfully on attempt {attempt}")
+            return True
+        
+        if attempt < max_attempts:
+            logging.debug(f"Cluster verification attempt {attempt}/{max_attempts} failed, retrying...")
+    
+    return False
+
 def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60) -> List[str]:
     """Attempt to recover failed nodes with more aggressive retry logic"""
     if not failed_nodes:
@@ -710,9 +755,9 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
         if not wait_for_post_install_completion(args.post_install_timeout, args.check_interval):
             logging.error("Post-installation did not complete successfully on all nodes")
             return False
-        # Add a small delay after post-install completion
-        logging.info("Waiting 10 seconds for services to stabilize...")
-        time.sleep(10)
+        # Brief pause only if needed for service stabilization
+        logging.info("Allowing services to stabilize...")
+        time.sleep(3)
     
     # Step 1: Check all nodes and look for existing cluster
     logging.info("\nStep 1: Checking node status...")
@@ -776,9 +821,19 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
         if not create_cluster(primary_node, primary_ip):
             return False
         
-        # Brief pause for cluster to initialize
-        logging.info("Waiting for cluster to initialize...")
-        time.sleep(10)
+        # Allow cluster to initialize with smart verification
+        logging.info("Verifying cluster initialization...")
+        cluster_ready = False
+        for init_check in range(1, 4):  # Check 3 times with progressive delays
+            time.sleep(init_check * 2)  # 2s, 4s, 6s
+            if get_cluster_fingerprint(primary_ip):
+                cluster_ready = True
+                logging.info(f"✓ Cluster ready for node joins (after {init_check} checks)")
+                break
+            logging.debug(f"Cluster initialization check {init_check}/3")
+        
+        if not cluster_ready:
+            logging.warning("Cluster may not be fully ready, but proceeding with joins")
         
         # Join remaining nodes
         remaining_nodes = [n for n in ready_nodes if n != primary_node]
@@ -795,10 +850,9 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
         logging.error("No accessible nodes found")
         return False
     
-    # Step 4: Verify final state
+    # Step 4: Verify final state with smart timing
     logging.info("\nFinalizing cluster formation...")
-    time.sleep(5)  # Brief pause for cluster state to propagate
-    success = verify_cluster()
+    success = verify_cluster_with_retry()
     
     # Step 5: Recovery attempt for failed nodes
     if not success and primary_ip:
@@ -813,8 +867,7 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
             recovered_nodes = recovery_attempt(failed_nodes, primary_ip, 2, 60)
             if recovered_nodes:
                 logging.info(f"\n=== Final Verification After Recovery ===")
-                time.sleep(10)  # Allow time for cluster to stabilize
-                success = verify_cluster()
+                success = verify_cluster_with_retry()
     
     # Summary
     duration = datetime.now() - start_time
