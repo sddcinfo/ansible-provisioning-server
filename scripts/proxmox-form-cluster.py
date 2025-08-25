@@ -816,8 +816,8 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
                         help='Maximum attempts to join each node to cluster (default: 3)')
     parser.add_argument('--join-retry-delay', type=int, default=30,
                         help='Initial delay between join retry attempts in seconds (default: 30)')
-    parser.add_argument('--join-task-timeout', type=int, default=300,
-                        help='Timeout for individual join task monitoring in seconds (default: 300)')
+    parser.add_argument('--join-task-timeout', type=int, default=900,
+                        help='Timeout for individual join task monitoring in seconds (default: 900)')
     args = parser.parse_args()
     
     start_time = datetime.now()
