@@ -33,7 +33,7 @@ NODES = {
 
 # Setup logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # Standard logging level
     format='[%(asctime)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     handlers=[
@@ -236,6 +236,46 @@ def get_cluster_fingerprint(node_ip: str) -> Optional[str]:
     
     return None
 
+def force_certificate_update(cluster_nodes: List[str]) -> bool:
+    """Force certificate update on all cluster nodes using pvecm updatecerts -f"""
+    if not cluster_nodes:
+        return False
+    
+    logging.info("Forcing certificate synchronization across cluster nodes...")
+    
+    # Run updatecerts on the first available cluster node
+    for node_name in cluster_nodes:
+        if node_name in NODES:
+            node_ip = NODES[node_name]['mgmt_ip']
+            
+            try:
+                # SSH to node and run pvecm updatecerts -f
+                import subprocess
+                cmd = [
+                    'ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+                    f'root@{node_ip}',
+                    'pvecm updatecerts -f'
+                ]
+                
+                logging.info(f"Running certificate update on {node_name}...")
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+                
+                if result.returncode == 0:
+                    logging.info(f"✓ Certificate update completed on {node_name}")
+                    # Allow time for certificates to propagate
+                    time.sleep(5)
+                    return True
+                else:
+                    logging.warning(f"Certificate update failed on {node_name}: {result.stderr}")
+                    
+            except subprocess.TimeoutExpired:
+                logging.warning(f"Certificate update timeout on {node_name}")
+            except Exception as e:
+                logging.warning(f"Certificate update error on {node_name}: {e}")
+                
+    logging.warning("Unable to force certificate update on any node")
+    return False
+
 def get_consensus_fingerprint(cluster_nodes: List[str]) -> Optional[str]:
     """Get fingerprint consensus from all cluster nodes to handle certificate changes"""
     fingerprint_votes = {}
@@ -268,6 +308,11 @@ def get_consensus_fingerprint(cluster_nodes: List[str]) -> Optional[str]:
         logging.warning(f"Fingerprint conflicts detected:")
         for fp, count in fingerprint_votes.items():
             logging.warning(f"  {fp[:20]}...: {count} votes")
+        
+        # If there are conflicts, try to force certificate update
+        if len(cluster_nodes) > 1:
+            logging.info("Attempting to resolve fingerprint conflicts with certificate update...")
+            force_certificate_update(cluster_nodes)
     
     return consensus_fingerprint
 
@@ -282,33 +327,6 @@ def get_current_cluster_nodes() -> List[str]:
     
     return cluster_nodes
 
-def get_robust_fingerprint() -> Optional[str]:
-    """Get fingerprint using cluster consensus for maximum reliability"""
-    logging.info("Getting current cluster certificate fingerprint...")
-    
-    # First, get list of current cluster nodes
-    cluster_nodes = get_current_cluster_nodes()
-    
-    if not cluster_nodes:
-        logging.error("No cluster nodes found")
-        return None
-    
-    logging.info(f"Querying fingerprint from {len(cluster_nodes)} cluster nodes: {', '.join(cluster_nodes)}")
-    
-    # Use consensus approach for active cluster
-    if len(cluster_nodes) > 1:
-        return get_consensus_fingerprint(cluster_nodes)
-    
-    # Single node cluster - get directly
-    node_ip = NODES[cluster_nodes[0]]['mgmt_ip']
-    fingerprint = get_cluster_fingerprint(node_ip)
-    
-    if fingerprint:
-        logging.info(f"✓ Single node fingerprint: {fingerprint[:20]}...")
-        return fingerprint
-    
-    logging.error("Could not obtain fingerprint from cluster")
-    return None
 
 def wait_for_cluster_sync(cluster_nodes: List[str], timeout: int = 30) -> bool:
     """Wait for cluster nodes to synchronize after a join operation"""
@@ -346,8 +364,8 @@ def wait_for_cluster_sync(cluster_nodes: List[str], timeout: int = 30) -> bool:
     logging.warning(f"Cluster sync timeout after {timeout}s")
     return False
 
-def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
-    """Monitor a Proxmox task with smart completion detection"""
+def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 120) -> Tuple[bool, str]:
+    """Monitor a Proxmox task with proper completion detection"""
     logging.info(f"Monitoring task: {task_id}")
     
     api = SimpleProxmoxAPI(node_ip)
@@ -356,8 +374,8 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
     
     start_time = time.time()
     last_status = None
-    running_time = 0
     node_name = None
+    check_count = 0
     
     # Extract node name from task_id for cluster checks
     try:
@@ -368,6 +386,7 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
         pass
     
     while time.time() - start_time < timeout:
+        check_count += 1
         task_status = api.get_task_status(task_id)
         elapsed = int(time.time() - start_time)
         
@@ -376,87 +395,228 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
             status = data.get('status', 'unknown')
             exitstatus = data.get('exitstatus')
             
-            # Log status changes
-            if status != last_status:
-                logging.info(f"Task status: {status} (elapsed: {elapsed}s)")
+            # Log status changes and periodic updates
+            if status != last_status or check_count % 10 == 0:
+                logging.info(f"Task status: {status} (elapsed: {elapsed}s, check: {check_count})")
                 last_status = status
-                if status == 'running':
-                    running_time = elapsed
             
-            # Check completion
-            if status == 'stopped':
-                if exitstatus == 'OK' or exitstatus is None:
-                    api.close()
-                    return True, "Task completed successfully"
-                else:
-                    error_msg = f"Task failed with exit status: {exitstatus}"
-                    # Try to get task log for more details
-                    try:
-                        task_log = api.get_task_log(task_id, limit=10)
-                        if task_log:
-                            log_msgs = [entry.get('t', '') for entry in task_log[-3:] if 't' in entry]
-                            if log_msgs:
-                                error_msg += f" Log: {'; '.join(log_msgs)}"
-                    except Exception:
-                        pass
-                    
-                    api.close()
-                    return False, error_msg
+            # Task completed successfully
+            if status == 'stopped' and (exitstatus == 'OK' or exitstatus is None):
+                logging.info(f"✓ Task completed successfully after {elapsed}s")
+                api.close()
+                return True, "Task completed successfully"
             
-            # Smart timeout for long-running tasks
-            elif status == 'running' and elapsed > 60:  # After 60 seconds of running
-                # Check if node has actually joined the cluster (task may be slow to update)
-                if node_name and node_name in NODES:
+            # Task failed
+            elif status == 'stopped' and exitstatus != 'OK':
+                error_msg = f"Task failed with exit status: {exitstatus}"
+                # Get detailed error from task log
+                try:
+                    task_log = api.get_task_log(task_id, limit=20)
+                    if task_log:
+                        # Look for actual error messages in log
+                        error_lines = []
+                        for entry in task_log[-10:]:
+                            if 't' in entry:
+                                line = entry['t'].strip()
+                                if any(keyword in line.lower() for keyword in ['error', 'failed', 'timeout', 'invalid']):
+                                    error_lines.append(line)
+                        
+                        if error_lines:
+                            error_msg += f" Errors: {'; '.join(error_lines[-3:])}"
+                except Exception:
+                    pass
+                
+                logging.error(f"✗ {error_msg}")
+                api.close()
+                return False, error_msg
+            
+            # Task is running - check cluster status for early detection
+            elif status == 'running':
+                # After some time, check if join actually succeeded even if task still running
+                if elapsed > 15 and node_name and node_name in NODES:
                     node_status = check_node_status(node_name, NODES[node_name]['mgmt_ip'])
                     if node_status['in_cluster']:
-                        logging.info(f"✓ Node {node_name} detected in cluster while task still running")
+                        logging.info(f"✓ Node {node_name} successfully joined cluster (task still running)")
                         api.close()
-                        return True, "Node joined cluster (detected via cluster status)"
-                
-                # Log progress for long-running tasks
-                if elapsed % 30 == 0:  # Every 30 seconds
-                    logging.info(f"Task still running after {elapsed}s...")
+                        return True, "Node joined cluster successfully"
         
-        # Adaptive check interval - more frequent early, less frequent later
-        if elapsed < 30:
-            time.sleep(2)  # Quick checks first 30 seconds
-        elif elapsed < 120:
-            time.sleep(5)  # Medium checks for 2 minutes
         else:
-            time.sleep(10)  # Slower checks after 2 minutes
+            # Task might not exist or API call failed (common during cluster join due to cert changes)
+            if check_count <= 5:
+                logging.info(f"Task status temporarily unavailable (check {check_count}) - certificates may be updating")
+            
+            # After multiple failed checks, verify if join succeeded anyway
+            if check_count > 5 and node_name and node_name in NODES:
+                node_status = check_node_status(node_name, NODES[node_name]['mgmt_ip'])
+                if node_status['in_cluster']:
+                    logging.info(f"✓ Node {node_name} found in cluster despite task status issues")
+                    api.close()
+                    return True, "Node joined cluster (verified via cluster status)"
+        
+        # Adaptive sleep - start quick, then slower
+        if check_count < 10:
+            time.sleep(2)  # Quick checks first 20 seconds
+        elif check_count < 20:
+            time.sleep(3)  # Medium checks next 30 seconds  
+        else:
+            time.sleep(5)  # Slower checks after 50 seconds
     
     api.close()
     
-    # Final check before timeout - node might have joined despite task timeout
+    # Final verification before declaring timeout
     if node_name and node_name in NODES:
         node_status = check_node_status(node_name, NODES[node_name]['mgmt_ip'])
         if node_status['in_cluster']:
-            logging.info(f"✓ Node {node_name} successfully joined despite task timeout")
-            return True, "Node joined cluster (verified after task timeout)"
+            logging.info(f"✓ Node {node_name} successfully joined (discovered after timeout)")
+            return True, "Node joined cluster successfully"
     
-    return False, f"Task monitoring timeout after {timeout}s"
+    return False, f"Task monitoring timeout after {timeout}s (no completion detected)"
 
 
-def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str, task_timeout: int = 300) -> Tuple[bool, str]:
-    """Join a node to the cluster with improved fingerprint handling"""
+def get_actual_ssl_fingerprint(joining_node_ip: str, cluster_master_ip: str) -> Optional[str]:
+    """Get the actual SSL fingerprint that the joining node sees from the cluster master"""
+    try:
+        import subprocess
+        cmd = [
+            'ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+            f'root@{joining_node_ip}',
+            f'openssl s_client -connect {cluster_master_ip}:8006 -servername {cluster_master_ip} 2>/dev/null | openssl x509 -fingerprint -sha256 -noout'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            # Parse "sha256 Fingerprint=XX:XX:XX..." format
+            if 'Fingerprint=' in output:
+                fingerprint = output.split('Fingerprint=')[1].strip()
+                if fingerprint and len(fingerprint) > 40:
+                    logging.info(f"Got actual SSL fingerprint from {joining_node_ip} -> {cluster_master_ip}: {fingerprint[:40]}...")
+                    return fingerprint
+        
+        logging.warning(f"Failed to get SSL fingerprint from {joining_node_ip} -> {cluster_master_ip}: {result.stderr}")
+        return None
+        
+    except subprocess.TimeoutExpired:
+        logging.warning(f"Timeout getting SSL fingerprint from {joining_node_ip}")
+        return None
+    except Exception as e:
+        logging.warning(f"Error getting SSL fingerprint from {joining_node_ip}: {e}")
+        return None
+
+def get_cluster_join_fingerprint(node_ip: str) -> Optional[str]:
+    """Get fingerprint from cluster join API endpoint - this should be the correct one"""
+    try:
+        api = SimpleProxmoxAPI(node_ip)
+        if not api.authenticate():
+            return None
+        
+        # Get join information from cluster master
+        result = api.get('cluster/config/join')
+        api.close()
+        
+        if result and 'data' in result:
+            nodelist = result['data'].get('nodelist', [])
+            if nodelist and len(nodelist) > 0:
+                # Get fingerprint from first node in nodelist
+                fingerprint = nodelist[0].get('pve_fp')
+                if fingerprint:
+                    logging.info(f"Got cluster join fingerprint from {node_ip}: {fingerprint[:40]}...")
+                    return fingerprint
+        
+        logging.warning(f"Could not get join fingerprint from {node_ip}")
+        return None
+        
+    except Exception as e:
+        logging.warning(f"Error getting join fingerprint from {node_ip}: {e}")
+        return None
+
+def get_node_certificate_fingerprint(node_ip: str) -> Optional[str]:
+    """Get the certificate fingerprint directly from the joining node using pvenode cert info"""
+    try:
+        import subprocess
+        
+        # First, let's see what the actual output looks like
+        cmd = [
+            'ssh', '-o', 'ConnectTimeout=10', '-o', 'StrictHostKeyChecking=no',
+            f'root@{node_ip}',
+            'pvenode cert info'
+        ]
+        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            
+            # Parse the fingerprint from the output - need SSL certificate, not CA certificate
+            lines = output.split('\n')
+            fingerprints = []
+            
+            # Collect all fingerprints
+            for line in lines:
+                line = line.strip()
+                if 'fingerprint' in line.lower() and '│' in line:
+                    # Extract fingerprint from table format
+                    parts = line.split('│')
+                    if len(parts) >= 3:
+                        fingerprint = parts[2].strip()
+                        # Validate fingerprint format (should be hex with colons)
+                        if fingerprint and len(fingerprint) > 40 and ':' in fingerprint:
+                            fingerprints.append(fingerprint)
+            
+            # We want the SSL certificate fingerprint (usually the second one)
+            if len(fingerprints) >= 2:
+                ssl_fingerprint = fingerprints[1]  # Second fingerprint should be SSL cert
+                logging.info(f"Got SSL fingerprint from cert info: {ssl_fingerprint[:40]}...")
+                return ssl_fingerprint
+            elif len(fingerprints) == 1:
+                logging.info(f"Got fingerprint from cert info: {fingerprints[0][:40]}...")
+                return fingerprints[0]
+            
+            # If we can't parse it, show the full output for debugging
+            logging.warning(f"Could not parse fingerprint from {node_ip}. Full output:\n{output}")
+        else:
+            logging.warning(f"pvenode cert info failed on {node_ip}: {result.stderr}")
+        
+        return None
+        
+    except subprocess.TimeoutExpired:
+        logging.warning(f"Timeout getting fingerprint from {node_ip}")
+        return None
+    except Exception as e:
+        logging.warning(f"Error getting fingerprint from {node_ip}: {e}")
+        return None
+
+def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str, task_timeout: int = 120) -> Tuple[bool, str]:
+    """Join a node to the cluster using API with fresh fingerprint from CLUSTER master node"""
     node_config = NODES[node_name]
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    # Get the most current fingerprint using cluster consensus
-    fingerprint = get_robust_fingerprint()
-    
-    if not fingerprint:
-        return False, "Cannot get current cluster fingerprint"
-    
-    logging.info(f"Using consensus fingerprint: {fingerprint[:40]}...")
-    
-    # Connect to node to join
+    # Connect to node to join using API first
     api = SimpleProxmoxAPI(mgmt_ip)
     if not api.authenticate():
         return False, f"Cannot authenticate to {node_name}"
     
-    # Prepare join data
+    # Get the ACTUAL SSL fingerprint that the joining node sees from cluster master
+    logging.info(f"Getting ACTUAL SSL fingerprint that {node_name} sees from cluster master ({primary_ip})...")
+    fingerprint = get_actual_ssl_fingerprint(mgmt_ip, primary_ip)
+    
+    if not fingerprint:
+        logging.info(f"Fallback: Getting fingerprint from CLUSTER MASTER join API ({primary_ip})...")
+        fingerprint = get_cluster_join_fingerprint(primary_ip)
+    
+    if not fingerprint:
+        logging.info(f"Final fallback: Getting certificate fingerprint from CLUSTER MASTER node ({primary_ip})...")
+        fingerprint = get_node_certificate_fingerprint(primary_ip)
+    
+    if not fingerprint:
+        api.close()
+        return False, f"Cannot get fingerprint from cluster master {primary_ip}"
+    
+    logging.info(f"Using fresh cluster master fingerprint: {fingerprint[:40]}...")
+    
+    # Prepare join data with the FRESH cluster master's fingerprint
     join_data = {
         "hostname": primary_ip,
         "password": ROOT_PASSWORD,
@@ -465,63 +625,64 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str, task_ti
         "link1": ceph_ip
     }
     
-    # Final verification - get fresh consensus right before join
-    logging.debug("Final consensus check before join...")
-    final_fingerprint = get_robust_fingerprint()
-    if final_fingerprint and final_fingerprint != fingerprint:
-        logging.warning(f"Fingerprint consensus changed: {fingerprint[:20]} → {final_fingerprint[:20]}")
-        join_data["fingerprint"] = final_fingerprint
-        fingerprint = final_fingerprint
+    # Send join request via API
+    logging.info(f"Sending API join request to {node_name}...")
     
-    # Send join request
-    logging.info(f"Sending join request with fingerprint: {fingerprint[:40]}...")
-    result = api.post('cluster/config/join', join_data, timeout=120)
-    api.close()
-    
-    if result:
-        if 'data' in result and 'UPID:' in str(result['data']):
-            task_id = result['data']
-            logging.info(f"✓ Join task started on {node_name}: {task_id}")
-            
-            # Monitor task completion with configurable timeout
-            success, message = monitor_task_completion(mgmt_ip, task_id, timeout=task_timeout)
-            
-            if success:
-                # Verify node is actually in cluster with smart retries
-                success_result, message = verify_node_in_cluster(node_name, mgmt_ip)
+    try:
+        result = api.post('cluster/config/join', join_data, timeout=120)
+        api.close()
+        
+        if result:
+            if 'data' in result and 'UPID:' in str(result['data']):
+                task_id = result['data']
+                logging.info(f"✓ Join task started on {node_name}: {task_id}")
                 
-                if success_result:
-                    # Wait for cluster to synchronize after successful join
-                    current_cluster = get_current_cluster_nodes()
-                    if len(current_cluster) > 1:
-                        logging.info("Waiting for cluster synchronization after join...")
-                        wait_for_cluster_sync(current_cluster, timeout=15)
+                # Monitor task completion
+                success, message = monitor_task_completion(mgmt_ip, task_id, timeout=task_timeout)
+                
+                if success:
+                    # Verify node is actually in cluster
+                    success_result, verify_message = verify_node_in_cluster(node_name, mgmt_ip)
                     
-                    return True, message
+                    if success_result:
+                        return True, verify_message
+                    else:
+                        return False, f"Join task completed but verification failed: {verify_message}"
                 else:
-                    return False, message
+                    return False, f"Join task failed: {message}"
             else:
-                return False, f"Join task failed: {message}"
+                logging.error(f"Unexpected API response format: {result}")
+                return False, f"Unexpected join response: {result}"
         else:
-            return False, f"Unexpected join response: {result}"
-    
-    return False, "No response from join API call"
+            logging.error("API call returned None - possible authentication or network issue")
+            return False, "No response from join API call - check authentication and network connectivity"
+            
+    except Exception as e:
+        api.close()
+        logging.error(f"Exception during API call: {str(e)}")
+        return False, f"API call failed: {str(e)}"
 
-def verify_node_in_cluster(node_name: str, mgmt_ip: str, max_attempts: int = 3) -> Tuple[bool, str]:
-    """Smart verification that node is actually in cluster"""
+def verify_node_in_cluster(node_name: str, mgmt_ip: str, max_attempts: int = 5) -> Tuple[bool, str]:
+    """Robust verification that node is actually in cluster with quick detection"""
+    logging.info(f"Verifying {node_name} cluster membership...")
+    
     for attempt in range(1, max_attempts + 1):
-        # Progressive delay: 2s, 5s, 10s
-        if attempt > 1:
-            delay = attempt * 2 + 1
-            time.sleep(delay)
+        # Quick initial check, then progressive delay
+        if attempt == 1:
+            time.sleep(1)  # Quick first check
+        elif attempt == 2:
+            time.sleep(2)  # Still quick
+        else:
+            time.sleep(3)  # Slower for remaining attempts
         
         status = check_node_status(node_name, mgmt_ip)
         if status['in_cluster']:
+            logging.info(f"✓ {node_name} verified in cluster on attempt {attempt}")
             return True, "Successfully joined cluster"
         
-        logging.debug(f"Cluster verification attempt {attempt}/{max_attempts} failed")
+        logging.debug(f"Cluster verification attempt {attempt}/{max_attempts} - not yet in cluster")
         
-        # On final attempt, get diagnostic info
+        # Get diagnostic info on final attempt
         if attempt == max_attempts:
             diagnostic_info = ""
             try:
@@ -529,18 +690,20 @@ def verify_node_in_cluster(node_name: str, mgmt_ip: str, max_attempts: int = 3) 
                 if api_diag.authenticate():
                     cluster_info = api_diag.get('cluster/status')
                     if cluster_info and 'data' in cluster_info:
-                        cluster_nodes = [item.get('name', '') for item in cluster_info['data'] 
-                                       if item.get('type') == 'node']
-                        diagnostic_info = f" (cluster has nodes: {', '.join(cluster_nodes)})"
+                        cluster_nodes = []
+                        for item in cluster_info['data']:
+                            if item.get('type') == 'node':
+                                cluster_nodes.append(item.get('name', 'unknown'))
+                        diagnostic_info = f" (cluster nodes: {', '.join(cluster_nodes)})"
                     api_diag.close()
-            except Exception:
-                pass
+            except Exception as e:
+                diagnostic_info = f" (diagnostic failed: {str(e)})"
             
-            return False, f"Task completed but cluster verification failed{diagnostic_info}"
+            return False, f"Verification failed after {max_attempts} attempts{diagnostic_info}"
     
-    return False, "Verification failed after all attempts"
+    return False, "Verification failed"
 
-def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30, task_timeout: int = 300) -> bool:
+def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30, task_timeout: int = 120) -> bool:
     """Join a node to cluster with retry logic"""
     logging.info(f"Joining {node_name} to cluster (max {max_attempts} attempts)...")
     
@@ -563,9 +726,15 @@ def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3,
                     logging.info(f"✓ {node_name} is already in cluster (race condition)")
                     return True
                 
+                # For fingerprint errors, just wait - don't force updates that change fingerprints
+                error_category = get_error_category(message)
+                if error_category in ["fingerprint_verification", "fingerprint_generic", "task_fingerprint"]:
+                    logging.info(f"Fingerprint error detected, will retry with fresh fingerprint...")
+                    # Don't run certificate update as it changes the fingerprint we need
+                
                 # Smart retry delay based on error type
                 delay = calculate_retry_delay(message, backoff_delay, attempt)
-                logging.info(f"Waiting {delay}s before retry (error type: {get_error_category(message)})...")
+                logging.info(f"Waiting {delay}s before retry (error type: {error_category})...")
                 time.sleep(delay)
                 
                 backoff_delay = min(backoff_delay * 2, 180)  # Exponential backoff, max 3 minutes
@@ -598,10 +767,10 @@ def calculate_retry_delay(message: str, base_delay: int, attempt: int) -> int:
     
     # Base delays for different error categories
     delay_multipliers = {
-        "fingerprint_verification": 1.5,  # Need extra time for cert stabilization
-        "fingerprint_generic": 1.2,
+        "fingerprint_verification": 1.0,  # Reduced since we now use updatecerts
+        "fingerprint_generic": 1.0,       # Reduced since we now use updatecerts
         "authentication": 0.3,            # Quick retry for auth issues
-        "task_fingerprint": 1.8,          # Task failed due to fingerprint
+        "task_fingerprint": 1.0,          # Reduced since we now use updatecerts
         "task_execution": 1.0,            # Standard delay
         "cluster_verification": 0.5,      # Quick retry for verification
         "generic": 1.0
@@ -751,7 +920,7 @@ def verify_cluster_with_retry(max_attempts: int = 3) -> bool:
     
     return False
 
-def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60, task_timeout: int = 300) -> List[str]:
+def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60, task_timeout: int = 120) -> List[str]:
     """Attempt to recover failed nodes with more aggressive retry logic"""
     if not failed_nodes:
         return []
@@ -816,8 +985,8 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
                         help='Maximum attempts to join each node to cluster (default: 3)')
     parser.add_argument('--join-retry-delay', type=int, default=30,
                         help='Initial delay between join retry attempts in seconds (default: 30)')
-    parser.add_argument('--join-task-timeout', type=int, default=900,
-                        help='Timeout for individual join task monitoring in seconds (default: 900)')
+    parser.add_argument('--join-task-timeout', type=int, default=120,
+                        help='Timeout for individual join task monitoring in seconds (default: 120)')
     args = parser.parse_args()
     
     start_time = datetime.now()
@@ -897,12 +1066,15 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
         if not create_cluster(primary_node, primary_ip):
             return False
         
-        # Allow cluster to initialize with smart verification
+        # Allow cluster to initialize with simple verification
         logging.info("Verifying cluster initialization...")
         cluster_ready = False
         for init_check in range(1, 4):  # Check 3 times with progressive delays
             time.sleep(init_check * 2)  # 2s, 4s, 6s
-            if get_robust_fingerprint():
+            
+            # Check if primary node is accessible and in cluster
+            status = check_node_status(primary_node, primary_ip)
+            if status['in_cluster']:
                 cluster_ready = True
                 logging.info(f"✓ Cluster ready for node joins (after {init_check} checks)")
                 break
