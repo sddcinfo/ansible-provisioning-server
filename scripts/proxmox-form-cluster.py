@@ -347,7 +347,7 @@ def wait_for_cluster_sync(cluster_nodes: List[str], timeout: int = 30) -> bool:
     return False
 
 def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
-    """Monitor a Proxmox task until completion"""
+    """Monitor a Proxmox task with smart completion detection"""
     logging.info(f"Monitoring task: {task_id}")
     
     api = SimpleProxmoxAPI(node_ip)
@@ -356,9 +356,20 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
     
     start_time = time.time()
     last_status = None
+    running_time = 0
+    node_name = None
+    
+    # Extract node name from task_id for cluster checks
+    try:
+        parts = task_id.split(':')
+        if len(parts) >= 2:
+            node_name = parts[1]
+    except Exception:
+        pass
     
     while time.time() - start_time < timeout:
         task_status = api.get_task_status(task_id)
+        elapsed = int(time.time() - start_time)
         
         if task_status and 'data' in task_status:
             data = task_status['data']
@@ -367,9 +378,10 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
             
             # Log status changes
             if status != last_status:
-                elapsed = int(time.time() - start_time)
                 logging.info(f"Task status: {status} (elapsed: {elapsed}s)")
                 last_status = status
+                if status == 'running':
+                    running_time = elapsed
             
             # Check completion
             if status == 'stopped':
@@ -382,7 +394,6 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
                     try:
                         task_log = api.get_task_log(task_id, limit=10)
                         if task_log:
-                            # Get the last few log entries
                             log_msgs = [entry.get('t', '') for entry in task_log[-3:] if 't' in entry]
                             if log_msgs:
                                 error_msg += f" Log: {'; '.join(log_msgs)}"
@@ -391,14 +402,42 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
                     
                     api.close()
                     return False, error_msg
+            
+            # Smart timeout for long-running tasks
+            elif status == 'running' and elapsed > 60:  # After 60 seconds of running
+                # Check if node has actually joined the cluster (task may be slow to update)
+                if node_name and node_name in NODES:
+                    node_status = check_node_status(node_name, NODES[node_name]['mgmt_ip'])
+                    if node_status['in_cluster']:
+                        logging.info(f"✓ Node {node_name} detected in cluster while task still running")
+                        api.close()
+                        return True, "Node joined cluster (detected via cluster status)"
+                
+                # Log progress for long-running tasks
+                if elapsed % 30 == 0:  # Every 30 seconds
+                    logging.info(f"Task still running after {elapsed}s...")
         
-        time.sleep(3)  # Check every 3 seconds
+        # Adaptive check interval - more frequent early, less frequent later
+        if elapsed < 30:
+            time.sleep(2)  # Quick checks first 30 seconds
+        elif elapsed < 120:
+            time.sleep(5)  # Medium checks for 2 minutes
+        else:
+            time.sleep(10)  # Slower checks after 2 minutes
     
     api.close()
+    
+    # Final check before timeout - node might have joined despite task timeout
+    if node_name and node_name in NODES:
+        node_status = check_node_status(node_name, NODES[node_name]['mgmt_ip'])
+        if node_status['in_cluster']:
+            logging.info(f"✓ Node {node_name} successfully joined despite task timeout")
+            return True, "Node joined cluster (verified after task timeout)"
+    
     return False, f"Task monitoring timeout after {timeout}s"
 
 
-def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tuple[bool, str]:
+def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str, task_timeout: int = 300) -> Tuple[bool, str]:
     """Join a node to the cluster with improved fingerprint handling"""
     node_config = NODES[node_name]
     mgmt_ip = node_config['mgmt_ip']
@@ -444,8 +483,8 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
             task_id = result['data']
             logging.info(f"✓ Join task started on {node_name}: {task_id}")
             
-            # Monitor task completion instead of sleeping
-            success, message = monitor_task_completion(mgmt_ip, task_id, timeout=180)
+            # Monitor task completion with configurable timeout
+            success, message = monitor_task_completion(mgmt_ip, task_id, timeout=task_timeout)
             
             if success:
                 # Verify node is actually in cluster with smart retries
@@ -501,14 +540,14 @@ def verify_node_in_cluster(node_name: str, mgmt_ip: str, max_attempts: int = 3) 
     
     return False, "Verification failed after all attempts"
 
-def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30) -> bool:
+def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30, task_timeout: int = 300) -> bool:
     """Join a node to cluster with retry logic"""
     logging.info(f"Joining {node_name} to cluster (max {max_attempts} attempts)...")
     
     for attempt in range(1, max_attempts + 1):
         logging.info(f"--- Attempt {attempt}/{max_attempts} for {node_name} ---")
         
-        success, message = join_node_to_cluster_single_attempt(node_name, primary_ip)
+        success, message = join_node_to_cluster_single_attempt(node_name, primary_ip, task_timeout)
         
         if success:
             logging.info(f"✓ {node_name} successfully joined cluster on attempt {attempt}")
@@ -712,7 +751,7 @@ def verify_cluster_with_retry(max_attempts: int = 3) -> bool:
     
     return False
 
-def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60) -> List[str]:
+def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60, task_timeout: int = 300) -> List[str]:
     """Attempt to recover failed nodes with more aggressive retry logic"""
     if not failed_nodes:
         return []
@@ -734,7 +773,7 @@ def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int
             continue
         
         # Try to join with more aggressive settings
-        if join_node_to_cluster(node_name, primary_ip, max_attempts, retry_delay):
+        if join_node_to_cluster(node_name, primary_ip, max_attempts, retry_delay, task_timeout):
             logging.info(f"✓ {node_name} recovered successfully")
             recovered_nodes.append(node_name)
         else:
@@ -777,6 +816,8 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
                         help='Maximum attempts to join each node to cluster (default: 3)')
     parser.add_argument('--join-retry-delay', type=int, default=30,
                         help='Initial delay between join retry attempts in seconds (default: 30)')
+    parser.add_argument('--join-task-timeout', type=int, default=300,
+                        help='Timeout for individual join task monitoring in seconds (default: 300)')
     args = parser.parse_args()
     
     start_time = datetime.now()
@@ -832,7 +873,7 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
             for i, node_name in enumerate(ready_nodes, 1):
                 logging.info(f"\n--- Node {i}/{len(ready_nodes)}: {node_name} ---")
                 
-                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay):
+                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay, args.join_task_timeout):
                     logging.error(f"Failed to join {node_name} after all retry attempts")
                     # Continue with other nodes even if one fails
         else:
@@ -878,7 +919,7 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
             for i, node_name in enumerate(remaining_nodes, 1):
                 logging.info(f"\n--- Node {i}/{len(remaining_nodes)}: {node_name} ---")
                 
-                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay):
+                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay, args.join_task_timeout):
                     logging.error(f"Failed to join {node_name} after all retry attempts")
                     # Continue with other nodes even if one fails
     else:
@@ -899,7 +940,7 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
                 failed_nodes.append(node_name)
         
         if failed_nodes:
-            recovered_nodes = recovery_attempt(failed_nodes, primary_ip, 2, 60)
+            recovered_nodes = recovery_attempt(failed_nodes, primary_ip, 2, 60, args.join_task_timeout)
             if recovered_nodes:
                 logging.info(f"\n=== Final Verification After Recovery ===")
                 success = verify_cluster_with_retry()
