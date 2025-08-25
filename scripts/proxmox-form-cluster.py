@@ -236,46 +236,115 @@ def get_cluster_fingerprint(node_ip: str) -> Optional[str]:
     
     return None
 
-def get_stable_fingerprint(primary_ip: str, max_attempts: int = 10, min_stable: int = 2) -> Optional[str]:
-    """Get stable fingerprint with smart verification strategy"""
-    logging.info("Getting stable cluster certificate fingerprint...")
+def get_consensus_fingerprint(cluster_nodes: List[str]) -> Optional[str]:
+    """Get fingerprint consensus from all cluster nodes to handle certificate changes"""
+    fingerprint_votes = {}
+    successful_queries = 0
     
-    fingerprint_counts = {}
-    attempts = 0
-    
-    while attempts < max_attempts:
-        current_fingerprint = get_cluster_fingerprint(primary_ip)
-        attempts += 1
-        
-        if current_fingerprint:
-            # Count occurrences of each fingerprint
-            fingerprint_counts[current_fingerprint] = fingerprint_counts.get(current_fingerprint, 0) + 1
+    for node_name in cluster_nodes:
+        if node_name in NODES:
+            node_ip = NODES[node_name]['mgmt_ip']
+            status = check_node_status(node_name, node_ip)
             
-            # If we have enough stable occurrences, return it
-            if fingerprint_counts[current_fingerprint] >= min_stable:
-                logging.info(f"✓ Certificate stable after {attempts} attempts: {current_fingerprint[:20]}...")
-                return current_fingerprint
-            
-            logging.debug(f"Fingerprint attempt {attempts}: {current_fingerprint[:20]}... (count: {fingerprint_counts[current_fingerprint]})")
-        else:
-            logging.debug(f"No fingerprint returned on attempt {attempts}")
-        
-        # Smart delay - shorter intervals for first few attempts
-        if attempts < 3:
-            time.sleep(1)  # Quick checks first
-        elif attempts < 6:
-            time.sleep(2)  # Medium delay
-        else:
-            time.sleep(3)  # Longer delay for later attempts
+            if status['in_cluster']:
+                fingerprint = get_cluster_fingerprint(node_ip)
+                if fingerprint:
+                    fingerprint_votes[fingerprint] = fingerprint_votes.get(fingerprint, 0) + 1
+                    successful_queries += 1
+                    logging.debug(f"Node {node_name} reports fingerprint: {fingerprint[:20]}...")
     
-    # If no fingerprint was stable enough, return the most common one
-    if fingerprint_counts:
-        most_common = max(fingerprint_counts.keys(), key=lambda k: fingerprint_counts[k])
-        logging.warning(f"No fully stable fingerprint found, using most common: {most_common[:20]}...")
-        return most_common
+    if not fingerprint_votes:
+        logging.warning("No fingerprint votes collected from cluster nodes")
+        return None
     
-    logging.error("Could not obtain any valid fingerprint")
+    # Get the most voted fingerprint
+    consensus_fingerprint = max(fingerprint_votes.keys(), key=lambda k: fingerprint_votes[k])
+    votes = fingerprint_votes[consensus_fingerprint]
+    
+    logging.info(f"Fingerprint consensus: {consensus_fingerprint[:20]}... ({votes}/{successful_queries} votes)")
+    
+    # Log any conflicts for debugging
+    if len(fingerprint_votes) > 1:
+        logging.warning(f"Fingerprint conflicts detected:")
+        for fp, count in fingerprint_votes.items():
+            logging.warning(f"  {fp[:20]}...: {count} votes")
+    
+    return consensus_fingerprint
+
+def get_current_cluster_nodes() -> List[str]:
+    """Get list of nodes currently in the cluster"""
+    cluster_nodes = []
+    
+    for node_name, node_config in NODES.items():
+        status = check_node_status(node_name, node_config['mgmt_ip'])
+        if status['in_cluster']:
+            cluster_nodes.append(node_name)
+    
+    return cluster_nodes
+
+def get_robust_fingerprint() -> Optional[str]:
+    """Get fingerprint using cluster consensus for maximum reliability"""
+    logging.info("Getting current cluster certificate fingerprint...")
+    
+    # First, get list of current cluster nodes
+    cluster_nodes = get_current_cluster_nodes()
+    
+    if not cluster_nodes:
+        logging.error("No cluster nodes found")
+        return None
+    
+    logging.info(f"Querying fingerprint from {len(cluster_nodes)} cluster nodes: {', '.join(cluster_nodes)}")
+    
+    # Use consensus approach for active cluster
+    if len(cluster_nodes) > 1:
+        return get_consensus_fingerprint(cluster_nodes)
+    
+    # Single node cluster - get directly
+    node_ip = NODES[cluster_nodes[0]]['mgmt_ip']
+    fingerprint = get_cluster_fingerprint(node_ip)
+    
+    if fingerprint:
+        logging.info(f"✓ Single node fingerprint: {fingerprint[:20]}...")
+        return fingerprint
+    
+    logging.error("Could not obtain fingerprint from cluster")
     return None
+
+def wait_for_cluster_sync(cluster_nodes: List[str], timeout: int = 30) -> bool:
+    """Wait for cluster nodes to synchronize after a join operation"""
+    logging.info(f"Waiting for cluster synchronization across {len(cluster_nodes)} nodes...")
+    
+    start_time = time.time()
+    sync_checks = 0
+    
+    while time.time() - start_time < timeout:
+        # Check if all nodes have the same fingerprint
+        fingerprint_consensus = get_consensus_fingerprint(cluster_nodes)
+        
+        if fingerprint_consensus:
+            # Get fingerprint votes to check consistency
+            fingerprint_votes = {}
+            for node_name in cluster_nodes:
+                if node_name in NODES:
+                    node_ip = NODES[node_name]['mgmt_ip']
+                    status = check_node_status(node_name, node_ip)
+                    if status['in_cluster']:
+                        fp = get_cluster_fingerprint(node_ip)
+                        if fp:
+                            fingerprint_votes[fp] = fingerprint_votes.get(fp, 0) + 1
+            
+            # Check if all nodes agree on fingerprint
+            if len(fingerprint_votes) == 1:
+                logging.info(f"✓ Cluster synchronized after {sync_checks + 1} checks")
+                return True
+            else:
+                sync_checks += 1
+                logging.debug(f"Sync check {sync_checks}: {len(fingerprint_votes)} different fingerprints")
+        
+        time.sleep(2)
+    
+    logging.warning(f"Cluster sync timeout after {timeout}s")
+    return False
 
 def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
     """Monitor a Proxmox task until completion"""
@@ -328,28 +397,6 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
     api.close()
     return False, f"Task monitoring timeout after {timeout}s"
 
-def get_fingerprint_from_joining_node(joining_node_ip: str, primary_ip: str) -> Optional[str]:
-    """Get fingerprint as seen from the joining node's perspective"""
-    try:
-        api = SimpleProxmoxAPI(joining_node_ip)
-        if not api.authenticate():
-            return None
-        
-        # Query the primary node's fingerprint from the joining node
-        result = api.get(f'cluster/config/join?node={primary_ip}')
-        api.close()
-        
-        if result and 'data' in result:
-            nodelist = result['data'].get('nodelist', [])
-            for node_info in nodelist:
-                if node_info.get('name') == primary_ip.split('.')[-1] or node_info.get('nodeid') == '1':
-                    fp = node_info.get('pve_fp')
-                    if fp:
-                        return fp
-        
-        return None
-    except Exception:
-        return None
 
 def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tuple[bool, str]:
     """Join a node to the cluster with improved fingerprint handling"""
@@ -357,35 +404,13 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    # Try multiple approaches to get the correct fingerprint
-    fingerprint = None
+    # Get the most current fingerprint using cluster consensus
+    fingerprint = get_robust_fingerprint()
     
-    # Method 1: Get fingerprint from primary node
-    primary_fingerprint = get_stable_fingerprint(primary_ip)
+    if not fingerprint:
+        return False, "Cannot get current cluster fingerprint"
     
-    # Method 2: Get fingerprint from joining node's perspective
-    joining_fingerprint = get_fingerprint_from_joining_node(mgmt_ip, primary_ip)
-    
-    # Choose the best fingerprint
-    if primary_fingerprint and joining_fingerprint:
-        if primary_fingerprint == joining_fingerprint:
-            fingerprint = primary_fingerprint
-            logging.info(f"✓ Fingerprints match from both perspectives: {fingerprint[:40]}...")
-        else:
-            # They differ - use the joining node's view as it's more likely correct
-            fingerprint = joining_fingerprint
-            logging.warning(f"Fingerprint mismatch detected:")
-            logging.warning(f"  Primary view: {primary_fingerprint[:40]}...")
-            logging.warning(f"  Joining view: {joining_fingerprint[:40]}...")
-            logging.warning(f"  Using joining node's perspective")
-    elif joining_fingerprint:
-        fingerprint = joining_fingerprint
-        logging.info(f"Using fingerprint from joining node: {fingerprint[:40]}...")
-    elif primary_fingerprint:
-        fingerprint = primary_fingerprint
-        logging.info(f"Using fingerprint from primary node: {fingerprint[:40]}...")
-    else:
-        return False, "Cannot get fingerprint from either node"
+    logging.info(f"Using consensus fingerprint: {fingerprint[:40]}...")
     
     # Connect to node to join
     api = SimpleProxmoxAPI(mgmt_ip)
@@ -401,14 +426,13 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
         "link1": ceph_ip
     }
     
-    # Final fingerprint verification right before join
-    logging.debug("Final fingerprint verification before join...")
-    final_check_fingerprint = get_cluster_fingerprint(primary_ip)
-    if final_check_fingerprint and final_check_fingerprint != fingerprint:
-        logging.warning(f"Fingerprint changed at last moment: {fingerprint[:20]} → {final_check_fingerprint[:20]}")
-        logging.warning("Updating to latest fingerprint")
-        join_data["fingerprint"] = final_check_fingerprint
-        fingerprint = final_check_fingerprint
+    # Final verification - get fresh consensus right before join
+    logging.debug("Final consensus check before join...")
+    final_fingerprint = get_robust_fingerprint()
+    if final_fingerprint and final_fingerprint != fingerprint:
+        logging.warning(f"Fingerprint consensus changed: {fingerprint[:20]} → {final_fingerprint[:20]}")
+        join_data["fingerprint"] = final_fingerprint
+        fingerprint = final_fingerprint
     
     # Send join request
     logging.info(f"Sending join request with fingerprint: {fingerprint[:40]}...")
@@ -425,7 +449,18 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
             
             if success:
                 # Verify node is actually in cluster with smart retries
-                return verify_node_in_cluster(node_name, mgmt_ip)
+                success_result, message = verify_node_in_cluster(node_name, mgmt_ip)
+                
+                if success_result:
+                    # Wait for cluster to synchronize after successful join
+                    current_cluster = get_current_cluster_nodes()
+                    if len(current_cluster) > 1:
+                        logging.info("Waiting for cluster synchronization after join...")
+                        wait_for_cluster_sync(current_cluster, timeout=15)
+                    
+                    return True, message
+                else:
+                    return False, message
             else:
                 return False, f"Join task failed: {message}"
         else:
@@ -826,7 +861,7 @@ SSH monitoring checks /var/log/proxmox-post-install.log for:
         cluster_ready = False
         for init_check in range(1, 4):  # Check 3 times with progressive delays
             time.sleep(init_check * 2)  # 2s, 4s, 6s
-            if get_cluster_fingerprint(primary_ip):
+            if get_robust_fingerprint():
                 cluster_ready = True
                 logging.info(f"✓ Cluster ready for node joins (after {init_check} checks)")
                 break
