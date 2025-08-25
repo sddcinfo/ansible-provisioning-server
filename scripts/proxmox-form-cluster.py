@@ -112,6 +112,33 @@ class SimpleProxmoxAPI:
     def close(self):
         """Close session"""
         self.session.close()
+    
+    def get_task_status(self, task_id: str) -> Optional[Dict]:
+        """Get status of a running task by UPID"""
+        # Extract node from UPID format: UPID:node:pid:starttime:type:id:user:status
+        try:
+            parts = task_id.split(':')
+            if len(parts) >= 2:
+                node = parts[1]
+                endpoint = f"nodes/{node}/tasks/{task_id}/status"
+                return self.get(endpoint)
+        except Exception:
+            pass
+        return None
+    
+    def get_task_log(self, task_id: str, limit: int = 50) -> Optional[List[Dict]]:
+        """Get log entries for a task"""
+        try:
+            parts = task_id.split(':')
+            if len(parts) >= 2:
+                node = parts[1]
+                endpoint = f"nodes/{node}/tasks/{task_id}/log?limit={limit}"
+                result = self.get(endpoint)
+                if result and 'data' in result:
+                    return result['data']
+        except Exception:
+            pass
+        return None
 
 def check_node_status(node_name: str, node_ip: str) -> Dict:
     """Check if node is accessible and in cluster"""
@@ -205,6 +232,57 @@ def wait_for_stable_fingerprint(primary_ip: str, timeout: int = 30) -> Optional[
     logging.warning("Certificate did not stabilize in time")
     return last_fingerprint
 
+def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
+    """Monitor a Proxmox task until completion"""
+    logging.info(f"Monitoring task: {task_id}")
+    
+    api = SimpleProxmoxAPI(node_ip)
+    if not api.authenticate():
+        return False, "Cannot authenticate to monitor task"
+    
+    start_time = time.time()
+    last_status = None
+    
+    while time.time() - start_time < timeout:
+        task_status = api.get_task_status(task_id)
+        
+        if task_status and 'data' in task_status:
+            data = task_status['data']
+            status = data.get('status', 'unknown')
+            exitstatus = data.get('exitstatus')
+            
+            # Log status changes
+            if status != last_status:
+                elapsed = int(time.time() - start_time)
+                logging.info(f"Task status: {status} (elapsed: {elapsed}s)")
+                last_status = status
+            
+            # Check completion
+            if status == 'stopped':
+                if exitstatus == 'OK' or exitstatus is None:
+                    api.close()
+                    return True, "Task completed successfully"
+                else:
+                    error_msg = f"Task failed with exit status: {exitstatus}"
+                    # Try to get task log for more details
+                    try:
+                        task_log = api.get_task_log(task_id, limit=10)
+                        if task_log:
+                            # Get the last few log entries
+                            log_msgs = [entry.get('t', '') for entry in task_log[-3:] if 't' in entry]
+                            if log_msgs:
+                                error_msg += f" Log: {'; '.join(log_msgs)}"
+                    except Exception:
+                        pass
+                    
+                    api.close()
+                    return False, error_msg
+        
+        time.sleep(3)  # Check every 3 seconds
+    
+    api.close()
+    return False, f"Task monitoring timeout after {timeout}s"
+
 def join_node_to_cluster(node_name: str, primary_ip: str) -> bool:
     """Join a node to the cluster with improved fingerprint handling"""
     node_config = NODES[node_name]
@@ -245,23 +323,43 @@ def join_node_to_cluster(node_name: str, primary_ip: str) -> bool:
             task_id = result['data']
             logging.info(f"✓ Join task started on {node_name}: {task_id}")
             
-            # Wait for join to complete
-            logging.info(f"Waiting for {node_name} to join (this may take 90 seconds)...")
-            time.sleep(90)
+            # Monitor task completion instead of sleeping
+            success, message = monitor_task_completion(mgmt_ip, task_id, timeout=180)
             
-            # Verify join
-            status = check_node_status(node_name, mgmt_ip)
-            if status['in_cluster']:
-                logging.info(f"✓ {node_name} successfully joined cluster")
-                return True
+            if success:
+                logging.info(f"✓ Join task completed: {message}")
+                
+                # Verify node is actually in cluster
+                for retry in range(3):  # Quick retries for verification
+                    time.sleep(5)  # Brief pause for cluster state propagation
+                    status = check_node_status(node_name, mgmt_ip)
+                    if status['in_cluster']:
+                        logging.info(f"✓ {node_name} successfully joined cluster")
+                        return True
+                    logging.debug(f"Cluster verification attempt {retry + 1}/3 failed, retrying...")
+                
+                logging.error(f"✗ {node_name} task completed but cluster verification failed")
+                
+                # Try to get more diagnostic info
+                try:
+                    api_diag = SimpleProxmoxAPI(mgmt_ip)
+                    if api_diag.authenticate():
+                        cluster_info = api_diag.get('cluster/status')
+                        if cluster_info:
+                            logging.debug(f"Cluster status on {node_name}: {cluster_info}")
+                        api_diag.close()
+                except Exception as e:
+                    logging.debug(f"Failed to get diagnostic info from {node_name}: {e}")
+                
+                return False
             else:
-                logging.error(f"✗ {node_name} join verification failed")
+                logging.error(f"✗ Join task failed: {message}")
                 return False
         else:
-            logging.info(f"Join response: {result}")
+            logging.error(f"✗ Unexpected join response: {result}")
             return False
     
-    logging.error(f"✗ Failed to join {node_name} to cluster")
+    logging.error(f"✗ Failed to join {node_name} to cluster - no response")
     return False
 
 def check_post_install_completion(node_name: str, node_ip: str) -> Tuple[bool, str]:
@@ -458,11 +556,6 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
                 if not join_node_to_cluster(node_name, primary_ip):
                     logging.error(f"Failed to join {node_name}")
                     # Continue with other nodes even if one fails
-                
-                # Wait between joins for certificate updates
-                if i < len(ready_nodes):
-                    logging.info("Pausing before next node...")
-                    time.sleep(15)
         else:
             logging.info("All nodes already in cluster")
     
@@ -484,8 +577,9 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
         if not create_cluster(primary_node, primary_ip):
             return False
         
-        # Wait for cluster to initialize
-        time.sleep(20)
+        # Brief pause for cluster to initialize
+        logging.info("Waiting for cluster to initialize...")
+        time.sleep(10)
         
         # Join remaining nodes
         remaining_nodes = [n for n in ready_nodes if n != primary_node]
@@ -498,17 +592,13 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
                 if not join_node_to_cluster(node_name, primary_ip):
                     logging.error(f"Failed to join {node_name}")
                     # Continue with other nodes even if one fails
-                
-                # Wait between joins for certificate updates
-                if i < len(remaining_nodes):
-                    logging.info("Pausing before next node...")
-                    time.sleep(15)
     else:
         logging.error("No accessible nodes found")
         return False
     
     # Step 4: Verify final state
-    time.sleep(10)
+    logging.info("\nFinalizing cluster formation...")
+    time.sleep(5)  # Brief pause for cluster state to propagate
     success = verify_cluster()
     
     # Summary
