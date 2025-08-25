@@ -161,30 +161,48 @@ def check_node_status(node_name: str, node_ip: str) -> Dict:
     
     return {"accessible": True, "in_cluster": False}
 
-def create_cluster(node_name: str, node_ip: str) -> bool:
-    """Create cluster on first node"""
-    logging.info(f"Creating cluster '{CLUSTER_NAME}' on {node_name}...")
+def create_cluster(node_name: str, node_ip: str, max_attempts: int = 2) -> bool:
+    """Create cluster on first node with retry logic"""
+    for attempt in range(1, max_attempts + 1):
+        logging.info(f"Creating cluster '{CLUSTER_NAME}' on {node_name} (attempt {attempt}/{max_attempts})...")
+        
+        api = SimpleProxmoxAPI(node_ip)
+        if not api.authenticate():
+            logging.error(f"Cannot authenticate to {node_name}")
+            if attempt < max_attempts:
+                time.sleep(10)
+                continue
+            return False
+        
+        # Create cluster with both networks
+        cluster_data = {
+            "clustername": CLUSTER_NAME,
+            "link0": node_ip,
+            "link1": NODES[node_name]['ceph_ip']
+        }
+        
+        result = api.post('cluster/config', cluster_data)
+        api.close()
+        
+        if result:
+            logging.info(f"✓ Cluster '{CLUSTER_NAME}' created on {node_name}")
+            
+            # Verify cluster was actually created
+            time.sleep(5)
+            status = check_node_status(node_name, node_ip)
+            if status['in_cluster']:
+                logging.info(f"✓ Cluster creation verified on {node_name}")
+                return True
+            else:
+                logging.error(f"✗ Cluster creation not verified on {node_name}")
+                if attempt < max_attempts:
+                    time.sleep(15)
+                    continue
+        else:
+            logging.error(f"✗ Failed to create cluster on {node_name} (attempt {attempt})")
+            if attempt < max_attempts:
+                time.sleep(15)
     
-    api = SimpleProxmoxAPI(node_ip)
-    if not api.authenticate():
-        logging.error(f"Cannot authenticate to {node_name}")
-        return False
-    
-    # Create cluster with both networks
-    cluster_data = {
-        "clustername": CLUSTER_NAME,
-        "link0": node_ip,
-        "link1": NODES[node_name]['ceph_ip']
-    }
-    
-    result = api.post('cluster/config', cluster_data)
-    api.close()
-    
-    if result:
-        logging.info(f"✓ Cluster '{CLUSTER_NAME}' created on {node_name}")
-        return True
-    
-    logging.error(f"✗ Failed to create cluster on {node_name}")
     return False
 
 def get_cluster_fingerprint(node_ip: str) -> Optional[str]:
@@ -283,27 +301,23 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
     api.close()
     return False, f"Task monitoring timeout after {timeout}s"
 
-def join_node_to_cluster(node_name: str, primary_ip: str) -> bool:
+def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tuple[bool, str]:
     """Join a node to the cluster with improved fingerprint handling"""
     node_config = NODES[node_name]
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    logging.info(f"Joining {node_name} to cluster...")
-    
     # Wait for stable fingerprint
     fingerprint = wait_for_stable_fingerprint(primary_ip)
     if not fingerprint:
-        logging.error(f"✗ Cannot get stable fingerprint for {node_name}")
-        return False
+        return False, "Cannot get stable fingerprint"
     
     logging.info(f"Using fingerprint: {fingerprint[:40]}...")
     
     # Connect to node to join
     api = SimpleProxmoxAPI(mgmt_ip)
     if not api.authenticate():
-        logging.error(f"✗ Cannot authenticate to {node_name}")
-        return False
+        return False, f"Cannot authenticate to {node_name}"
     
     # Prepare join data
     join_data = {
@@ -327,39 +341,80 @@ def join_node_to_cluster(node_name: str, primary_ip: str) -> bool:
             success, message = monitor_task_completion(mgmt_ip, task_id, timeout=180)
             
             if success:
-                logging.info(f"✓ Join task completed: {message}")
-                
                 # Verify node is actually in cluster
                 for retry in range(3):  # Quick retries for verification
                     time.sleep(5)  # Brief pause for cluster state propagation
                     status = check_node_status(node_name, mgmt_ip)
                     if status['in_cluster']:
-                        logging.info(f"✓ {node_name} successfully joined cluster")
-                        return True
+                        return True, "Successfully joined cluster"
                     logging.debug(f"Cluster verification attempt {retry + 1}/3 failed, retrying...")
                 
-                logging.error(f"✗ {node_name} task completed but cluster verification failed")
-                
                 # Try to get more diagnostic info
+                diagnostic_info = ""
                 try:
                     api_diag = SimpleProxmoxAPI(mgmt_ip)
                     if api_diag.authenticate():
                         cluster_info = api_diag.get('cluster/status')
-                        if cluster_info:
-                            logging.debug(f"Cluster status on {node_name}: {cluster_info}")
+                        if cluster_info and 'data' in cluster_info:
+                            cluster_nodes = [item.get('name', '') for item in cluster_info['data'] 
+                                           if item.get('type') == 'node']
+                            diagnostic_info = f" (cluster has nodes: {', '.join(cluster_nodes)})"
                         api_diag.close()
-                except Exception as e:
-                    logging.debug(f"Failed to get diagnostic info from {node_name}: {e}")
+                except Exception:
+                    pass
                 
-                return False
+                return False, f"Task completed but cluster verification failed{diagnostic_info}"
             else:
-                logging.error(f"✗ Join task failed: {message}")
-                return False
+                return False, f"Join task failed: {message}"
         else:
-            logging.error(f"✗ Unexpected join response: {result}")
-            return False
+            return False, f"Unexpected join response: {result}"
     
-    logging.error(f"✗ Failed to join {node_name} to cluster - no response")
+    return False, "No response from join API call"
+
+def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3, backoff_delay: int = 30) -> bool:
+    """Join a node to cluster with retry logic"""
+    logging.info(f"Joining {node_name} to cluster (max {max_attempts} attempts)...")
+    
+    for attempt in range(1, max_attempts + 1):
+        logging.info(f"--- Attempt {attempt}/{max_attempts} for {node_name} ---")
+        
+        success, message = join_node_to_cluster_single_attempt(node_name, primary_ip)
+        
+        if success:
+            logging.info(f"✓ {node_name} successfully joined cluster on attempt {attempt}")
+            return True
+        else:
+            logging.error(f"✗ Attempt {attempt} failed: {message}")
+            
+            if attempt < max_attempts:
+                # Check if node is somehow already in cluster (race condition)
+                node_config = NODES[node_name]
+                status = check_node_status(node_name, node_config['mgmt_ip'])
+                if status['in_cluster']:
+                    logging.info(f"✓ {node_name} is already in cluster (race condition)")
+                    return True
+                
+                # Determine if we should retry based on error type
+                if "fingerprint" in message.lower():
+                    logging.info(f"Fingerprint issue - waiting {backoff_delay}s for certificate stabilization...")
+                elif "authenticate" in message.lower():
+                    logging.info(f"Authentication issue - waiting {backoff_delay//2}s and retrying...")
+                    time.sleep(backoff_delay // 2)
+                    continue
+                elif "task failed" in message.lower():
+                    logging.info(f"Task execution failed - waiting {backoff_delay}s before retry...")
+                elif "verification failed" in message.lower():
+                    logging.info(f"Verification failed - waiting {backoff_delay//3}s for cluster sync...")
+                    time.sleep(backoff_delay // 3)
+                    continue
+                else:
+                    logging.info(f"Generic failure - waiting {backoff_delay}s before retry...")
+                
+                time.sleep(backoff_delay)
+                backoff_delay = min(backoff_delay * 2, 120)  # Exponential backoff, max 2 minutes
+            else:
+                logging.error(f"✗ {node_name} failed to join after {max_attempts} attempts")
+    
     return False
 
 def check_post_install_completion(node_name: str, node_ip: str) -> Tuple[bool, str]:
@@ -460,12 +515,15 @@ def verify_cluster() -> bool:
     logging.info("\n=== Verifying Cluster ===")
     
     cluster_nodes = []
+    failed_nodes = []
+    
     for node_name, node_config in NODES.items():
         status = check_node_status(node_name, node_config['mgmt_ip'])
         if status['in_cluster']:
             cluster_nodes.append(node_name)
             logging.info(f"✓ {node_name} is in cluster")
         else:
+            failed_nodes.append(node_name)
             logging.error(f"✗ {node_name} is NOT in cluster")
     
     if len(cluster_nodes) == len(NODES):
@@ -473,7 +531,39 @@ def verify_cluster() -> bool:
         return True
     else:
         logging.error(f"\n✗ FAILURE: Only {len(cluster_nodes)}/{len(NODES)} nodes are clustered")
+        logging.info(f"Clustered nodes: {', '.join(cluster_nodes)}")
+        logging.info(f"Failed nodes: {', '.join(failed_nodes)}")
         return False
+
+def recovery_attempt(failed_nodes: List[str], primary_ip: str, max_attempts: int = 2, retry_delay: int = 60) -> List[str]:
+    """Attempt to recover failed nodes with more aggressive retry logic"""
+    if not failed_nodes:
+        return []
+    
+    logging.info(f"\n=== Recovery Attempt for Failed Nodes ===")
+    logging.info(f"Attempting recovery for: {', '.join(failed_nodes)}")
+    
+    recovered_nodes = []
+    
+    for node_name in failed_nodes:
+        logging.info(f"\n--- Recovery attempt for {node_name} ---")
+        
+        # First check if node somehow got into cluster during other operations
+        node_config = NODES[node_name]
+        status = check_node_status(node_name, node_config['mgmt_ip'])
+        if status['in_cluster']:
+            logging.info(f"✓ {node_name} is now in cluster (recovered automatically)")
+            recovered_nodes.append(node_name)
+            continue
+        
+        # Try to join with more aggressive settings
+        if join_node_to_cluster(node_name, primary_ip, max_attempts, retry_delay):
+            logging.info(f"✓ {node_name} recovered successfully")
+            recovered_nodes.append(node_name)
+        else:
+            logging.error(f"✗ {node_name} recovery failed")
+    
+    return recovered_nodes
 
 def main():
     """Main execution"""
@@ -485,8 +575,16 @@ Examples:
   %(prog)s                                    # Form cluster immediately
   %(prog)s --wait-post-install               # Wait for post-install completion first
   %(prog)s --wait-post-install --post-install-timeout 900  # Wait up to 15 minutes
+  %(prog)s --max-join-attempts 5 --join-retry-delay 45     # More aggressive retry settings
   
-The script will SSH to each node and check /var/log/proxmox-post-install.log for:
+The script includes robust retry logic:
+- Each node join is attempted up to --max-join-attempts times (default: 3)
+- Failed attempts wait with exponential backoff starting at --join-retry-delay seconds
+- Different error types use optimized retry delays (auth vs fingerprint vs task failures)
+- Final recovery attempt is made for any remaining failed nodes
+- Race condition detection prevents duplicate joins
+
+SSH monitoring checks /var/log/proxmox-post-install.log for:
 - SUCCESS: Post-installation script completed successfully!
 - ERROR: messages indicating failures
         ''',
@@ -498,6 +596,10 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
                         help='Timeout in seconds for post-installation completion (default: 600)')
     parser.add_argument('--check-interval', type=int, default=10,
                         help='Interval in seconds between post-install checks (default: 10)')
+    parser.add_argument('--max-join-attempts', type=int, default=3,
+                        help='Maximum attempts to join each node to cluster (default: 3)')
+    parser.add_argument('--join-retry-delay', type=int, default=30,
+                        help='Initial delay between join retry attempts in seconds (default: 30)')
     args = parser.parse_args()
     
     start_time = datetime.now()
@@ -553,8 +655,8 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
             for i, node_name in enumerate(ready_nodes, 1):
                 logging.info(f"\n--- Node {i}/{len(ready_nodes)}: {node_name} ---")
                 
-                if not join_node_to_cluster(node_name, primary_ip):
-                    logging.error(f"Failed to join {node_name}")
+                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay):
+                    logging.error(f"Failed to join {node_name} after all retry attempts")
                     # Continue with other nodes even if one fails
         else:
             logging.info("All nodes already in cluster")
@@ -589,8 +691,8 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
             for i, node_name in enumerate(remaining_nodes, 1):
                 logging.info(f"\n--- Node {i}/{len(remaining_nodes)}: {node_name} ---")
                 
-                if not join_node_to_cluster(node_name, primary_ip):
-                    logging.error(f"Failed to join {node_name}")
+                if not join_node_to_cluster(node_name, primary_ip, args.max_join_attempts, args.join_retry_delay):
+                    logging.error(f"Failed to join {node_name} after all retry attempts")
                     # Continue with other nodes even if one fails
     else:
         logging.error("No accessible nodes found")
@@ -600,6 +702,22 @@ The script will SSH to each node and check /var/log/proxmox-post-install.log for
     logging.info("\nFinalizing cluster formation...")
     time.sleep(5)  # Brief pause for cluster state to propagate
     success = verify_cluster()
+    
+    # Step 5: Recovery attempt for failed nodes
+    if not success and primary_ip:
+        # Get list of failed nodes
+        failed_nodes = []
+        for node_name, node_config in NODES.items():
+            status = check_node_status(node_name, node_config['mgmt_ip'])
+            if not status['in_cluster']:
+                failed_nodes.append(node_name)
+        
+        if failed_nodes:
+            recovered_nodes = recovery_attempt(failed_nodes, primary_ip, 2, 60)
+            if recovered_nodes:
+                logging.info(f"\n=== Final Verification After Recovery ===")
+                time.sleep(10)  # Allow time for cluster to stabilize
+                success = verify_cluster()
     
     # Summary
     duration = datetime.now() - start_time
