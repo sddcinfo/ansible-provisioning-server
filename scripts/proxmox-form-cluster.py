@@ -217,38 +217,71 @@ def get_cluster_fingerprint(node_ip: str) -> Optional[str]:
     if result and 'data' in result:
         nodelist = result['data'].get('nodelist', [])
         if nodelist and len(nodelist) > 0:
+            # Log all available fingerprints for debugging
+            for i, node_info in enumerate(nodelist):
+                fp = node_info.get('pve_fp', 'N/A')
+                name = node_info.get('name', 'unknown')
+                logging.debug(f"Nodelist[{i}]: {name} -> {fp[:20] if fp != 'N/A' else fp}...")
+            
             # Get fingerprint from first node in list
             fingerprint = nodelist[0].get('pve_fp')
             if fingerprint:
+                logging.debug(f"Selected fingerprint from {nodelist[0].get('name', 'node0')}: {fingerprint}")
                 return fingerprint
     
     return None
 
-def wait_for_stable_fingerprint(primary_ip: str, timeout: int = 30) -> Optional[str]:
+def wait_for_stable_fingerprint(primary_ip: str, timeout: int = 60) -> Optional[str]:
     """Wait for cluster fingerprint to stabilize after changes"""
     logging.info("Waiting for cluster certificate to stabilize...")
     
     stable_count = 0
     last_fingerprint = None
+    fingerprint_history = []
     
-    for i in range(timeout // 2):
+    for i in range(timeout // 3):  # Check every 3 seconds instead of 2
         current_fingerprint = get_cluster_fingerprint(primary_ip)
         
         if current_fingerprint:
+            fingerprint_history.append(current_fingerprint)
+            # Keep only last 5 entries
+            if len(fingerprint_history) > 5:
+                fingerprint_history.pop(0)
+            
             if current_fingerprint == last_fingerprint:
                 stable_count += 1
-                if stable_count >= 2:  # Stable for 2 checks
+                if stable_count >= 3:  # Require 3 consecutive stable checks (9 seconds)
                     logging.info(f"✓ Certificate stabilized: {current_fingerprint[:20]}...")
-                    return current_fingerprint
+                    
+                    # Double-check by getting it one more time
+                    time.sleep(2)
+                    verify_fingerprint = get_cluster_fingerprint(primary_ip)
+                    if verify_fingerprint == current_fingerprint:
+                        logging.info("✓ Certificate stability verified")
+                        return current_fingerprint
+                    else:
+                        logging.warning("Certificate changed during verification, continuing to wait...")
+                        stable_count = 0
+                        last_fingerprint = verify_fingerprint
+                        continue
             else:
+                if last_fingerprint:
+                    logging.debug(f"Certificate changed: {last_fingerprint[:20]} → {current_fingerprint[:20]}")
                 stable_count = 0
                 last_fingerprint = current_fingerprint
-                logging.debug(f"Certificate changed: {current_fingerprint[:20]}...")
+        else:
+            logging.debug("No fingerprint returned, retrying...")
+            stable_count = 0
         
-        time.sleep(2)
+        time.sleep(3)
     
     logging.warning("Certificate did not stabilize in time")
-    return last_fingerprint
+    if fingerprint_history:
+        # Return the most recent fingerprint even if not fully stable
+        logging.info(f"Using most recent fingerprint: {fingerprint_history[-1][:20]}...")
+        return fingerprint_history[-1]
+    
+    return None
 
 def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> Tuple[bool, str]:
     """Monitor a Proxmox task until completion"""
@@ -301,18 +334,64 @@ def monitor_task_completion(node_ip: str, task_id: str, timeout: int = 180) -> T
     api.close()
     return False, f"Task monitoring timeout after {timeout}s"
 
+def get_fingerprint_from_joining_node(joining_node_ip: str, primary_ip: str) -> Optional[str]:
+    """Get fingerprint as seen from the joining node's perspective"""
+    try:
+        api = SimpleProxmoxAPI(joining_node_ip)
+        if not api.authenticate():
+            return None
+        
+        # Query the primary node's fingerprint from the joining node
+        result = api.get(f'cluster/config/join?node={primary_ip}')
+        api.close()
+        
+        if result and 'data' in result:
+            nodelist = result['data'].get('nodelist', [])
+            for node_info in nodelist:
+                if node_info.get('name') == primary_ip.split('.')[-1] or node_info.get('nodeid') == '1':
+                    fp = node_info.get('pve_fp')
+                    if fp:
+                        return fp
+        
+        return None
+    except Exception:
+        return None
+
 def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tuple[bool, str]:
     """Join a node to the cluster with improved fingerprint handling"""
     node_config = NODES[node_name]
     mgmt_ip = node_config['mgmt_ip']
     ceph_ip = node_config['ceph_ip']
     
-    # Wait for stable fingerprint
-    fingerprint = wait_for_stable_fingerprint(primary_ip)
-    if not fingerprint:
-        return False, "Cannot get stable fingerprint"
+    # Try multiple approaches to get the correct fingerprint
+    fingerprint = None
     
-    logging.info(f"Using fingerprint: {fingerprint[:40]}...")
+    # Method 1: Get fingerprint from primary node
+    primary_fingerprint = wait_for_stable_fingerprint(primary_ip)
+    
+    # Method 2: Get fingerprint from joining node's perspective
+    joining_fingerprint = get_fingerprint_from_joining_node(mgmt_ip, primary_ip)
+    
+    # Choose the best fingerprint
+    if primary_fingerprint and joining_fingerprint:
+        if primary_fingerprint == joining_fingerprint:
+            fingerprint = primary_fingerprint
+            logging.info(f"✓ Fingerprints match from both perspectives: {fingerprint[:40]}...")
+        else:
+            # They differ - use the joining node's view as it's more likely correct
+            fingerprint = joining_fingerprint
+            logging.warning(f"Fingerprint mismatch detected:")
+            logging.warning(f"  Primary view: {primary_fingerprint[:40]}...")
+            logging.warning(f"  Joining view: {joining_fingerprint[:40]}...")
+            logging.warning(f"  Using joining node's perspective")
+    elif joining_fingerprint:
+        fingerprint = joining_fingerprint
+        logging.info(f"Using fingerprint from joining node: {fingerprint[:40]}...")
+    elif primary_fingerprint:
+        fingerprint = primary_fingerprint
+        logging.info(f"Using fingerprint from primary node: {fingerprint[:40]}...")
+    else:
+        return False, "Cannot get fingerprint from either node"
     
     # Connect to node to join
     api = SimpleProxmoxAPI(mgmt_ip)
@@ -328,7 +407,17 @@ def join_node_to_cluster_single_attempt(node_name: str, primary_ip: str) -> Tupl
         "link1": ceph_ip
     }
     
+    # Final fingerprint verification right before join
+    logging.debug("Final fingerprint verification before join...")
+    final_check_fingerprint = get_cluster_fingerprint(primary_ip)
+    if final_check_fingerprint and final_check_fingerprint != fingerprint:
+        logging.warning(f"Fingerprint changed at last moment: {fingerprint[:20]} → {final_check_fingerprint[:20]}")
+        logging.warning("Updating to latest fingerprint")
+        join_data["fingerprint"] = final_check_fingerprint
+        fingerprint = final_check_fingerprint
+    
     # Send join request
+    logging.info(f"Sending join request with fingerprint: {fingerprint[:40]}...")
     result = api.post('cluster/config/join', join_data, timeout=120)
     api.close()
     
@@ -396,22 +485,30 @@ def join_node_to_cluster(node_name: str, primary_ip: str, max_attempts: int = 3,
                 
                 # Determine if we should retry based on error type
                 if "fingerprint" in message.lower():
-                    logging.info(f"Fingerprint issue - waiting {backoff_delay}s for certificate stabilization...")
+                    if "not verified" in message.lower():
+                        logging.info(f"Fingerprint verification failed - waiting {backoff_delay + 10}s for certificate to fully stabilize...")
+                        time.sleep(backoff_delay + 10)  # Extra time for fingerprint issues
+                    else:
+                        logging.info(f"Fingerprint issue - waiting {backoff_delay}s for certificate stabilization...")
+                        time.sleep(backoff_delay)
                 elif "authenticate" in message.lower():
                     logging.info(f"Authentication issue - waiting {backoff_delay//2}s and retrying...")
                     time.sleep(backoff_delay // 2)
-                    continue
+                elif "task failed" in message.lower() and "fingerprint" in message.lower():
+                    # Special case: task failed due to fingerprint - need longer wait
+                    logging.info(f"Task failed with fingerprint error - waiting {backoff_delay + 15}s for certificate synchronization...")
+                    time.sleep(backoff_delay + 15)
                 elif "task failed" in message.lower():
                     logging.info(f"Task execution failed - waiting {backoff_delay}s before retry...")
+                    time.sleep(backoff_delay)
                 elif "verification failed" in message.lower():
                     logging.info(f"Verification failed - waiting {backoff_delay//3}s for cluster sync...")
                     time.sleep(backoff_delay // 3)
-                    continue
                 else:
                     logging.info(f"Generic failure - waiting {backoff_delay}s before retry...")
+                    time.sleep(backoff_delay)
                 
-                time.sleep(backoff_delay)
-                backoff_delay = min(backoff_delay * 2, 120)  # Exponential backoff, max 2 minutes
+                backoff_delay = min(backoff_delay * 2, 180)  # Exponential backoff, max 3 minutes
             else:
                 logging.error(f"✗ {node_name} failed to join after {max_attempts} attempts")
     
