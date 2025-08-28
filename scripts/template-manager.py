@@ -294,6 +294,12 @@ qm destroy {vm_id} --purge 2>/dev/null || true
 MODIFIED_IMAGE="ubuntu-24.04-cloudimg-amd64-modified.img"
 TEMPLATE_DIR="/mnt/rbd-iso/template/images"
 
+# Check if RBD storage is mounted, if not use local storage
+if [ ! -d "/mnt/rbd-iso" ]; then
+    echo "RBD storage not found at /mnt/rbd-iso, using local storage instead..."
+    TEMPLATE_DIR="/var/lib/vz/template/images"
+fi
+
 # Check if modified cloud image exists (like working script)
 if [ ! -f $TEMPLATE_DIR/$MODIFIED_IMAGE ]; then
     echo "Modified cloud image not found: $TEMPLATE_DIR/$MODIFIED_IMAGE"
@@ -301,6 +307,9 @@ if [ ! -f $TEMPLATE_DIR/$MODIFIED_IMAGE ]; then
     
     echo "Installing required tools..."
     apt-get update >/dev/null 2>&1 && apt-get install -y libguestfs-tools >/dev/null 2>&1
+    
+    # Create template directory if it doesn't exist
+    mkdir -p $TEMPLATE_DIR
     
     # Check if cached image exists locally first
     if [ ! -f $TEMPLATE_DIR/ubuntu-24.04-cloudimg-cached.img ]; then
