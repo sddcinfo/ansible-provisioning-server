@@ -482,6 +482,87 @@ class CephSetup:
         else:
             logging.warning(f"  Found OSD on {device} but could not verify cluster FSID")
             return False
+
+    def check_osd_status_in_cluster(self, node_ip: str, device: str) -> Tuple[bool, bool]:
+        """Check if OSD exists in cluster and if it's UP
+        Returns: (exists_in_cluster, is_up)
+        """
+        # Get OSD ID for this device from ceph-volume
+        cmd = f"ceph-volume lvm list 2>/dev/null | grep -B10 -A10 '{device}' | grep 'osd id' | awk '{{print $3}}' | head -1"
+        success, stdout, stderr = self.run_ssh_command(node_ip, cmd)
+        
+        if not success or not stdout.strip():
+            return False, False
+        
+        osd_id = stdout.strip()
+        if not osd_id.isdigit():
+            return False, False
+        
+        # Check if this OSD exists in cluster and its status
+        cmd = f"ceph osd tree --format json 2>/dev/null"
+        success, stdout, stderr = self.run_ssh_command(node_ip, cmd)
+        
+        if not success or not stdout.strip():
+            return False, False
+        
+        try:
+            import json
+            tree_data = json.loads(stdout)
+            
+            # Find our OSD in the tree
+            for node in tree_data.get('nodes', []):
+                if node.get('type') == 'osd' and node.get('id') == int(osd_id):
+                    status = node.get('status', 'down')
+                    return True, (status == 'up')
+                    
+        except (json.JSONDecodeError, ValueError) as e:
+            logging.warning(f"Could not parse OSD tree JSON: {e}")
+            return False, False
+        
+        return False, False
+
+    def reactivate_osd(self, node_ip: str, device: str) -> bool:
+        """Reactivate an existing OSD that is down"""
+        # Get OSD ID for this device
+        cmd = f"ceph-volume lvm list 2>/dev/null | grep -B10 -A10 '{device}' | grep 'osd id' | awk '{{print $3}}' | head -1"
+        success, stdout, stderr = self.run_ssh_command(node_ip, cmd)
+        
+        if not success or not stdout.strip():
+            logging.error(f"  ✗ Could not find OSD ID for {device}")
+            return False
+        
+        osd_id = stdout.strip()
+        if not osd_id.isdigit():
+            logging.error(f"  ✗ Invalid OSD ID found: {osd_id}")
+            return False
+        
+        logging.info(f"  Reactivating OSD {osd_id} on {device}...")
+        
+        # Use ceph-volume to activate the OSD
+        cmd = f"ceph-volume lvm activate {osd_id} --all"
+        success, stdout, stderr = self.run_ssh_command(node_ip, cmd, timeout=60)
+        
+        if not success:
+            logging.warning(f"  ⚠ ceph-volume activate failed, trying systemctl approach...")
+            # Try enabling and starting the systemd service
+            cmd = f"systemctl enable ceph-osd@{osd_id} && systemctl start ceph-osd@{osd_id}"
+            success, stdout, stderr = self.run_ssh_command(node_ip, cmd, timeout=30)
+            
+            if not success:
+                logging.error(f"  ✗ Failed to reactivate OSD {osd_id}: {stderr}")
+                return False
+        
+        # Wait a moment for the OSD to come online
+        time.sleep(10)
+        
+        # Verify the OSD is now up
+        exists_in_cluster, is_up = self.check_osd_status_in_cluster(node_ip, device)
+        if exists_in_cluster and is_up:
+            logging.info(f"  ✓ OSD {osd_id} successfully reactivated and is UP")
+            return True
+        else:
+            logging.warning(f"  ⚠ OSD {osd_id} reactivated but may not be fully UP yet")
+            return True  # Return True anyway, it may take time to come fully online
     
     def stop_osd_services_for_device(self, node_ip: str, device: str) -> bool:
         """Stop OSD services that might be using this device"""
@@ -789,9 +870,25 @@ class CephSetup:
             for device in EXPECTED_NVME_DRIVES:
                 # Check if OSD already exists and belongs to current cluster
                 if self.check_osd_exists(node_ip, device):
-                    logging.info(f"  ✓ OSD already exists on {device}")
-                    total_osds_skipped += 1
-                    continue
+                    # OSD exists with correct FSID, but check if it's actually UP
+                    exists_in_cluster, is_up = self.check_osd_status_in_cluster(node_ip, device)
+                    
+                    if exists_in_cluster and is_up:
+                        logging.info(f"  ✓ OSD already exists and is UP on {device}")
+                        total_osds_skipped += 1
+                        continue
+                    elif exists_in_cluster and not is_up:
+                        logging.info(f"  ⚠ OSD exists but is DOWN on {device}, attempting reactivation...")
+                        if self.reactivate_osd(node_ip, device):
+                            logging.info(f"  ✓ OSD reactivated on {device}")
+                            total_osds_skipped += 1
+                            continue
+                        else:
+                            logging.warning(f"  ⚠ OSD reactivation failed on {device}, will attempt recreation...")
+                    else:
+                        logging.info(f"  ✓ OSD already exists on {device}")
+                        total_osds_skipped += 1
+                        continue
                 
                 # Create OSD on clean device
                 logging.info(f"  Creating OSD on {device}...")
