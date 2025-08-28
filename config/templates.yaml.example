@@ -1,0 +1,40 @@
+# Proxmox VM Template Configuration
+# Copy this file to ~/proxmox-config/templates.yaml and customize as needed
+# This file defines template IDs and configurations used for VM template creation
+
+templates:
+  base:
+    id: 9000
+    name: ubuntu-base-template
+    description: Ubuntu 24.04 Base Template - qemu-agent + cloud-init
+    memory: 2048
+    cores: 2
+    disk_size: 32G
+    
+  kubernetes:
+    id: 9001
+    name: ubuntu-k8s-template
+    description: Ubuntu 24.04 with Kubernetes 1.33.4 pre-installed
+    memory: 4096
+    cores: 4
+    disk_size: 32G
+    k8s_version: 1.33.4
+
+# Cloud image configuration
+cloud_image:
+  url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+  japan_mirror: https://ftp.riken.jp/Linux/ubuntu-releases
+  japan_cloud_url: http://cloud-images.ubuntu.com.edgecastcdn.net/noble/current/noble-server-cloudimg-amd64.img
+  cached_path: /mnt/rbd-iso/template/images/ubuntu-24.04-cloudimg-cached.img
+  
+# SSH configuration
+ssh:
+  key_path: /home/sysadmin/.ssh/sysadmin_automation_key
+  public_key_path: /home/sysadmin/.ssh/sysadmin_automation_key.pub
+  user: sysadmin
+  
+# Proxmox configuration  
+proxmox:
+  host: 10.10.1.21
+  storage: rbd
+  bridge: vmbr0
