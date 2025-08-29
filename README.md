@@ -50,6 +50,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 
 ### Proxmox VE Cluster Features
 - **API-Driven Cluster Formation**: Reliable, sequential cluster creation and node joining using the Proxmox API.
+- **Enhanced Reprovision Workflow**: Complete automated reprovision with monitoring and cluster formation
 - **High-Performance Networking**: 10Gbit Ceph network with MTU 9000 optimization
 - **Dual Network Links**: Management and Ceph networks for redundancy and performance
 - **Automated Repository Configuration**: Enterprise/community repository management
@@ -182,9 +183,30 @@ The unified script performs:
 
 ### Cluster Formation
 
-The cluster formation process is handled by a Python script that runs on the management server and uses the Proxmox API. This method is reliable and ensures that nodes are joined to the cluster sequentially and with verification at each step.
+#### Automated Reprovision Workflow (Recommended)
 
-To form the cluster, run the following command from the provisioning server:
+The enhanced reprovision workflow provides complete end-to-end automation from reprovision trigger to cluster formation:
+
+```bash
+# Complete automated reprovision and cluster formation
+./scripts/coordinated-proxmox-reprovision.py
+
+# With custom timeout (90 minutes)  
+./scripts/coordinated-proxmox-reprovision.py --timeout 90
+```
+
+**Features:**
+- Automatically reprovisioners all nodes
+- Monitors reprovision progress in real-time
+- Waits for ALL nodes to complete before cluster formation
+- Triggers cluster formation automatically when ready
+- Comprehensive logging and error handling
+- No manual intervention required
+
+#### Manual Cluster Formation
+
+For manual cluster formation, the process is handled by a Python script that runs on the management server and uses the Proxmox API:
+
 ```bash
 ./scripts/proxmox-form-cluster.py
 ```
@@ -390,11 +412,15 @@ tail -f /var/log/proxmox-cluster-formation.log
 ## File Structure
 
 ### Scripts
+- `scripts/coordinated-proxmox-reprovision.py` - **NEW**: Complete automated reprovision workflow with monitoring and cluster formation
+- `scripts/enhanced-reprovision-monitor.py` - **NEW**: Monitors reprovision progress and triggers automatic cluster formation  
 - `scripts/template-manager.py` - Manages Proxmox VM templates for Kubernetes deployments
 - `scripts/proxmox-ceph-setup.py` - Automates Proxmox and Ceph configuration
 - `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed.
 - `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.
+- `scripts/reboot-nodes-for-reprovision.py` - Reboots nodes to trigger fresh provisioning
 - `scripts/test-network-config.sh` - Network configuration validation.
+- `scripts/REPROVISION_WORKFLOW.md` - **NEW**: Detailed documentation for the enhanced reprovision workflow
 
 ### APIs
 - `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator.

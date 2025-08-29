@@ -243,6 +243,67 @@ function handle_callback_request(): void {
     }
 }
 
+function update_registered_node_status(string $mac, string $status, array $additional_data = []): bool {
+    $registrations_file = '/var/www/html/data/registered-nodes.json';
+    
+    // Get hostname from MAC
+    $hostname = get_os_hostname_by_mac($mac);
+    if (!$hostname) {
+        error_log("Could not find hostname for MAC: {$mac}");
+        return false;
+    }
+    
+    // Load existing registrations
+    $registrations = [];
+    if (file_exists($registrations_file)) {
+        $content = file_get_contents($registrations_file);
+        if ($content) {
+            $registrations = json_decode($content, true) ?? [];
+        }
+    }
+    
+    // Initialize nodes array if it doesn't exist
+    if (!isset($registrations['nodes'])) {
+        $registrations['nodes'] = [];
+    }
+    
+    // Update or create node entry using MAC as key for monitoring script
+    if (!isset($registrations['nodes'][$mac])) {
+        $node = get_node_by_mac($mac);
+        $registrations['nodes'][$mac] = [
+            'hostname' => $hostname,
+            'ip' => $node['os_ip'] ?? '',
+            'mac' => $mac,
+            'type' => 'proxmox',
+            'status' => 'registered',
+            'registered_at' => date('Y-m-d H:i:s')
+        ];
+    }
+    
+    // Update reprovision status
+    $registrations['nodes'][$mac]['reprovision_status'] = $status;
+    $registrations['nodes'][$mac]['last_update'] = date('Y-m-d H:i:s');
+    
+    // Add any additional data
+    foreach ($additional_data as $key => $value) {
+        $registrations['nodes'][$mac][$key] = $value;
+    }
+    
+    // Save registrations
+    $result = file_put_contents(
+        $registrations_file,
+        json_encode($registrations, JSON_PRETTY_PRINT),
+        LOCK_EX
+    );
+    
+    if ($result === false) {
+        error_log("Failed to update registered-nodes.json for MAC: {$mac}");
+        return false;
+    }
+    
+    return true;
+}
+
 function handle_reprovision_request(): void {
     $mac = strtolower($_GET['mac'] ?? '');
     if (!is_valid_mac($mac)) {
@@ -250,7 +311,14 @@ function handle_reprovision_request(): void {
         echo "Invalid or missing MAC address.";
         return;
     }
+    
+    // Update status in state file
     if (set_status($mac, 'NEW')) {
+        // Update registered-nodes.json with reprovision tracking
+        update_registered_node_status($mac, 'in_progress', [
+            'reprovision_started' => date('c')
+        ]);
+        
         $redirect_url = '?action=status';
         if (isset($_GET['test_state_file'])) {
             $redirect_url .= '&test_state_file=' . urlencode($_GET['test_state_file']);
