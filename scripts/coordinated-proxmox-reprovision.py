@@ -49,7 +49,7 @@ logging.basicConfig(
 )
 
 class CoordinatedReprovision:
-    def __init__(self):
+    def __init__(self, verbose=False):
         self.script_dir = Path(__file__).parent.absolute()
         self.reboot_script = self.script_dir / "reboot-nodes-for-reprovision.py"
         self.monitor_script = self.script_dir / "enhanced-reprovision-monitor.py"
@@ -60,6 +60,7 @@ class CoordinatedReprovision:
         self.monitor_process = None
         self.stop_monitoring = False
         self.timing = {}  # Track timing for each step
+        self.verbose = verbose
         
     def validate_scripts(self):
         """Validate required scripts exist"""
@@ -137,7 +138,8 @@ class CoordinatedReprovision:
             'duration': None,
             'success': None
         }
-        logging.info(f"⏱️  Started: {step_name}")
+        if self.verbose:
+            logging.info(f"Started: {step_name}")
     
     def end_timer(self, step_name, success=True):
         """End timing a step"""
@@ -147,8 +149,8 @@ class CoordinatedReprovision:
             duration = self.timing[step_name]['end'] - self.timing[step_name]['start']
             self.timing[step_name]['duration'] = duration
             
-            status = "✅ Success" if success else "❌ Failed"
-            logging.info(f"⏱️  Completed: {step_name} - {self.format_duration(duration)} - {status}")
+            status = "SUCCESS" if success else "FAILED"
+            logging.info(f"Completed: {step_name} - {self.format_duration(duration)} - {status}")
     
     def format_duration(self, seconds):
         """Format duration in human readable format"""
@@ -162,7 +164,7 @@ class CoordinatedReprovision:
     def print_timing_summary(self):
         """Print comprehensive timing summary"""
         logging.info("=" * 60)
-        logging.info("🏁 WORKFLOW TIMING SUMMARY")
+        logging.info("WORKFLOW TIMING SUMMARY")
         logging.info("=" * 60)
         
         total_duration = 0
@@ -170,11 +172,11 @@ class CoordinatedReprovision:
             if timing_info['duration']:
                 duration = timing_info['duration']
                 total_duration += duration
-                status = "✅" if timing_info['success'] else "❌"
-                logging.info(f"{status} {step_name:<30} {self.format_duration(duration):>10}")
+                status = "SUCCESS" if timing_info['success'] else "FAILED"
+                logging.info(f"{status:<7} {step_name:<30} {self.format_duration(duration):>10}")
         
         logging.info("-" * 60)
-        logging.info(f"🎯 TOTAL WORKFLOW TIME:          {self.format_duration(total_duration):>10}")
+        logging.info(f"TOTAL WORKFLOW TIME:             {self.format_duration(total_duration):>10}")
         logging.info("=" * 60)
     
     def start_monitor(self):
@@ -219,76 +221,111 @@ class CoordinatedReprovision:
         try:
             # Check initial status before triggering
             initial_data = self.load_nodes_data()
-            logging.info("=== PRE-REPROVISION STATUS ===")
-            self.log_status_summary(initial_data)
+            if self.verbose:
+                logging.info("=== PRE-REPROVISION STATUS ===")
+                self.log_status_summary(initial_data)
             
             cmd = ['python3', str(self.reboot_script), '--all']
             if node_filters:
                 # If specific nodes are provided, use --nodes instead of --all
                 cmd = ['python3', str(self.reboot_script), '--nodes', ','.join(node_filters)]
                 
-            logging.info(f"🚀 Triggering reprovision: {' '.join(cmd)}")
+            logging.info(f"STARTING Triggering reprovision: {' '.join(cmd)}")
             
             # Send "y" to confirm the action automatically
             result = subprocess.run(cmd, input='y\n', capture_output=True, text=True)
             
             if result.returncode == 0:
-                logging.info("✅ Reprovision triggered successfully!")
-                logging.info(f"Reprovision script output: {result.stdout}")
+                logging.info("SUCCESS: Reprovision triggered successfully!")
+                if self.verbose:
+                    logging.info(f"Reprovision script output: {result.stdout}")
                 
                 # Wait a moment for status to update, then check
                 time.sleep(3)
                 
                 updated_data = self.load_nodes_data()
-                logging.info("=== POST-REPROVISION STATUS ===")
-                self.log_status_summary(updated_data)
+                if self.verbose:
+                    logging.info("=== POST-REPROVISION STATUS ===")
+                    self.log_status_summary(updated_data)
                 
                 # Show what changed
                 reprovision_nodes = self.get_nodes_by_status(updated_data, 'in_progress')
                 if reprovision_nodes:
-                    logging.info(f"✅ Status updated: {len(reprovision_nodes)} nodes now marked 'in_progress':")
-                    for hostname, node_info in reprovision_nodes.items():
-                        ip = node_info.get('ip', 'unknown')
-                        started = node_info.get('reprovision_started', 'unknown')
-                        logging.info(f"  - {hostname} ({ip}) - started: {started}")
+                    logging.info(f"SUCCESS: Status updated: {len(reprovision_nodes)} nodes now marked 'in_progress'")
+                    if self.verbose:
+                        for hostname, node_info in reprovision_nodes.items():
+                            ip = node_info.get('ip', 'unknown')
+                            started = node_info.get('reprovision_started', 'unknown')
+                            logging.info(f"  - {hostname} ({ip}) - started: {started}")
                 else:
-                    logging.warning("⚠️  No nodes found with 'in_progress' status after triggering reprovision")
+                    logging.warning("WARNING: No nodes found with 'in_progress' status after triggering reprovision")
                 
                 return True
             else:
-                logging.error(f"❌ Reprovision failed: {result.stderr}")
+                logging.error(f"ERROR: Reprovision failed: {result.stderr}")
                 return False
                 
         except Exception as e:
-            logging.error(f"❌ Failed to trigger reprovision: {e}")
+            logging.error(f"ERROR: Failed to trigger reprovision: {e}")
+            return False
+    
+    def run_cluster_formation(self):
+        """Run cluster formation directly"""
+        try:
+            self.start_timer("Cluster Formation")
+            logging.info("SETUP: Starting cluster formation...")
+            
+            result = subprocess.run([
+                'python3', str(self.cluster_script)
+            ], capture_output=True, text=True, timeout=1200)  # 20 min timeout
+            
+            if result.returncode == 0:
+                logging.info("SUCCESS: Cluster formation completed successfully!")
+                if self.verbose:
+                    logging.info(f"Cluster formation output: {result.stdout}")
+                self.end_timer("Cluster Formation", True)
+                return True
+            else:
+                logging.error(f"ERROR: Cluster formation failed: {result.stderr}")
+                self.end_timer("Cluster Formation", False)
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error("ERROR: Cluster formation timed out after 20 minutes")
+            self.end_timer("Cluster Formation", False)
+            return False
+        except Exception as e:
+            logging.error(f"ERROR: Failed to run cluster formation: {e}")
+            self.end_timer("Cluster Formation", False)
             return False
     
     def run_ceph_setup(self):
         """Run Ceph setup after cluster formation"""
         try:
             self.start_timer("Ceph Setup")
-            logging.info("🔧 Starting Ceph setup...")
+            logging.info("SETUP: Starting Ceph setup...")
             
             result = subprocess.run([
                 'python3', str(self.ceph_script)
             ], capture_output=True, text=True, timeout=1800)  # 30 min timeout
             
             if result.returncode == 0:
-                logging.info("✅ Ceph setup completed successfully!")
-                logging.info(f"Ceph setup output: {result.stdout}")
+                logging.info("SUCCESS: Ceph setup completed successfully!")
+                if self.verbose:
+                    logging.info(f"Ceph setup output: {result.stdout}")
                 self.end_timer("Ceph Setup", True)
                 return True
             else:
-                logging.error(f"❌ Ceph setup failed: {result.stderr}")
+                logging.error(f"ERROR: Ceph setup failed: {result.stderr}")
                 self.end_timer("Ceph Setup", False)
                 return False
                 
         except subprocess.TimeoutExpired:
-            logging.error("❌ Ceph setup timed out after 30 minutes")
+            logging.error("ERROR: Ceph setup timed out after 30 minutes")
             self.end_timer("Ceph Setup", False)
             return False
         except Exception as e:
-            logging.error(f"❌ Failed to run Ceph setup: {e}")
+            logging.error(f"ERROR: Failed to run Ceph setup: {e}")
             self.end_timer("Ceph Setup", False)
             return False
     
@@ -296,28 +333,29 @@ class CoordinatedReprovision:
         """Run template creation after Ceph setup"""
         try:
             self.start_timer("Template Creation")
-            logging.info("📦 Starting template creation...")
+            logging.info("CREATING: Starting template creation...")
             
             result = subprocess.run([
                 'python3', str(self.template_script), '--create-templates'
             ], capture_output=True, text=True, timeout=1800)  # 30 min timeout
             
             if result.returncode == 0:
-                logging.info("✅ Template creation completed successfully!")
-                logging.info(f"Template creation output: {result.stdout}")
+                logging.info("SUCCESS: Template creation completed successfully!")
+                if self.verbose:
+                    logging.info(f"Template creation output: {result.stdout}")
                 self.end_timer("Template Creation", True)
                 return True
             else:
-                logging.error(f"❌ Template creation failed: {result.stderr}")
+                logging.error(f"ERROR: Template creation failed: {result.stderr}")
                 self.end_timer("Template Creation", False)
                 return False
                 
         except subprocess.TimeoutExpired:
-            logging.error("❌ Template creation timed out after 30 minutes")
+            logging.error("ERROR: Template creation timed out after 30 minutes")
             self.end_timer("Template Creation", False)
             return False
         except Exception as e:
-            logging.error(f"❌ Failed to run template creation: {e}")
+            logging.error(f"ERROR: Failed to run template creation: {e}")
             self.end_timer("Template Creation", False)
             return False
     
@@ -373,62 +411,68 @@ class CoordinatedReprovision:
                                 provisioning_complete[hostname] = node_info
                     
                     # Log status changes
-                    logging.info(f"=== STATUS CHECK ({elapsed/60:.1f} min elapsed) ===")
-                    self.log_status_summary(data)
+                    if self.verbose:
+                        logging.info(f"=== STATUS CHECK ({elapsed/60:.1f} min elapsed) ===")
+                        self.log_status_summary(data)
                     
                     # Detail specific states
                     if in_progress:
-                        logging.info(f"IN PROGRESS ({len(in_progress)}): {list(in_progress.keys())}")
+                        if self.verbose:
+                            logging.info(f"IN PROGRESS ({len(in_progress)}): {list(in_progress.keys())}")
+                        elif len(in_progress) > 0:
+                            logging.info(f"Provisioning in progress: {len(in_progress)} nodes")
                     
                     if provisioning_complete:
-                        logging.info(f"PROVISIONING COMPLETE ({len(provisioning_complete)}): {list(provisioning_complete.keys())}")
-                        for hostname, node_info in provisioning_complete.items():
-                            registered_time = node_info.get('registered_at', 'unknown')
-                            ip = node_info.get('ip', 'unknown')
-                            logging.info(f"  - {hostname} ({ip}) finished provisioning at {registered_time}")
+                        if self.verbose:
+                            logging.info(f"PROVISIONING COMPLETE ({len(provisioning_complete)}): {list(provisioning_complete.keys())}")
+                            for hostname, node_info in provisioning_complete.items():
+                                registered_time = node_info.get('registered_at', 'unknown')
+                                ip = node_info.get('ip', 'unknown')
+                                logging.info(f"  - {hostname} ({ip}) finished provisioning at {registered_time}")
+                        elif len(provisioning_complete) > 0:
+                            logging.info(f"Provisioning complete: {len(provisioning_complete)} nodes ready")
                     
-                    if completed:
+                    if completed and self.verbose:
                         logging.info(f"MONITOR MARKED COMPLETED ({len(completed)}): {list(completed.keys())}")
                         for hostname, node_info in completed.items():
                             completed_time = node_info.get('reprovision_completed', 'unknown')
                             logging.info(f"  - {hostname} completed at {completed_time}")
                     
-                    if clustered:
+                    if clustered and self.verbose:
                         logging.info(f"CLUSTERED ({len(clustered)}): {list(clustered.keys())}")
-                        # All nodes are clustered - start post-cluster workflow!
-                        if not in_progress and not provisioning_complete:
-                            logging.info("🎉 ALL NODES CLUSTERED - STARTING POST-CLUSTER WORKFLOW! 🎉")
-                            self.end_timer("Provisioning & Clustering")
-                            
-                            # Run Ceph setup
-                            if self.run_ceph_setup():
-                                # Run template creation
-                                if self.run_template_creation():
-                                    logging.info("🎉 COMPLETE WORKFLOW FINISHED SUCCESSFULLY! 🎉")
-                                    return True
-                                else:
-                                    logging.error("❌ Template creation failed, but cluster is operational")
-                                    return False
-                            else:
-                                logging.error("❌ Ceph setup failed, but cluster is operational")
-                                return False
+                        logging.info("INFO: Monitor already clustered nodes (direct mode active)")
                     
                     if timeout_nodes:
                         logging.warning(f"TIMED OUT ({len(timeout_nodes)}): {list(timeout_nodes.keys())}")
                     
-                    # Check for completed reprovision but waiting for cluster formation
+                    # Check for completed reprovision - trigger our own cluster formation
                     if (completed or provisioning_complete) and not in_progress:
                         total_ready = len(completed) + len(provisioning_complete)
-                        logging.info(f"✅ All reprovisioning complete ({total_ready} nodes ready), waiting for cluster formation...")
-                    
-                    # Check if monitor process died
-                    if self.monitor_process and self.monitor_process.poll() is not None:
-                        stdout, stderr = self.monitor_process.communicate()
-                        if "Cluster formation completed successfully" in stdout:
-                            logging.info("✅ Monitor reports cluster formation completed!")
-                            return True
+                        logging.info(f"SUCCESS: All reprovisioning complete ({total_ready} nodes ready)!")
+                        logging.info("STARTING Starting direct cluster formation workflow...")
+                        
+                        # End the provisioning timer
+                        self.end_timer("Node Provisioning")
+                        
+                        # Stop the monitor since we're taking control
+                        self.stop_monitor()
+                        
+                        # Run cluster formation directly
+                        if self.run_cluster_formation():
+                            # Run Ceph setup
+                            if self.run_ceph_setup():
+                                # Run template creation
+                                if self.run_template_creation():
+                                    logging.info("COMPLETE: COMPLETE WORKFLOW FINISHED SUCCESSFULLY! COMPLETE: ")
+                                    return True
+                                else:
+                                    logging.error("ERROR: Template creation failed, but cluster is operational")
+                                    return False
+                            else:
+                                logging.error("ERROR: Ceph setup failed, but cluster is operational")  
+                                return False
                         else:
-                            logging.error(f"❌ Monitor process died: {stderr}")
+                            logging.error("ERROR: Cluster formation failed")
                             return False
                             
                 except Exception as e:
@@ -439,7 +483,7 @@ class CoordinatedReprovision:
             
             # Periodic summary (every 5 minutes)
             if int(elapsed) % 300 == 0 and elapsed > 0:
-                logging.info(f"⏱️  Workflow still running... ({elapsed/60:.1f} minutes elapsed)")
+                logging.info(f"TIMING: Workflow still running... ({elapsed/60:.1f} minutes elapsed)")
         
         return False
     
@@ -476,13 +520,13 @@ class CoordinatedReprovision:
             # Wait a moment for monitor to initialize
             time.sleep(3)
             
-            # Start overall timing
-            self.start_timer("Provisioning & Clustering")
+            # Start provisioning timing (cluster formation will be separate)
+            self.start_timer("Node Provisioning")
             
             # Trigger the reprovision
             if not self.trigger_reprovision(node_filters):
                 logging.error("Failed to trigger reprovision")
-                self.end_timer("Provisioning & Clustering", False)
+                self.end_timer("Node Provisioning", False)
                 self.cleanup()
                 return False
             
@@ -493,9 +537,9 @@ class CoordinatedReprovision:
             self.print_timing_summary()
             
             if success:
-                logging.info("🏆 === COMPLETE PROXMOX DEPLOYMENT SUCCESSFUL! ===")
+                logging.info("SUCCESS: === COMPLETE PROXMOX DEPLOYMENT SUCCESSFUL! ===")
             else:
-                logging.error("💥 === PROXMOX DEPLOYMENT FAILED OR INCOMPLETE ===")
+                logging.error("FAILED: === PROXMOX DEPLOYMENT FAILED OR INCOMPLETE ===")
             
             return success
             
@@ -511,12 +555,13 @@ def print_usage():
     print()
     print("Options:")
     print("  --timeout MINUTES    Timeout in minutes (default: 60)")
+    print("  --verbose           Show detailed progress information")
     print("  --help              Show this help")
     print()
     print("Node filters are passed directly to reboot-nodes-for-reprovision.py")
     print("Examples:")
     print("  python3 coordinated-proxmox-reprovision.py")
-    print("  python3 coordinated-proxmox-reprovision.py --timeout 90")
+    print("  python3 coordinated-proxmox-reprovision.py --timeout 90 --verbose")
     print("  python3 coordinated-proxmox-reprovision.py node1 node2")
 
 def main():
@@ -527,6 +572,7 @@ def main():
     # Parse arguments
     timeout_minutes = 60
     node_filters = []
+    verbose = False
     
     i = 1
     while i < len(sys.argv):
@@ -542,12 +588,15 @@ def main():
             else:
                 print("Error: --timeout requires a value")
                 sys.exit(1)
+        elif arg == '--verbose':
+            verbose = True
+            i += 1
         else:
             node_filters.append(arg)
             i += 1
     
     # Run the coordinated workflow
-    coordinator = CoordinatedReprovision()
+    coordinator = CoordinatedReprovision(verbose=verbose)
     success = coordinator.run_coordinated_workflow(
         node_filters=node_filters if node_filters else None,
         timeout_minutes=timeout_minutes
