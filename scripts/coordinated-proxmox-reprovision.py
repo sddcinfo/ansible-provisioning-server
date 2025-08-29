@@ -100,7 +100,18 @@ class CoordinatedReprovision:
         for hostname, node_info in data.items():
             if isinstance(node_info, dict):
                 total_nodes += 1
-                status = node_info.get('reprovision_status', 'unknown')
+                # Check reprovision_status first, then fall back to regular status
+                reprov_status = node_info.get('reprovision_status')
+                if reprov_status:
+                    status = reprov_status
+                else:
+                    # Node completed provisioning, check regular status  
+                    reg_status = node_info.get('status', 'unknown')
+                    if reg_status == 'post-install-complete':
+                        status = 'provisioning-complete'
+                    else:
+                        status = reg_status
+                        
                 status_counts[status] = status_counts.get(status, 0) + 1
         
         if total_nodes > 0:
@@ -239,6 +250,13 @@ class CoordinatedReprovision:
                     clustered = self.get_nodes_by_status(data, 'clustered')
                     timeout_nodes = self.get_nodes_by_status(data, 'timeout')
                     
+                    # Also check for nodes that finished provisioning (post-install-complete)
+                    provisioning_complete = {}
+                    for hostname, node_info in data.items():
+                        if isinstance(node_info, dict) and not node_info.get('reprovision_status'):
+                            if node_info.get('status') == 'post-install-complete':
+                                provisioning_complete[hostname] = node_info
+                    
                     # Log status changes
                     logging.info(f"=== STATUS CHECK ({elapsed/60:.1f} min elapsed) ===")
                     self.log_status_summary(data)
@@ -247,8 +265,15 @@ class CoordinatedReprovision:
                     if in_progress:
                         logging.info(f"IN PROGRESS ({len(in_progress)}): {list(in_progress.keys())}")
                     
+                    if provisioning_complete:
+                        logging.info(f"PROVISIONING COMPLETE ({len(provisioning_complete)}): {list(provisioning_complete.keys())}")
+                        for hostname, node_info in provisioning_complete.items():
+                            registered_time = node_info.get('registered_at', 'unknown')
+                            ip = node_info.get('ip', 'unknown')
+                            logging.info(f"  - {hostname} ({ip}) finished provisioning at {registered_time}")
+                    
                     if completed:
-                        logging.info(f"COMPLETED ({len(completed)}): {list(completed.keys())}")
+                        logging.info(f"MONITOR MARKED COMPLETED ({len(completed)}): {list(completed.keys())}")
                         for hostname, node_info in completed.items():
                             completed_time = node_info.get('reprovision_completed', 'unknown')
                             logging.info(f"  - {hostname} completed at {completed_time}")
@@ -256,7 +281,7 @@ class CoordinatedReprovision:
                     if clustered:
                         logging.info(f"CLUSTERED ({len(clustered)}): {list(clustered.keys())}")
                         # All nodes are clustered - success!
-                        if not in_progress and not completed:
+                        if not in_progress and not provisioning_complete:
                             logging.info("🎉 ALL NODES CLUSTERED - WORKFLOW COMPLETE! 🎉")
                             return True
                     
@@ -264,8 +289,9 @@ class CoordinatedReprovision:
                         logging.warning(f"TIMED OUT ({len(timeout_nodes)}): {list(timeout_nodes.keys())}")
                     
                     # Check for completed reprovision but waiting for cluster formation
-                    if completed and not in_progress:
-                        logging.info("✅ All reprovisioning complete, waiting for cluster formation...")
+                    if (completed or provisioning_complete) and not in_progress:
+                        total_ready = len(completed) + len(provisioning_complete)
+                        logging.info(f"✅ All reprovisioning complete ({total_ready} nodes ready), waiting for cluster formation...")
                     
                     # Check if monitor process died
                     if self.monitor_process and self.monitor_process.poll() is not None:
