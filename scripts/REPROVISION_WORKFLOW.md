@@ -65,8 +65,13 @@ python3 enhanced-reprovision-monitor.py /path/to/nodes.json
 9. **Registration Update** - `proxmox-post-install.sh` calls `register-node.php` to update node status to 'post-install-complete'
 10. **Completion Detection** - Monitor detects completed installs and updates status to 'completed'  
 11. **Cluster Formation** - When ALL nodes complete, monitor automatically triggers `proxmox-form-cluster.py`
-12. **Final Status** - Monitor marks nodes as 'clustered' when cluster formation succeeds
-13. **Workflow Complete** - Coordinated script detects all nodes 'clustered' and declares success
+12. **Final Status** - Monitor marks nodes as 'clustered' when cluster formation succeeds  
+13. **Post-Cluster Setup** - Coordinated script detects 'clustered' status and runs `proxmox-ceph-setup.py`
+14. **Ceph Storage** - High-performance Ceph storage configured across all nodes
+15. **Template Creation** - After Ceph completes, runs `template-manager.py --create-templates` 
+16. **VM Templates** - Creates Ubuntu base and Kubernetes-ready VM templates
+17. **Timing Summary** - Complete breakdown of time spent in each workflow step
+18. **Workflow Complete** - Full production-ready Proxmox cluster with storage and templates!
 
 ## Data Structure
 
@@ -136,3 +141,31 @@ This enhanced workflow is backward compatible with existing scripts:
 - Added status tracking doesn't break existing workflows
 
 The coordinated script can be integrated into larger automation systems or called manually as needed.
+
+## Timing and Performance Tracking
+
+The enhanced workflow includes comprehensive timing tracking for each major step:
+
+### Example Timing Summary:
+```
+============================================================
+🏁 WORKFLOW TIMING SUMMARY  
+============================================================
+✅ Provisioning & Clustering      25.3m
+✅ Ceph Setup                       8.7m
+✅ Template Creation                12.1m
+------------------------------------------------------------
+🎯 TOTAL WORKFLOW TIME:            46.1m
+============================================================
+```
+
+### Tracked Steps:
+- **Provisioning & Clustering**: Time from reprovision trigger until all nodes clustered
+- **Ceph Setup**: Duration of high-performance storage configuration
+- **Template Creation**: Time to create VM templates for deployments
+
+This provides clear visibility into:
+- Which steps take the most time
+- Overall deployment duration
+- Performance baselines for optimization
+- Success/failure status for each phase

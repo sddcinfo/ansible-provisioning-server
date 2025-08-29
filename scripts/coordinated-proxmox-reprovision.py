@@ -3,9 +3,9 @@
 Coordinated Proxmox Reprovision Workflow
 Orchestrates the complete reprovision process including monitoring and automatic cluster formation
 
-FLOW:
+COMPLETE DEPLOYMENT FLOW:
 1. Start enhanced-reprovision-monitor.py in background
-2. Trigger reboot-nodes-for-reprovision.py --all (auto-confirms with 'y')
+2. Trigger reboot-nodes-for-reprovision.py --all (auto-confirms with 'y') 
 3. reboot-nodes-for-reprovision.py calls web interface for each MAC -> index.php?action=reprovision&mac=...
 4. index.php calls update_registered_node_status() -> sets registered-nodes.json[hostname]['reprovision_status'] = 'in_progress'
 5. Nodes reboot and install Proxmox, then run proxmox-post-install.sh
@@ -13,7 +13,10 @@ FLOW:
 7. enhanced-reprovision-monitor.py detects completed nodes and updates status to 'completed'
 8. When ALL nodes complete, monitor triggers proxmox-form-cluster.py
 9. Monitor marks nodes as 'clustered' when cluster formation succeeds
-10. Coordinated script detects 'clustered' status and declares success
+10. Coordinated script detects 'clustered' status and runs proxmox-ceph-setup.py
+11. After Ceph setup completes, runs template-manager.py --create-templates
+12. Complete timing summary shows duration of each step and total time
+13. Full Proxmox cluster with Ceph storage and VM templates ready for use!
 """
 
 import sys
@@ -50,16 +53,22 @@ class CoordinatedReprovision:
         self.script_dir = Path(__file__).parent.absolute()
         self.reboot_script = self.script_dir / "reboot-nodes-for-reprovision.py"
         self.monitor_script = self.script_dir / "enhanced-reprovision-monitor.py"
+        self.cluster_script = self.script_dir / "proxmox-form-cluster.py"
+        self.ceph_script = self.script_dir / "proxmox-ceph-setup.py"
+        self.template_script = self.script_dir / "template-manager.py"
         self.nodes_file = '/var/www/html/data/registered-nodes.json'
         self.monitor_process = None
         self.stop_monitoring = False
+        self.timing = {}  # Track timing for each step
         
     def validate_scripts(self):
         """Validate required scripts exist"""
         required_scripts = [
             self.reboot_script,
             self.monitor_script,
-            self.script_dir / "proxmox-form-cluster.py"
+            self.cluster_script,
+            self.ceph_script,
+            self.template_script
         ]
         
         missing_scripts = []
@@ -119,6 +128,54 @@ class CoordinatedReprovision:
             logging.info(f"Status Summary ({total_nodes} nodes): {status_str}")
         else:
             logging.info("No nodes found in registered-nodes.json")
+    
+    def start_timer(self, step_name):
+        """Start timing a step"""
+        self.timing[step_name] = {
+            'start': time.time(),
+            'end': None,
+            'duration': None,
+            'success': None
+        }
+        logging.info(f"⏱️  Started: {step_name}")
+    
+    def end_timer(self, step_name, success=True):
+        """End timing a step"""
+        if step_name in self.timing:
+            self.timing[step_name]['end'] = time.time()
+            self.timing[step_name]['success'] = success
+            duration = self.timing[step_name]['end'] - self.timing[step_name]['start']
+            self.timing[step_name]['duration'] = duration
+            
+            status = "✅ Success" if success else "❌ Failed"
+            logging.info(f"⏱️  Completed: {step_name} - {self.format_duration(duration)} - {status}")
+    
+    def format_duration(self, seconds):
+        """Format duration in human readable format"""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            return f"{seconds/60:.1f}m"
+        else:
+            return f"{seconds/3600:.1f}h {(seconds%3600)/60:.0f}m"
+    
+    def print_timing_summary(self):
+        """Print comprehensive timing summary"""
+        logging.info("=" * 60)
+        logging.info("🏁 WORKFLOW TIMING SUMMARY")
+        logging.info("=" * 60)
+        
+        total_duration = 0
+        for step_name, timing_info in self.timing.items():
+            if timing_info['duration']:
+                duration = timing_info['duration']
+                total_duration += duration
+                status = "✅" if timing_info['success'] else "❌"
+                logging.info(f"{status} {step_name:<30} {self.format_duration(duration):>10}")
+        
+        logging.info("-" * 60)
+        logging.info(f"🎯 TOTAL WORKFLOW TIME:          {self.format_duration(total_duration):>10}")
+        logging.info("=" * 60)
     
     def start_monitor(self):
         """Start the reprovision monitor in background"""
@@ -206,6 +263,64 @@ class CoordinatedReprovision:
             logging.error(f"❌ Failed to trigger reprovision: {e}")
             return False
     
+    def run_ceph_setup(self):
+        """Run Ceph setup after cluster formation"""
+        try:
+            self.start_timer("Ceph Setup")
+            logging.info("🔧 Starting Ceph setup...")
+            
+            result = subprocess.run([
+                'python3', str(self.ceph_script)
+            ], capture_output=True, text=True, timeout=1800)  # 30 min timeout
+            
+            if result.returncode == 0:
+                logging.info("✅ Ceph setup completed successfully!")
+                logging.info(f"Ceph setup output: {result.stdout}")
+                self.end_timer("Ceph Setup", True)
+                return True
+            else:
+                logging.error(f"❌ Ceph setup failed: {result.stderr}")
+                self.end_timer("Ceph Setup", False)
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error("❌ Ceph setup timed out after 30 minutes")
+            self.end_timer("Ceph Setup", False)
+            return False
+        except Exception as e:
+            logging.error(f"❌ Failed to run Ceph setup: {e}")
+            self.end_timer("Ceph Setup", False)
+            return False
+    
+    def run_template_creation(self):
+        """Run template creation after Ceph setup"""
+        try:
+            self.start_timer("Template Creation")
+            logging.info("📦 Starting template creation...")
+            
+            result = subprocess.run([
+                'python3', str(self.template_script), '--create-templates'
+            ], capture_output=True, text=True, timeout=1800)  # 30 min timeout
+            
+            if result.returncode == 0:
+                logging.info("✅ Template creation completed successfully!")
+                logging.info(f"Template creation output: {result.stdout}")
+                self.end_timer("Template Creation", True)
+                return True
+            else:
+                logging.error(f"❌ Template creation failed: {result.stderr}")
+                self.end_timer("Template Creation", False)
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error("❌ Template creation timed out after 30 minutes")
+            self.end_timer("Template Creation", False)
+            return False
+        except Exception as e:
+            logging.error(f"❌ Failed to run template creation: {e}")
+            self.end_timer("Template Creation", False)
+            return False
+    
     def wait_for_completion(self, timeout_minutes=60):
         """Wait for reprovision to complete with timeout - actively monitor registered-nodes.json"""
         logging.info(f"Monitoring reprovision progress (timeout: {timeout_minutes} minutes)...")
@@ -280,10 +395,23 @@ class CoordinatedReprovision:
                     
                     if clustered:
                         logging.info(f"CLUSTERED ({len(clustered)}): {list(clustered.keys())}")
-                        # All nodes are clustered - success!
+                        # All nodes are clustered - start post-cluster workflow!
                         if not in_progress and not provisioning_complete:
-                            logging.info("🎉 ALL NODES CLUSTERED - WORKFLOW COMPLETE! 🎉")
-                            return True
+                            logging.info("🎉 ALL NODES CLUSTERED - STARTING POST-CLUSTER WORKFLOW! 🎉")
+                            self.end_timer("Provisioning & Clustering")
+                            
+                            # Run Ceph setup
+                            if self.run_ceph_setup():
+                                # Run template creation
+                                if self.run_template_creation():
+                                    logging.info("🎉 COMPLETE WORKFLOW FINISHED SUCCESSFULLY! 🎉")
+                                    return True
+                                else:
+                                    logging.error("❌ Template creation failed, but cluster is operational")
+                                    return False
+                            else:
+                                logging.error("❌ Ceph setup failed, but cluster is operational")
+                                return False
                     
                     if timeout_nodes:
                         logging.warning(f"TIMED OUT ({len(timeout_nodes)}): {list(timeout_nodes.keys())}")
@@ -348,19 +476,26 @@ class CoordinatedReprovision:
             # Wait a moment for monitor to initialize
             time.sleep(3)
             
+            # Start overall timing
+            self.start_timer("Provisioning & Clustering")
+            
             # Trigger the reprovision
             if not self.trigger_reprovision(node_filters):
                 logging.error("Failed to trigger reprovision")
+                self.end_timer("Provisioning & Clustering", False)
                 self.cleanup()
                 return False
             
             # Wait for completion
             success = self.wait_for_completion(timeout_minutes)
             
+            # Always print timing summary
+            self.print_timing_summary()
+            
             if success:
-                logging.info("=== Coordinated Reprovision Completed Successfully ===")
+                logging.info("🏆 === COMPLETE PROXMOX DEPLOYMENT SUCCESSFUL! ===")
             else:
-                logging.error("=== Coordinated Reprovision Failed or Timed Out ===")
+                logging.error("💥 === PROXMOX DEPLOYMENT FAILED OR INCOMPLETE ===")
             
             return success
             
