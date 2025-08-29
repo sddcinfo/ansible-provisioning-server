@@ -54,13 +54,19 @@ python3 enhanced-reprovision-monitor.py /path/to/nodes.json
 
 ## Workflow Process
 
-1. **Start Monitor** - The coordinated script starts the enhanced monitor
-2. **Trigger Reprovision** - Calls `reboot-nodes-for-reprovision.py --all` (automatically confirms with 'y') which makes web requests to index.php
-3. **Status Tracking** - index.php updates registered-nodes.json with 'in_progress' status
-4. **Node Monitoring** - Monitor checks nodes for accessibility and Proxmox readiness
-5. **Status Updates** - Nodes marked as 'completed' when Proxmox services are ready
-6. **Cluster Formation** - When ALL nodes are ready (no nodes still in progress), automatically runs `proxmox-form-cluster.py`
-7. **Completion** - All nodes marked as 'clustered' and process completes
+1. **Start Monitor** - The coordinated script starts the enhanced monitor in background
+2. **Pre-Status Check** - Logs current status of all nodes before triggering reprovision
+3. **Trigger Reprovision** - Calls `reboot-nodes-for-reprovision.py --all` (automatically confirms with 'y')
+4. **Web API Calls** - Reprovision script makes web requests to `index.php?action=reprovision&mac=...` for each node
+5. **Status Update** - `index.php` calls `update_registered_node_status()` to mark nodes as 'in_progress' in registered-nodes.json
+6. **Post-Status Check** - Coordinated script verifies status was updated and shows which nodes are now 'in_progress'
+7. **Active Monitoring** - Script watches registered-nodes.json every 30 seconds and logs detailed status changes
+8. **Node Provisioning** - Nodes reboot, install Proxmox, and run `proxmox-post-install.sh`
+9. **Registration Update** - `proxmox-post-install.sh` calls `register-node.php` to update node status to 'post-install-complete'
+10. **Completion Detection** - Monitor detects completed installs and updates status to 'completed'  
+11. **Cluster Formation** - When ALL nodes complete, monitor automatically triggers `proxmox-form-cluster.py`
+12. **Final Status** - Monitor marks nodes as 'clustered' when cluster formation succeeds
+13. **Workflow Complete** - Coordinated script detects all nodes 'clustered' and declares success
 
 ## Data Structure
 

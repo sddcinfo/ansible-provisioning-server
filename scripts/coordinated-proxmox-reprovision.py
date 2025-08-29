@@ -2,6 +2,18 @@
 """
 Coordinated Proxmox Reprovision Workflow
 Orchestrates the complete reprovision process including monitoring and automatic cluster formation
+
+FLOW:
+1. Start enhanced-reprovision-monitor.py in background
+2. Trigger reboot-nodes-for-reprovision.py --all (auto-confirms with 'y')
+3. reboot-nodes-for-reprovision.py calls web interface for each MAC -> index.php?action=reprovision&mac=...
+4. index.php calls update_registered_node_status() -> sets registered-nodes.json[hostname]['reprovision_status'] = 'in_progress'
+5. Nodes reboot and install Proxmox, then run proxmox-post-install.sh
+6. proxmox-post-install.sh calls register-node.php -> updates registered-nodes.json[hostname]['status'] = 'post-install-complete'  
+7. enhanced-reprovision-monitor.py detects completed nodes and updates status to 'completed'
+8. When ALL nodes complete, monitor triggers proxmox-form-cluster.py
+9. Monitor marks nodes as 'clustered' when cluster formation succeeds
+10. Coordinated script detects 'clustered' status and declares success
 """
 
 import sys
@@ -11,6 +23,7 @@ import threading
 import time
 import logging
 import signal
+import json
 from pathlib import Path
 
 # Add script directory to path for importing
@@ -37,6 +50,7 @@ class CoordinatedReprovision:
         self.script_dir = Path(__file__).parent.absolute()
         self.reboot_script = self.script_dir / "reboot-nodes-for-reprovision.py"
         self.monitor_script = self.script_dir / "enhanced-reprovision-monitor.py"
+        self.nodes_file = '/var/www/html/data/registered-nodes.json'
         self.monitor_process = None
         self.stop_monitoring = False
         
@@ -58,6 +72,42 @@ class CoordinatedReprovision:
             return False
         
         return True
+    
+    def load_nodes_data(self):
+        """Load current nodes data from registered-nodes.json"""
+        try:
+            if not os.path.exists(self.nodes_file):
+                return {}
+            with open(self.nodes_file, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            logging.error(f"Failed to load nodes data: {e}")
+            return {}
+    
+    def get_nodes_by_status(self, data, status):
+        """Get nodes with specific reprovision_status"""
+        nodes = {}
+        for hostname, node_info in data.items():
+            if isinstance(node_info, dict) and node_info.get('reprovision_status') == status:
+                nodes[hostname] = node_info
+        return nodes
+    
+    def log_status_summary(self, data):
+        """Log current status summary of all nodes"""
+        status_counts = {}
+        total_nodes = 0
+        
+        for hostname, node_info in data.items():
+            if isinstance(node_info, dict):
+                total_nodes += 1
+                status = node_info.get('reprovision_status', 'unknown')
+                status_counts[status] = status_counts.get(status, 0) + 1
+        
+        if total_nodes > 0:
+            status_str = ", ".join([f"{status}: {count}" for status, count in status_counts.items()])
+            logging.info(f"Status Summary ({total_nodes} nodes): {status_str}")
+        else:
+            logging.info("No nodes found in registered-nodes.json")
     
     def start_monitor(self):
         """Start the reprovision monitor in background"""
@@ -99,59 +149,143 @@ class CoordinatedReprovision:
     def trigger_reprovision(self, node_filters=None):
         """Trigger reprovision using existing script"""
         try:
+            # Check initial status before triggering
+            initial_data = self.load_nodes_data()
+            logging.info("=== PRE-REPROVISION STATUS ===")
+            self.log_status_summary(initial_data)
+            
             cmd = ['python3', str(self.reboot_script), '--all']
             if node_filters:
                 # If specific nodes are provided, use --nodes instead of --all
                 cmd = ['python3', str(self.reboot_script), '--nodes', ','.join(node_filters)]
                 
-            logging.info(f"Starting reprovision: {' '.join(cmd)}")
+            logging.info(f"🚀 Triggering reprovision: {' '.join(cmd)}")
             
             # Send "y" to confirm the action automatically
             result = subprocess.run(cmd, input='y\n', capture_output=True, text=True)
             
             if result.returncode == 0:
-                logging.info("Reprovision triggered successfully")
-                logging.info(f"Output: {result.stdout}")
+                logging.info("✅ Reprovision triggered successfully!")
+                logging.info(f"Reprovision script output: {result.stdout}")
+                
+                # Wait a moment for status to update, then check
+                time.sleep(3)
+                
+                updated_data = self.load_nodes_data()
+                logging.info("=== POST-REPROVISION STATUS ===")
+                self.log_status_summary(updated_data)
+                
+                # Show what changed
+                reprovision_nodes = self.get_nodes_by_status(updated_data, 'in_progress')
+                if reprovision_nodes:
+                    logging.info(f"✅ Status updated: {len(reprovision_nodes)} nodes now marked 'in_progress':")
+                    for hostname, node_info in reprovision_nodes.items():
+                        ip = node_info.get('ip', 'unknown')
+                        started = node_info.get('reprovision_started', 'unknown')
+                        logging.info(f"  - {hostname} ({ip}) - started: {started}")
+                else:
+                    logging.warning("⚠️  No nodes found with 'in_progress' status after triggering reprovision")
+                
                 return True
             else:
-                logging.error(f"Reprovision failed: {result.stderr}")
+                logging.error(f"❌ Reprovision failed: {result.stderr}")
                 return False
                 
         except Exception as e:
-            logging.error(f"Failed to trigger reprovision: {e}")
+            logging.error(f"❌ Failed to trigger reprovision: {e}")
             return False
     
     def wait_for_completion(self, timeout_minutes=60):
-        """Wait for reprovision to complete with timeout"""
+        """Wait for reprovision to complete with timeout - actively monitor registered-nodes.json"""
         logging.info(f"Monitoring reprovision progress (timeout: {timeout_minutes} minutes)...")
+        logging.info("Watching registered-nodes.json for status changes...")
         
         start_time = time.time()
         timeout_seconds = timeout_minutes * 60
+        last_status_check = 0
+        
+        # Initial status check
+        initial_data = self.load_nodes_data()
+        logging.info("=== INITIAL STATUS ===")
+        self.log_status_summary(initial_data)
+        
+        reprovision_nodes = self.get_nodes_by_status(initial_data, 'in_progress')
+        if reprovision_nodes:
+            logging.info(f"Found {len(reprovision_nodes)} nodes marked for reprovision:")
+            for hostname, node_info in reprovision_nodes.items():
+                logging.info(f"  - {hostname} ({node_info.get('ip')}) - started: {node_info.get('reprovision_started')}")
+        else:
+            logging.warning("No nodes found with 'in_progress' status. Checking for any reprovision activity...")
         
         while not self.stop_monitoring:
-            # Check if monitor process is still running
-            if self.monitor_process and self.monitor_process.poll() is not None:
-                # Monitor died, check why
-                stdout, stderr = self.monitor_process.communicate()
-                if "Cluster formation completed successfully" in stdout:
-                    logging.info("Reprovision completed successfully!")
-                    return True
-                else:
-                    logging.error(f"Monitor died unexpectedly: {stderr}")
-                    return False
+            current_time = time.time()
+            elapsed = current_time - start_time
             
             # Check timeout
-            elapsed = time.time() - start_time
             if elapsed > timeout_seconds:
                 logging.warning(f"Reprovision timed out after {timeout_minutes} minutes")
                 return False
             
-            # Brief pause before next check
-            time.sleep(30)
+            # Check registered-nodes.json every 30 seconds
+            if current_time - last_status_check >= 30:
+                last_status_check = current_time
+                
+                try:
+                    data = self.load_nodes_data()
+                    
+                    # Get nodes in different states
+                    in_progress = self.get_nodes_by_status(data, 'in_progress')
+                    completed = self.get_nodes_by_status(data, 'completed')
+                    clustered = self.get_nodes_by_status(data, 'clustered')
+                    timeout_nodes = self.get_nodes_by_status(data, 'timeout')
+                    
+                    # Log status changes
+                    logging.info(f"=== STATUS CHECK ({elapsed/60:.1f} min elapsed) ===")
+                    self.log_status_summary(data)
+                    
+                    # Detail specific states
+                    if in_progress:
+                        logging.info(f"IN PROGRESS ({len(in_progress)}): {list(in_progress.keys())}")
+                    
+                    if completed:
+                        logging.info(f"COMPLETED ({len(completed)}): {list(completed.keys())}")
+                        for hostname, node_info in completed.items():
+                            completed_time = node_info.get('reprovision_completed', 'unknown')
+                            logging.info(f"  - {hostname} completed at {completed_time}")
+                    
+                    if clustered:
+                        logging.info(f"CLUSTERED ({len(clustered)}): {list(clustered.keys())}")
+                        # All nodes are clustered - success!
+                        if not in_progress and not completed:
+                            logging.info("🎉 ALL NODES CLUSTERED - WORKFLOW COMPLETE! 🎉")
+                            return True
+                    
+                    if timeout_nodes:
+                        logging.warning(f"TIMED OUT ({len(timeout_nodes)}): {list(timeout_nodes.keys())}")
+                    
+                    # Check for completed reprovision but waiting for cluster formation
+                    if completed and not in_progress:
+                        logging.info("✅ All reprovisioning complete, waiting for cluster formation...")
+                    
+                    # Check if monitor process died
+                    if self.monitor_process and self.monitor_process.poll() is not None:
+                        stdout, stderr = self.monitor_process.communicate()
+                        if "Cluster formation completed successfully" in stdout:
+                            logging.info("✅ Monitor reports cluster formation completed!")
+                            return True
+                        else:
+                            logging.error(f"❌ Monitor process died: {stderr}")
+                            return False
+                            
+                except Exception as e:
+                    logging.error(f"Error checking status: {e}")
             
-            # Log periodic status
-            if int(elapsed) % 300 == 0:  # Every 5 minutes
-                logging.info(f"Reprovision still in progress... ({elapsed/60:.1f} minutes elapsed)")
+            # Brief pause
+            time.sleep(5)
+            
+            # Periodic summary (every 5 minutes)
+            if int(elapsed) % 300 == 0 and elapsed > 0:
+                logging.info(f"⏱️  Workflow still running... ({elapsed/60:.1f} minutes elapsed)")
         
         return False
     
