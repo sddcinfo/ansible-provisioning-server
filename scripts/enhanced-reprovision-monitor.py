@@ -48,17 +48,19 @@ class ReprovisionMonitor:
     def get_reprovisioning_nodes(self, data: Dict) -> Dict[str, Dict]:
         """Get nodes currently being reprovisioned"""
         reprovisioning = {}
-        for mac, node_info in data.get('nodes', {}).items():
-            if node_info.get('reprovision_status') == 'in_progress':
-                reprovisioning[mac] = node_info
+        # Work with hostname-based structure (backward compatible)
+        for hostname, node_info in data.items():
+            if isinstance(node_info, dict) and node_info.get('reprovision_status') == 'in_progress':
+                reprovisioning[hostname] = node_info
         return reprovisioning
     
     def get_completed_nodes(self, data: Dict) -> Dict[str, Dict]:
         """Get nodes that completed reprovision"""
         completed = {}
-        for mac, node_info in data.get('nodes', {}).items():
-            if node_info.get('reprovision_status') == 'completed':
-                completed[mac] = node_info
+        # Work with hostname-based structure (backward compatible)  
+        for hostname, node_info in data.items():
+            if isinstance(node_info, dict) and node_info.get('reprovision_status') == 'completed':
+                completed[hostname] = node_info
         return completed
     
     def check_node_accessibility(self, ip: str) -> bool:
@@ -86,23 +88,33 @@ class ReprovisionMonitor:
         except Exception:
             return False
     
-    def update_node_status(self, mac: str, status: str, additional_data: Dict = None):
+    def update_node_status(self, identifier: str, status: str, additional_data: Dict = None):
         """Update node status in registered-nodes.json"""
         try:
             data = self.load_nodes()
-            if mac in data.get('nodes', {}):
-                data['nodes'][mac]['reprovision_status'] = status
-                data['nodes'][mac]['last_update'] = datetime.now().isoformat()
+            # Find by hostname or MAC in the existing structure
+            target_key = None
+            for key, node_info in data.items():
+                if isinstance(node_info, dict):
+                    if key == identifier or node_info.get('mac') == identifier or node_info.get('hostname') == identifier:
+                        target_key = key
+                        break
+            
+            if target_key:
+                data[target_key]['reprovision_status'] = status
+                data[target_key]['last_update'] = datetime.now().isoformat()
                 
                 if additional_data:
-                    data['nodes'][mac].update(additional_data)
+                    data[target_key].update(additional_data)
                 
                 with open(self.nodes_file, 'w') as f:
                     json.dump(data, f, indent=2)
                 
-                logging.info(f"Updated {mac} status to {status}")
+                logging.info(f"Updated {identifier} status to {status}")
+            else:
+                logging.warning(f"Could not find node {identifier} to update")
         except Exception as e:
-            logging.error(f"Failed to update status for {mac}: {e}")
+            logging.error(f"Failed to update status for {identifier}: {e}")
     
     def check_reprovision_timeout(self, node_info: Dict) -> bool:
         """Check if reprovision has timed out"""
@@ -130,11 +142,6 @@ class ReprovisionMonitor:
             
             if result.returncode == 0:
                 logging.info("Cluster formation triggered successfully")
-                # Mark nodes as clustered
-                for mac in completed_nodes.keys():
-                    self.update_node_status(mac, 'clustered', {
-                        'cluster_formed': datetime.now().isoformat()
-                    })
                 return True
             else:
                 logging.error(f"Cluster formation failed: {result.stderr}")
@@ -159,29 +166,29 @@ class ReprovisionMonitor:
                 completed_nodes = self.get_completed_nodes(data)
                 
                 # Check reprovisioning nodes for completion or timeout
-                for mac, node_info in reprovisioning_nodes.items():
+                for hostname, node_info in reprovisioning_nodes.items():
                     ip = node_info.get('ip')
                     if not ip:
                         continue
                     
                     # Check for timeout
                     if self.check_reprovision_timeout(node_info):
-                        logging.warning(f"Node {mac} ({ip}) reprovision timed out")
-                        self.update_node_status(mac, 'timeout')
+                        logging.warning(f"Node {hostname} ({ip}) reprovision timed out")
+                        self.update_node_status(hostname, 'timeout')
                         continue
                     
                     # Check if node is accessible and Proxmox is ready
                     if self.check_node_accessibility(ip):
-                        logging.info(f"Node {mac} ({ip}) is accessible, checking Proxmox status...")
+                        logging.info(f"Node {hostname} ({ip}) is accessible, checking Proxmox status...")
                         if self.check_proxmox_ready(ip):
-                            logging.info(f"Node {mac} ({ip}) Proxmox is ready")
-                            self.update_node_status(mac, 'completed', {
+                            logging.info(f"Node {hostname} ({ip}) Proxmox is ready")
+                            self.update_node_status(hostname, 'completed', {
                                 'reprovision_completed': datetime.now().isoformat()
                             })
                         else:
-                            logging.debug(f"Node {mac} ({ip}) Proxmox services not ready yet")
+                            logging.debug(f"Node {hostname} ({ip}) Proxmox services not ready yet")
                     else:
-                        logging.debug(f"Node {mac} ({ip}) still not accessible")
+                        logging.debug(f"Node {hostname} ({ip}) still not accessible")
                 
                 # Check if we should trigger cluster formation
                 completed_nodes = self.get_completed_nodes(data)  # Refresh after updates
@@ -190,13 +197,18 @@ class ReprovisionMonitor:
                 # Only trigger cluster formation when ALL nodes are complete (no nodes still in progress)
                 if len(completed_nodes) > 0 and len(reprovisioning_nodes) == 0:
                     # Check if any completed nodes haven't been clustered yet
-                    unclustered = {mac: info for mac, info in completed_nodes.items() 
+                    unclustered = {hostname: info for hostname, info in completed_nodes.items() 
                                  if info.get('reprovision_status') == 'completed'}
                     
                     if unclustered:
                         logging.info(f"All nodes completed reprovision. Found {len(unclustered)} nodes ready for clustering")
                         if self.trigger_cluster_formation(unclustered):
                             logging.info("Cluster formation completed successfully")
+                            # Mark nodes as clustered
+                            for hostname in unclustered.keys():
+                                self.update_node_status(hostname, 'clustered', {
+                                    'cluster_formed': datetime.now().isoformat()
+                                })
                         else:
                             logging.error("Cluster formation failed, will retry next cycle")
                 elif len(reprovisioning_nodes) > 0:

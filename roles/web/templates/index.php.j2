@@ -262,31 +262,26 @@ function update_registered_node_status(string $mac, string $status, array $addit
         }
     }
     
-    // Initialize nodes array if it doesn't exist
-    if (!isset($registrations['nodes'])) {
-        $registrations['nodes'] = [];
-    }
-    
-    // Update or create node entry using MAC as key for monitoring script
-    if (!isset($registrations['nodes'][$mac])) {
+    // Update existing hostname-based entry (maintain backward compatibility)
+    if (!isset($registrations[$hostname])) {
         $node = get_node_by_mac($mac);
-        $registrations['nodes'][$mac] = [
+        $registrations[$hostname] = [
             'hostname' => $hostname,
             'ip' => $node['os_ip'] ?? '',
-            'mac' => $mac,
             'type' => 'proxmox',
             'status' => 'registered',
             'registered_at' => date('Y-m-d H:i:s')
         ];
     }
     
-    // Update reprovision status
-    $registrations['nodes'][$mac]['reprovision_status'] = $status;
-    $registrations['nodes'][$mac]['last_update'] = date('Y-m-d H:i:s');
+    // Update reprovision status on the existing hostname entry
+    $registrations[$hostname]['reprovision_status'] = $status;
+    $registrations[$hostname]['last_update'] = date('Y-m-d H:i:s');
+    $registrations[$hostname]['mac'] = $mac; // Add MAC for monitoring script
     
     // Add any additional data
     foreach ($additional_data as $key => $value) {
-        $registrations['nodes'][$mac][$key] = $value;
+        $registrations[$hostname][$key] = $value;
     }
     
     // Save registrations
