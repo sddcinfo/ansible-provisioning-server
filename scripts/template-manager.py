@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Kubernetes Cluster Template Manager
+Proxmox Template Manager
 
-A comprehensive script to manage Proxmox VM templates for Kubernetes clusters.
+A comprehensive script to manage Proxmox VM templates.
 Intelligently handles template creation, validation, and testing with idempotent operations.
 
 COMMANDS:
@@ -34,7 +34,6 @@ EXAMPLES:
 
 TEMPLATE IDS:
     9000 - Ubuntu 24.04 base template (qemu-agent, cloud-init)
-    9001 - Ubuntu 24.04 with Kubernetes 1.33.4 pre-installed
 """
 
 import argparse
@@ -53,7 +52,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class ProxmoxTemplateManager:
-    """Manages Proxmox VM templates for Kubernetes deployments."""
+    """Manages Proxmox VM templates."""
     
     def __init__(self, config_file=None):
         # Load configuration from YAML file
@@ -72,17 +71,8 @@ class ProxmoxTemplateManager:
                 'description': self.config['templates']['base']['description'],
                 'memory': self.config['templates']['base']['memory'],
                 'cores': self.config['templates']['base']['cores']
-            },
-            'k8s': {
-                'id': self.config['templates']['kubernetes']['id'],
-                'name': self.config['templates']['kubernetes']['name'],
-                'description': self.config['templates']['kubernetes']['description'],
-                'memory': self.config['templates']['kubernetes']['memory'],
-                'cores': self.config['templates']['kubernetes']['cores']
             }
         }
-        
-        self.k8s_version = self.config['templates']['kubernetes']['k8s_version']
         
         # Cloud image settings from YAML
         self.japan_mirror = self.config['cloud_image']['japan_mirror']
@@ -447,157 +437,6 @@ echo "VM {vm_name} created successfully"
         logger.info(f"[SUCCESS] Base template created successfully: {template_name} (ID: {template_id})")
         return True
     
-    def create_k8s_template(self) -> bool:
-        """Create the Kubernetes template from prepared cloud image (avoid cloning EFI issues)."""
-        k8s_template_id = self.templates['k8s']['id']
-        k8s_template_name = self.templates['k8s']['name']
-        
-        logger.info(f"Creating Kubernetes template: {k8s_template_name} (ID: {k8s_template_id})")
-        
-        # Clean up existing template
-        self.cleanup_template(k8s_template_id)
-        
-        # Create VM from cloud image (same as base template to avoid EFI cloning issues)
-        if not self.create_cloud_base_vm(k8s_template_id, k8s_template_name):
-            logger.error("Failed to create K8s VM from cloud image")
-            return False
-        
-        # Update hardware for K8s
-        memory = self.templates['k8s']['memory']
-        cores = self.templates['k8s']['cores']
-        cmd = f"qm set {k8s_template_id} --memory {memory} --cores {cores}"
-        self.run_ssh_command(cmd)
-        
-        # Start VM for customization
-        logger.info("Starting VM for Kubernetes installation...")
-        cmd = f"qm start {k8s_template_id}"
-        self.run_ssh_command(cmd)
-        
-        # Wait for IP
-        ip = self.get_vm_ip(k8s_template_id)
-        if not ip:
-            logger.error("Failed to get VM IP address")
-            return False
-        
-        logger.info(f"K8s VM IP: {ip}")
-        
-        # Wait for SSH
-        for i in range(10):
-            if self.test_ssh_connectivity(ip):
-                break
-            logger.info(f"Waiting for SSH connectivity... ({i+1}/10)")
-            time.sleep(5)
-        else:
-            logger.error("SSH connectivity test failed")
-            return False
-        
-        # Install Kubernetes
-        logger.info("Installing Kubernetes components...")
-        ssh_cmd = [
-            "ssh", "-o", "ConnectTimeout=10",
-            "-o", "StrictHostKeyChecking=no",
-            "-i", self.ssh_key_path,
-            f"sysadmin@{ip}"
-        ]
-        
-        k8s_install_script = f"""
-set -e
-
-# Wait for cloud-init to complete
-cloud-init status --wait || true
-
-# Add Kubernetes repository
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.33/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.33/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-
-# Update and install Kubernetes
-sudo apt-get update
-sudo apt-get install -y kubelet={self.k8s_version}-1.1 kubeadm={self.k8s_version}-1.1 kubectl={self.k8s_version}-1.1
-sudo apt-mark hold kubelet kubeadm kubectl
-
-# Install and configure containerd
-sudo apt-get install -y containerd
-sudo mkdir -p /etc/containerd
-containerd config default | sudo tee /etc/containerd/config.toml
-sudo sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
-sudo systemctl restart containerd
-sudo systemctl enable containerd
-
-# Configure kernel modules
-echo 'br_netfilter' | sudo tee /etc/modules-load.d/k8s.conf
-echo 'overlay' | sudo tee -a /etc/modules-load.d/k8s.conf
-sudo modprobe br_netfilter
-sudo modprobe overlay
-
-# Configure sysctl
-echo 'net.bridge.bridge-nf-call-iptables = 1' | sudo tee /etc/sysctl.d/k8s.conf
-echo 'net.bridge.bridge-nf-call-ip6tables = 1' | sudo tee -a /etc/sysctl.d/k8s.conf
-echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.d/k8s.conf
-sudo sysctl --system
-
-# Disable swap
-sudo swapoff -a
-sudo sed -i '/ swap / s/^/#/' /etc/fstab
-
-# Verify installation
-echo "Kubernetes components installed:"
-kubelet --version
-kubeadm version
-kubectl version --client
-sudo systemctl status containerd --no-pager
-
-# Clean up
-sudo apt-get autoremove -y
-sudo apt-get autoclean
-sudo rm -rf /var/cache/apt/archives/*
-
-echo "Kubernetes template customization complete"
-"""
-        
-        try:
-            result = subprocess.run(
-                ssh_cmd,
-                input=k8s_install_script,
-                text=True,
-                capture_output=True,
-                timeout=1800  # 30 minutes for K8s install (increased timeout)
-            )
-            
-            if result.returncode != 0:
-                logger.error(f"Kubernetes installation failed: {result.stderr}")
-                return False
-                
-        except subprocess.TimeoutExpired:
-            logger.error("Kubernetes installation timed out")
-            return False
-        
-        # Shutdown VM
-        logger.info("Shutting down VM...")
-        cmd = f"qm shutdown {k8s_template_id}"
-        self.run_ssh_command(cmd)
-        
-        # Wait for shutdown
-        for i in range(30):
-            cmd = f"qm status {k8s_template_id}"
-            returncode, stdout, stderr = self.run_ssh_command(cmd)
-            if 'stopped' in stdout:
-                break
-            time.sleep(2)
-        else:
-            logger.warning("VM didn't shut down cleanly, forcing stop")
-            self.run_ssh_command(f"qm stop {k8s_template_id}")
-        
-        # Convert to template
-        logger.info("Converting to template...")
-        cmd = f"qm template {k8s_template_id}"
-        returncode, stdout, stderr = self.run_ssh_command(cmd)
-        
-        if returncode != 0:
-            logger.error(f"Failed to convert to template: {stderr}")
-            return False
-        
-        logger.info(f"[SUCCESS] Kubernetes template created successfully: {k8s_template_name} (ID: {k8s_template_id})")
-        return True
     
     def test_template(self, template_type: str) -> bool:
         """Test a template by creating and testing a VM."""
@@ -649,27 +488,7 @@ echo "Kubernetes template customization complete"
             logger.error("[FAILED] SSH connectivity test failed")
             return False
         
-        # Test specific functionality based on template type
-        if template_type == 'k8s':
-            # Test Kubernetes components
-            ssh_cmd = [
-                "ssh", "-o", "ConnectTimeout=10",
-                "-o", "StrictHostKeyChecking=no", 
-                "-i", self.ssh_key_path,
-                f"sysadmin@{ip}",
-                "kubectl version --client && kubeadm version && kubelet --version && sudo systemctl is-active containerd"
-            ]
-            
-            try:
-                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
-                if result.returncode == 0:
-                    logger.info("[SUCCESS] Kubernetes components test passed")
-                else:
-                    logger.error(f"[FAILED] Kubernetes components test failed: {result.stderr}")
-                    return False
-            except subprocess.TimeoutExpired:
-                logger.error("[FAILED] Kubernetes components test timed out")
-                return False
+        # Basic functionality test passed with SSH connectivity
         
         # Clean up test VM
         logger.info("Cleaning up test VM...")
@@ -731,7 +550,7 @@ echo "Kubernetes template customization complete"
         
         logger.info("[VERIFYING] Verifying existing templates...")
         
-        for template_type in ['base', 'k8s']:
+        for template_type in ['base']:
             results[template_type] = self.verify_template_config(template_type)
         
         # Summary
@@ -747,7 +566,7 @@ echo "Kubernetes template customization complete"
         return results
     
     def create_templates(self, force: bool = False):
-        """Create both base and Kubernetes templates."""
+        """Create base template."""
         logger.info("[START] Starting template creation process")
         
         if not force:
@@ -761,13 +580,6 @@ echo "Kubernetes template customization complete"
                 if not self.create_base_template():
                     logger.error("Failed to create base template")
                     return False
-            
-            if template_status['k8s']:
-                logger.info("Kubernetes template already exists and is properly configured - skipping")
-            else:
-                if not self.create_k8s_template():
-                    logger.error("Failed to create Kubernetes template")
-                    return False
         else:
             # Force recreation of all templates
             logger.info("Force mode: Recreating all templates")
@@ -776,16 +588,11 @@ echo "Kubernetes template customization complete"
             if not self.create_base_template():
                 logger.error("Failed to create base template")
                 return False
-            
-            # Create Kubernetes template
-            if not self.create_k8s_template():
-                logger.error("Failed to create Kubernetes template")
-                return False
         
         logger.info("[COMPLETE] All templates created successfully!")
         
         # Show final status
-        cmd = "qm list | grep -E '(9000|9001)'"
+        cmd = "qm list | grep -E '(9000)'"
         returncode, stdout, stderr = self.run_ssh_command(cmd)
         if stdout:
             logger.info("Created templates:")
@@ -795,7 +602,7 @@ echo "Kubernetes template customization complete"
         return True
     
     def test_templates(self):
-        """Test both templates."""
+        """Test base template."""
         logger.info("[TESTING] Testing templates")
         
         success = True
@@ -803,11 +610,6 @@ echo "Kubernetes template customization complete"
         # Test base template
         if not self.test_template('base'):
             logger.error("Base template test failed")
-            success = False
-        
-        # Test Kubernetes template
-        if not self.test_template('k8s'):
-            logger.error("Kubernetes template test failed") 
             success = False
         
         if success:
@@ -821,7 +623,7 @@ echo "Kubernetes template customization complete"
         """Clean up all templates and test VMs."""
         logger.info("[CLEANUP] Cleaning up all templates and test VMs")
         
-        vm_ids = [9000, 9001, 8000, 8001, 17000, 17001, 18000, 18001]
+        vm_ids = [9000, 8000, 17000, 18000]
         
         for vm_id in vm_ids:
             if self.check_template_exists(vm_id):
@@ -836,11 +638,11 @@ echo "Kubernetes template customization complete"
         
         # Extended list including more possible template/test VM IDs
         all_vm_ids = [
-            9000, 9001, 9002, 9003, 9004, 9005,  # Main templates
-            8000, 8001, 8002, 8003, 8004, 8005,  # Test VMs  
-            17000, 17001, 17002, 17003,          # Additional test VMs
-            18000, 18001, 18002, 18003,          # More test VMs
-            9998, 9999                           # Recent test VMs
+            9000, 9002, 9003, 9004, 9005,       # Main templates (removed 9001)
+            8000, 8002, 8003, 8004, 8005,       # Test VMs (removed 8001)
+            17000, 17002, 17003,                # Additional test VMs (removed 17001)
+            18000, 18002, 18003,                # More test VMs (removed 18001)
+            9998, 9999                          # Recent test VMs
         ]
         
         logger.info("Scanning for all existing VMs/templates to remove...")
@@ -887,7 +689,7 @@ echo "Cleaned up prepared images and temporary files"
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(
-        description="Kubernetes Cluster Template Manager - Intelligently manages Proxmox VM templates",
+        description="Proxmox Template Manager - Intelligently manages Proxmox VM templates",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 EXAMPLES:
@@ -950,8 +752,8 @@ BEHAVIOR NOTES:
             # Add confirmation prompt for destructive operation
             logger.warning("[WARNING] WARNING: This will remove ALL templates and perform complete cleanup!")
             logger.warning("This includes:")
-            logger.warning("  - All VM templates (9000-9005)")
-            logger.warning("  - All test VMs (8000-8005, 17000-17003, 18000-18003, 9998-9999)")
+            logger.warning("  - All VM templates (9000, 9002-9005)")
+            logger.warning("  - All test VMs (8000, 8002-8005, 17000, 17002-17003, 18000, 18002-18003, 9998-9999)")
             logger.warning("  - All prepared cloud images")
             logger.warning("  - All temporary files and cache")
             
