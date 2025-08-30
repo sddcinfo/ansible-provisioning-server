@@ -250,6 +250,23 @@ Located in `nodes.json`:
 - Hostname assignment
 - Network interface configuration
 
+### Environment Variables
+Several scripts support environment variables for customization:
+- `PROXMOX_ROOT_PASSWORD` - Proxmox root password (default: 'proxmox123')
+- `CLUSTER_NAME` - Proxmox cluster name (default: 'sddc-cluster')  
+- `NODE_CONFIG_FILE` - Path to custom node configuration JSON file
+
+Example usage:
+```bash
+# Set custom password for cluster formation
+export PROXMOX_ROOT_PASSWORD="secure-password"
+python3 scripts/proxmox-form-cluster.py
+
+# Use custom node configuration
+export NODE_CONFIG_FILE="/path/to/custom-nodes.json"
+python3 scripts/cluster-status-summary.py
+```
+
 ### Web Interface Customization
 - Modify templates in `roles/web/templates/`
 - Custom styling in web assets
