@@ -10,15 +10,6 @@ templates:
     memory: 2048
     cores: 2
     disk_size: 32G
-    
-  kubernetes:
-    id: 9001
-    name: ubuntu-k8s-template
-    description: Ubuntu 24.04 with Kubernetes 1.33.4 pre-installed
-    memory: 4096
-    cores: 4
-    disk_size: 32G
-    k8s_version: 1.33.4
 
 # Cloud image configuration
 cloud_image:

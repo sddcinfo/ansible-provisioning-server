@@ -54,7 +54,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 - **High-Performance Networking**: 10Gbit Ceph network with MTU 9000 optimization
 - **Dual Network Links**: Management and Ceph networks for redundancy and performance
 - **Automated Repository Configuration**: Enterprise/community repository management
-- **VM Template Management**: Create and manage Proxmox VM templates for Kubernetes deployments
+- **VM Template Management**: Create and manage Proxmox VM templates
 
 ## Architecture
 
@@ -356,7 +356,7 @@ ping 10.10.2.21  # from any node
 
 ## VM Template Management
 
-The provisioning server includes a template management system for creating Proxmox VM templates optimized for Kubernetes deployments.
+The provisioning server includes a template management system for creating Proxmox VM templates.
 
 ### Initial Setup
 
@@ -373,19 +373,19 @@ nano ~/proxmox-config/templates.yaml
 ### Creating Templates
 
 ```bash
-# Create all templates (base and Kubernetes)
+# Create base template
 python3 scripts/template-manager.py --create-templates
 
-# Verify templates are properly configured
+# Verify template is properly configured
 python3 scripts/template-manager.py --verify
 
-# Test templates by cloning and booting
+# Test template by cloning and booting
 python3 scripts/template-manager.py --test-templates
 
-# Force recreate templates even if they exist
+# Force recreate template even if it exists
 python3 scripts/template-manager.py --create-templates --force
 
-# Clean up all templates
+# Clean up template
 python3 scripts/template-manager.py --remove-all --yes
 ```
 
@@ -393,9 +393,6 @@ python3 scripts/template-manager.py --remove-all --yes
 
 Templates are configured in `~/proxmox-config/templates.yaml` (created by bootstrap script):
 - Template ID 9000: Ubuntu 24.04 base template with cloud-init
-- Template ID 9001: Ubuntu 24.04 with Kubernetes 1.33.4 pre-installed
-
-This shared configuration is used by both ansible-provisioning-server and kubernetes-cluster repositories.
 
 #### Cluster Formation Issues
 ```bash
@@ -414,7 +411,7 @@ tail -f /var/log/proxmox-cluster-formation.log
 ### Scripts
 - `scripts/coordinated-proxmox-reprovision.py` - **NEW**: Complete automated reprovision workflow with monitoring and cluster formation
 - `scripts/enhanced-reprovision-monitor.py` - **NEW**: Monitors reprovision progress and triggers automatic cluster formation  
-- `scripts/template-manager.py` - Manages Proxmox VM templates for Kubernetes deployments
+- `scripts/template-manager.py` - Manages Proxmox VM templates
 - `scripts/proxmox-ceph-setup.py` - Automates Proxmox and Ceph configuration
 - `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed.
 - `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.

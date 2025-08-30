@@ -19,7 +19,7 @@ galaxy_info:
 
   galaxy_tags:
     - networking
-    - kubernetes
+    - proxmox
     - ceph
     - netplan
     - cluster

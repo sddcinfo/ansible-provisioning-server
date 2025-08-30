@@ -69,7 +69,7 @@ python3 enhanced-reprovision-monitor.py /path/to/nodes.json
 13. **Post-Cluster Setup** - Coordinated script detects 'clustered' status and runs `proxmox-ceph-setup.py`
 14. **Ceph Storage** - High-performance Ceph storage configured across all nodes
 15. **Template Creation** - After Ceph completes, runs `template-manager.py --create-templates` 
-16. **VM Templates** - Creates Ubuntu base and Kubernetes-ready VM templates
+16. **VM Templates** - Creates Ubuntu base VM templates
 17. **Timing Summary** - Complete breakdown of time spent in each workflow step
 18. **Workflow Complete** - Full production-ready Proxmox cluster with storage and templates!
 
