@@ -8,6 +8,7 @@ import requests
 import json
 import time
 import sys
+import os
 import logging
 import argparse
 import subprocess
@@ -19,8 +20,8 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
-ROOT_PASSWORD = "proxmox123"
-CLUSTER_NAME = "sddc-cluster"
+ROOT_PASSWORD = os.environ.get('PROXMOX_ROOT_PASSWORD', 'proxmox123')
+CLUSTER_NAME = os.environ.get('CLUSTER_NAME', 'sddc-cluster')
 LOG_FILE = "/tmp/proxmox-cluster-formation.log"
 
 # Node configuration

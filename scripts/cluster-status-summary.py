@@ -6,16 +6,39 @@ Shows current cluster status, configuration, and Ceph storage health
 
 import subprocess
 import sys
+import os
 import json
 import re
 from typing import Dict, Optional
 
-NODES = {
+# Default node configuration - can be overridden with NODE_CONFIG_FILE environment variable
+DEFAULT_NODES = {
     "node1": {"mgmt_ip": "10.10.1.21", "ceph_ip": "10.10.2.21"},
     "node2": {"mgmt_ip": "10.10.1.22", "ceph_ip": "10.10.2.22"},
     "node3": {"mgmt_ip": "10.10.1.23", "ceph_ip": "10.10.2.23"},
     "node4": {"mgmt_ip": "10.10.1.24", "ceph_ip": "10.10.2.24"}
 }
+
+def load_node_config():
+    """Load node configuration from file or use defaults"""
+    config_file = os.environ.get('NODE_CONFIG_FILE')
+    if config_file and os.path.exists(config_file):
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                nodes = {}
+                for node_data in config.get('nodes', []):
+                    hostname = node_data['os_hostname']
+                    nodes[hostname] = {
+                        'mgmt_ip': node_data['os_ip'],
+                        'ceph_ip': node_data['ceph_ip']
+                    }
+                return nodes
+        except Exception as e:
+            print(f"Warning: Failed to load node config from {config_file}: {e}")
+    return DEFAULT_NODES
+
+NODES = load_node_config()
 
 def run_ssh_command(host: str, command: str) -> tuple:
     """Run SSH command and return success, stdout, stderr"""
@@ -181,7 +204,8 @@ def main():
     print("Access Information:")
     print(f"   Web GUI:     https://{primary_ip}:8006")
     print(f"   SSH Access:  ssh root@{primary_ip}")
-    print(f"   Root Password: proxmox123")
+    root_password = os.environ.get('PROXMOX_ROOT_PASSWORD', 'proxmox123')
+    print(f"   Root Password: {root_password}")
     if check_ceph_installed(primary_ip):
         print(f"   Ceph Dashboard: https://{primary_ip}:8443 (if enabled)")
     print()

@@ -417,7 +417,6 @@ tail -f /var/log/proxmox-cluster-formation.log
 - `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.
 - `scripts/reboot-nodes-for-reprovision.py` - Reboots nodes to trigger fresh provisioning
 - `scripts/test-network-config.sh` - Network configuration validation.
-- `scripts/REPROVISION_WORKFLOW.md` - **NEW**: Detailed documentation for the enhanced reprovision workflow
 
 ### APIs
 - `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator.
