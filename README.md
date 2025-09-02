@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Proxmox](https://img.shields.io/badge/Proxmox-9.x-orange.svg)](https://www.proxmox.com/)
-[![Ubuntu](https://img.shields.io/badge/ubuntu-20.04%20%7C%2022.04%20%7C%2024.04-orange.svg)](https://ubuntu.com/)
+[![Ubuntu](https://img.shields.io/badge/ubuntu-24.04%20LTS%20only-orange.svg)](https://ubuntu.com/)
 
 Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9 clusters.
 
@@ -85,7 +85,7 @@ Internet -> WAN (enp1s0) -> NAT -> Provisioning Network (10.10.1.0/24)
 - **Target Nodes**: UEFI boot, network boot capability
 
 ### Software Requirements
-- Ubuntu 24.04 LTS (management server)
+- Ubuntu 24.04 LTS (management server) - **Required**, other versions not supported
 - Ansible >= 2.9
 - Internet connectivity for ISO downloads
 
@@ -98,12 +98,12 @@ Internet -> WAN (enp1s0) -> NAT -> Provisioning Network (10.10.1.0/24)
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/your-org/ansible-provisioning-server.git
+git clone https://github.com/sddcinfo/ansible-provisioning-server.git
 cd ansible-provisioning-server
 ```
 
 ### 2. Configure Network Settings
-Edit `inventory/host_vars/localhost.yml`:
+Edit `group_vars/all/main.yml`:
 ```yaml
 # Network configuration
 external_interface: "enp1s0"  # WAN interface
@@ -131,15 +131,13 @@ Edit `nodes.json`:
 
 ### 4. Deploy Infrastructure
 ```bash
-ansible-playbook -i inventory/hosts site.yml
+ansible-playbook -i inventory site.yml
 ```
 
 ## Ubuntu Server Provisioning
 
 ### Supported Versions
-- Ubuntu 24.04 LTS (default)
-- Ubuntu 22.04 LTS
-- Ubuntu 20.04 LTS
+- Ubuntu 24.04 LTS (only supported version)
 
 ### Node Configuration
 Nodes are configured via the `nodes.json` file with MAC address to IP mapping.
@@ -239,9 +237,10 @@ pvecm add 10.10.1.21 --use_ssh
 ## Configuration
 
 ### Global Settings
-Located in `inventory/group_vars/all.yml`:
+Located in `group_vars/all/main.yml`:
 - Network configuration
 - OS support matrix
+- SSH key settings
 - Security settings
 
 ### Node-Specific Settings  
@@ -285,9 +284,27 @@ Access the web interface at `http://10.10.1.1` (or your configured server IP).
 
 ## SSH Key Management
 
-Initial SSH access to the Proxmox nodes from the management server is configured during the automated installation process. However, the cluster formation and ongoing management are primarily handled through the Proxmox API using `root@pam` authentication.
+The system provides **automated SSH key management** to ensure consistent access across all nodes:
 
-Proxmox automatically manages the SSH keys required for intra-cluster communication (e.g., for migrations). The `proxmox-form-cluster.py` script does not rely on SSH for cluster operations, using it only as an emergency fallback to restart services if a node's API becomes unresponsive.
+### Automatic Key Generation and Deployment
+- SSH keys are automatically generated during ansible deployment if they don't exist
+- Management server's SSH key is automatically embedded in both `nodes.json` and `group_vars/all/main.yml`
+- Keys are deployed to all Proxmox nodes during installation via the answer file
+
+### Key Usage
+- **Initial Access**: SSH keys provide access to nodes after installation
+- **Cluster Operations**: Primarily handled through Proxmox API using `root@pam` authentication  
+- **Emergency Fallback**: SSH is used as fallback if API becomes unresponsive
+- **Inter-node Communication**: Proxmox automatically manages keys for migrations and cluster operations
+
+### Manual Key Verification
+```bash
+# Test SSH connectivity to nodes
+ssh -i ~/.ssh/sysadmin_automation_key root@node1
+
+# Verify key deployment
+ssh root@10.10.1.21 'cat /root/.ssh/authorized_keys'
+```
 
 ## API Endpoints
 
@@ -301,8 +318,8 @@ The provisioning server exposes several API endpoints to facilitate the automate
 
 ### Network Configuration Test
 ```bash
-# Test Proxmox network configuration
-./scripts/test-network-config.sh
+# Test infrastructure validation
+sudo ./verify_provisioning.py
 ```
 
 ### Answer File Validation
@@ -426,14 +443,16 @@ tail -f /var/log/proxmox-cluster-formation.log
 ## File Structure
 
 ### Scripts
-- `scripts/coordinated-proxmox-reprovision.py` - **NEW**: Complete automated reprovision workflow with monitoring and cluster formation
-- `scripts/enhanced-reprovision-monitor.py` - **NEW**: Monitors reprovision progress and triggers automatic cluster formation  
+- `scripts/coordinated-proxmox-reprovision.py` - Complete automated reprovision workflow with monitoring and cluster formation
+- `scripts/enhanced-reprovision-monitor.py` - Monitors reprovision progress and triggers automatic cluster formation  
 - `scripts/template-manager.py` - Manages Proxmox VM templates
 - `scripts/proxmox-ceph-setup.py` - Automates Proxmox and Ceph configuration
-- `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed.
-- `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server.
+- `scripts/proxmox-post-install.sh` - Primary unified installation script that runs on each node after Proxmox is installed
+- `scripts/proxmox-form-cluster.py` - The primary script for forming the Proxmox cluster, run from the management server
 - `scripts/reboot-nodes-for-reprovision.py` - Reboots nodes to trigger fresh provisioning
-- `scripts/test-network-config.sh` - Network configuration validation.
+- `scripts/cluster-status-summary.py` - Displays comprehensive cluster and Ceph status
+- `scripts/verify_proxmox_config.sh` - Validates Proxmox answer file configuration
+- `scripts/update-templates.sh` - Regenerates web templates and tests API endpoints
 
 ### APIs
 - `roles/web/templates/answer.php.j2` - Dynamic Proxmox answer file generator.
@@ -441,9 +460,10 @@ tail -f /var/log/proxmox-cluster-formation.log
 - `roles/web/templates/node-status.php.j2` - Status update API.
 
 ### Configuration
-- `nodes.json` - Node inventory and configuration.
-- `inventory/group_vars/all.yml` - Global configuration.
-- `inventory/host_vars/localhost.yml` - Server-specific settings.
+- `nodes.json` - Node inventory and configuration
+- `group_vars/all/main.yml` - Global configuration and settings
+- `inventory` - Ansible inventory file
+- `verify_provisioning.py` - Infrastructure validation script (generated by ansible)
 
 ### Web Assets
 - `roles/web/templates/index.php.j2` - Main dashboard.
