@@ -35,10 +35,23 @@
     path: "{{ extraction_sentinel_file }}"
   register: sentinel_file_stat
 
+- name: "Ensure provisioning parent directory exists with proper ownership"
+  ansible.builtin.file:
+    path: "/var/www/html/provisioning"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  tags:
+    - foundation
+    - iso_management
+
 - name: "Ensure {{ os_config.name }} provisioning directory exists"
   ansible.builtin.file:
     path: "{{ os_config.provisioning_dir }}"
     state: directory
+    owner: www-data
+    group: www-data
     mode: '0755'
   tags:
     - foundation
@@ -101,6 +114,8 @@
   ansible.builtin.file:
     path: "{{ os_config.provisioning_dir }}/{{ os_config.boot_files.kernel | dirname }}"
     state: directory
+    owner: www-data
+    group: www-data
     mode: '0755'
   when: not sentinel_file_stat.stat.exists
 
@@ -184,6 +199,7 @@
           proxmox-auto-install-assistant prepare-iso \
           --fetch-from http \
           --url "http://{{ provisioning_ip }}/api/answer.php" \
+          --mod-dhcp \
           --output /output/{{ os_config.iso_name }} \
           /input/{{ os_config.iso_name }}
       register: proxmox_prepare_result
@@ -193,6 +209,31 @@
     - name: "Log Proxmox ISO preparation result"
       ansible.builtin.debug:
         msg: "Proxmox auto-installer ISO copied successfully"
+      when: current_os == 'proxmox9' and proxmox_prepare_result.changed
+      
+    - name: "Embed ISO in initrd for PXE boot compatibility"
+      ansible.builtin.shell: |
+        cd /tmp
+        # Create working directory
+        mkdir -p proxmox_initrd_work
+        cd proxmox_initrd_work
+        
+        # Extract current initrd
+        zstd -d < {{ os_config.provisioning_dir }}/boot/initrd.img > initrd.cpio
+        cpio -i -d < initrd.cpio 2>/dev/null
+        
+        # Embed the prepared ISO as proxmox.iso
+        cp {{ os_config.provisioning_dir }}/{{ os_config.iso_name }} ./proxmox.iso
+        
+        # Recompress initrd with embedded ISO
+        find . | cpio -o -H newc | zstd -5 > new_initrd.img
+        
+        # Replace original initrd
+        cp new_initrd.img {{ os_config.provisioning_dir }}/boot/initrd.img
+        
+        # Cleanup
+        cd ..
+        rm -rf proxmox_initrd_work
       when: current_os == 'proxmox9' and proxmox_prepare_result.changed
       
     - name: "Copy other OS ISOs directly (non-Proxmox)"
@@ -208,10 +249,20 @@
     - expensive
     - iso_management
 
+- name: "Fix ownership of all {{ os_config.name }} provisioning files"
+  ansible.builtin.file:
+    path: "{{ os_config.provisioning_dir }}"
+    owner: www-data
+    group: www-data
+    recurse: yes
+  when: not sentinel_file_stat.stat.exists
+
 - name: "Create sentinel file to mark {{ os_config.name }} extraction as complete"
   ansible.builtin.file:
     path: "{{ extraction_sentinel_file }}"
     state: touch
+    owner: www-data
+    group: www-data
     mode: '0644'
   when: not sentinel_file_stat.stat.exists
 
@@ -220,7 +271,7 @@
     - name: "Unmount {{ os_config.name }} ISO"
       ansible.posix.mount:
         path: "{{ os_config.iso_mount_point }}"
-        state: unmounted
+        state: absent
       register: unmount_result
       
     - name: "Wait for {{ os_config.name }} unmount to complete"

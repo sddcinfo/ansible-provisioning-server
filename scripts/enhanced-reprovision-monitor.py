@@ -36,9 +36,90 @@ class ReprovisionMonitor:
         self.check_interval = 30  # seconds
         self.timeout_minutes = 45  # timeout for individual node reprovision
         
+    def initialize_nodes_data_from_config(self):
+        """Initialize registered-nodes.json from nodes.json if it doesn't exist"""
+        nodes_config_file = '/var/www/html/nodes.json'
+        
+        if os.path.exists(self.nodes_file):
+            return  # File already exists, no need to initialize
+            
+        if not os.path.exists(nodes_config_file):
+            logging.warning(f"Neither {self.nodes_file} nor {nodes_config_file} exists")
+            return
+            
+        try:
+            # Load nodes.json configuration
+            with open(nodes_config_file, 'r') as f:
+                config = json.load(f)
+            
+            # Create registered-nodes structure
+            registered_nodes = {}
+            
+            if 'nodes' in config and isinstance(config['nodes'], list):
+                for node in config['nodes']:
+                    if isinstance(node, dict) and 'os_hostname' in node:
+                        hostname = node['os_hostname']
+                        registered_nodes[hostname] = {
+                            'hostname': hostname,
+                            'ip': node.get('os_ip', ''),
+                            'mac': node.get('os_mac', ''),
+                            'console_ip': node.get('console_ip', ''),
+                            'console_mac': node.get('console_mac', ''),
+                            'ceph_ip': node.get('ceph_ip', ''),
+                            'status': 'pending_reprovision',
+                            'registered_at': '',
+                            'reprovision_status': None,
+                            'reprovision_started': None,
+                            'reprovision_completed': None
+                        }
+            
+            if registered_nodes:
+                try:
+                    # Ensure directory exists
+                    os.makedirs(os.path.dirname(self.nodes_file), exist_ok=True)
+                    
+                    # Write the initial registered-nodes.json
+                    with open(self.nodes_file, 'w') as f:
+                        json.dump(registered_nodes, f, indent=2)
+                    
+                    logging.info(f"Monitor: Created initial {self.nodes_file} with {len(registered_nodes)} nodes from {nodes_config_file}")
+                except PermissionError:
+                    # Try with sudo if permission denied
+                    import tempfile
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_f:
+                        json.dump(registered_nodes, tmp_f, indent=2)
+                        tmp_path = tmp_f.name
+                    
+                    try:
+                        # Ensure directory exists with sudo
+                        subprocess.run(['sudo', 'mkdir', '-p', os.path.dirname(self.nodes_file)], check=True)
+                        # Copy temp file to destination with sudo
+                        subprocess.run(['sudo', 'cp', tmp_path, self.nodes_file], check=True)
+                        # Set proper permissions
+                        subprocess.run(['sudo', 'chown', 'www-data:www-data', self.nodes_file], check=True)
+                        subprocess.run(['sudo', 'chmod', '664', self.nodes_file], check=True)
+                        
+                        logging.info(f"Monitor: Created initial {self.nodes_file} with {len(registered_nodes)} nodes from {nodes_config_file} (using sudo)")
+                    except subprocess.CalledProcessError as e:
+                        logging.error(f"Monitor: Failed to create {self.nodes_file} even with sudo: {e}")
+                    finally:
+                        # Clean up temp file
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+            else:
+                logging.warning(f"Monitor: No valid nodes found in {nodes_config_file}")
+                
+        except Exception as e:
+            logging.error(f"Monitor: Failed to initialize nodes data from config: {e}")
+        
     def load_nodes(self) -> Dict:
         """Load nodes data from JSON file"""
         try:
+            # Initialize from nodes.json if registered-nodes.json doesn't exist
+            self.initialize_nodes_data_from_config()
+            
             with open(self.nodes_file, 'r') as f:
                 return json.load(f)
         except Exception as e:
@@ -232,11 +313,8 @@ def main():
     
     nodes_file = sys.argv[1] if len(sys.argv) > 1 else '/var/www/html/data/registered-nodes.json'
     
-    if not os.path.exists(nodes_file):
-        logging.error(f"Nodes file not found: {nodes_file}")
-        sys.exit(1)
-    
     monitor = ReprovisionMonitor(nodes_file)
+    # The monitor will initialize the nodes file from nodes.json if needed
     monitor.monitor_loop()
 
 if __name__ == '__main__':

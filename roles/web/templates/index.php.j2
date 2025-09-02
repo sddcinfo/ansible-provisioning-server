@@ -300,11 +300,23 @@ function update_registered_node_status(string $mac, string $status, array $addit
 }
 
 function handle_reprovision_request(): void {
+    global $os_configs;
     $mac = strtolower($_GET['mac'] ?? '');
+    $os_type = $_GET['os_type'] ?? '';
+    
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
         echo "Invalid or missing MAC address.";
         return;
+    }
+    
+    // Set OS type if provided and valid
+    if (!empty($os_type)) {
+        if (isset($os_configs[$os_type])) {
+            set_os_type($mac, $os_type);
+        } else {
+            error_log("Invalid OS type provided for reprovision: {$os_type}");
+        }
     }
     
     // Update status in state file

@@ -130,7 +130,7 @@
 
 - name: Restart sshd when configuration changes
   service:
-    name: sshd
+    name: ssh
     state: restarted
   when: sshd_config_changed.changed
   tags:

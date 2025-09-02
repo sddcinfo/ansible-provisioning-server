@@ -159,13 +159,33 @@
     - permissions
     - foundation
 
-- name: Copy nodes.json to the web root
-  copy:
-    src: "{{ playbook_dir }}/nodes.json"
-    dest: "/var/www/html/nodes.json"
-    owner: www-data
-    group: www-data
-    mode: '0644'
+- name: Read management server's SSH public key
+  slurp:
+    src: /home/sysadmin/.ssh/sysadmin_automation_key.pub
+  register: management_ssh_public_key
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
+- name: Load nodes.json and update SSH key
+  block:
+    - name: Read nodes.json file
+      slurp:
+        src: "{{ playbook_dir }}/nodes.json"
+      register: nodes_json_raw
+      
+    - name: Parse and update nodes.json with management server's SSH key
+      set_fact:
+        nodes_json_updated: "{{ nodes_json_raw.content | b64decode | from_json | combine({'ssh_keys': {'root': management_ssh_public_key.content | b64decode | trim}}, recursive=true) }}"
+      
+    - name: Deploy updated nodes.json to web root
+      copy:
+        content: "{{ nodes_json_updated | to_nice_json }}"
+        dest: "/var/www/html/nodes.json"
+        owner: www-data
+        group: www-data
+        mode: '0644'
   tags:
     - web_config
     - templates
@@ -467,10 +487,18 @@
     state: directory
     owner: www-data
     group: www-data
-    mode: "0755"
+    mode: "0775"
   tags:
     - web_config
     - web_files_only
+
+- name: Add sysadmin user to www-data group for data directory access
+  user:
+    name: sysadmin
+    groups: www-data
+    append: yes
+  tags:
+    - web_config
 
 - name: Create logs directory for API logs
   file:

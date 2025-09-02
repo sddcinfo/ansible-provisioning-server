@@ -150,7 +150,7 @@ class NodeReprovisioner:
         """Reset node status via provisioning API with retry logic"""
         self.log(f"Resetting provisioning status for {node_name} via API...")
         
-        api_url = f"{self.provisioning_api_url}?action=reprovision&mac={node_mac}"
+        api_url = f"{self.provisioning_api_url}?action=reprovision&mac={node_mac}&os_type=proxmox9"
         
         for attempt in range(1, 4):
             try:
@@ -166,6 +166,31 @@ class NodeReprovisioner:
         self.log(f"[FAIL] All API call attempts failed for {node_name}", Colors.RED)
         return False
     
+    def try_ssh_command(self, node_ip: str, command: str, timeout: int = 15) -> Tuple[bool, str, str]:
+        """Try SSH command with both root and sysadmin users with enhanced timeout handling"""
+        # Try root first with shorter timeout for faster failover
+        ssh_cmd_root = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", command]
+        success, stdout, stderr = self.run_command(ssh_cmd_root, timeout=min(timeout, 10))
+        
+        if success:
+            return success, stdout, stderr
+        
+        # Log the root failure for debugging
+        if "timed out" in stderr.lower():
+            self.log(f"SSH to root@{node_ip} timed out, trying sysadmin", Colors.YELLOW)
+        elif stderr:
+            self.log(f"SSH to root@{node_ip} failed: {stderr.strip()}", Colors.YELLOW)
+        
+        # If root fails, try sysadmin with sudo
+        sudo_command = f"sudo {command}" if not command.startswith('sudo') else command
+        ssh_cmd_sysadmin = ["ssh"] + self.ssh_opts + [f"sysadmin@{node_ip}", sudo_command]
+        success2, stdout2, stderr2 = self.run_command(ssh_cmd_sysadmin, timeout=timeout)
+        
+        if not success2 and "timed out" in stderr2.lower():
+            self.log(f"SSH to sysadmin@{node_ip} also timed out", Colors.YELLOW)
+        
+        return success2, stdout2, stderr2
+
     def check_node_accessibility(self, node_name: str, node_ip: str) -> AccessibilityStatus:
         """Check if a node is accessible via ping and SSH"""
         self.log(f"Testing accessibility of {node_name} ({node_ip})...")
@@ -177,8 +202,7 @@ class NodeReprovisioner:
             self.log(f"[OK] {node_name} responds to ping", Colors.GREEN)
             
             # Test SSH connectivity
-            ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", "echo 'SSH connection test'"]
-            ssh_success, _, _ = self.run_command(ssh_cmd, timeout=8)
+            ssh_success, _, _ = self.try_ssh_command(node_ip, "echo 'SSH connection test'", timeout=8)
             
             if ssh_success:
                 self.log(f"[OK] SSH connectivity verified for {node_name}", Colors.GREEN)
@@ -204,8 +228,7 @@ class NodeReprovisioner:
             
             for boot_entry in boot_entries:
                 self.log(f"Trying boot entry {boot_entry} on {node_name}...")
-                ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", f"efibootmgr -n {boot_entry}"]
-                success, stdout, stderr = self.run_command(ssh_cmd, timeout=15)
+                success, stdout, stderr = self.try_ssh_command(node_ip, f"efibootmgr -n {boot_entry}", timeout=15)
                 
                 if success:
                     self.log(f"[OK] EFI boot entry ({boot_entry}) set for {node_name}", Colors.GREEN)
@@ -235,8 +258,7 @@ class NodeReprovisioner:
             
             for cmd, description in reboot_commands:
                 self.log(f"Trying {description.lower()} on {node_name}...")
-                ssh_cmd = ["ssh"] + self.ssh_opts + [f"root@{node_ip}", cmd]
-                success, stdout, stderr = self.run_command(ssh_cmd, timeout=12)
+                success, stdout, stderr = self.try_ssh_command(node_ip, cmd, timeout=12)
                 
                 if success:
                     self.log(f"[OK] {description} command sent to {node_name}", Colors.GREEN)
@@ -257,8 +279,8 @@ class NodeReprovisioner:
         # Step 1: Reset provisioning status via API
         self.log("Step 1: Resetting provisioning status via API...")
         if not self.reset_node_status(node_name, node.os_mac, node.os_ip):
-            self.log(f"[FAIL] Could not reset API status for {node_name}", Colors.RED)
-            return False
+            self.log(f"[WARNING] Could not reset API status for {node_name}, continuing anyway", Colors.YELLOW)
+            # Don't return False - continue with SSH operations
         
         # Step 2: Check node accessibility
         self.log(f"Step 2: Checking accessibility of {node_name}...")
@@ -278,8 +300,8 @@ class NodeReprovisioner:
         # Step 4: Reboot the node
         self.log(f"Step 4: Rebooting {node_name}...")
         if not self.reboot_node(node_name, node.os_ip):
-            self.log(f"[FAIL] Failed to reboot {node_name}", Colors.RED)
-            return False
+            self.log(f"[WARNING] Failed to reboot {node_name} via SSH, may need manual reboot", Colors.YELLOW)
+            # Don't return False - the node might still boot from PXE if it was set
         
         duration = int(time.time() - start_time)
         self.log(f"[SUCCESS] {node_name} processed successfully (took {duration}s)", Colors.GREEN)
