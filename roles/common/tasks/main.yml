@@ -101,6 +101,15 @@
   tags:
     - ssh_setup
 
+- name: Update SSH key in group_vars/all/main.yml
+  ansible.builtin.replace:
+    path: "{{ playbook_dir }}/group_vars/all/main.yml"
+    regexp: '^sysadmin_pub_key:\s+"ssh-ed25519\s+[A-Za-z0-9+/]+=*\s+.*"$'
+    replace: 'sysadmin_pub_key: "{{ sysadmin_pub_key | trim }}"'
+  delegate_to: localhost
+  tags:
+    - ssh_setup
+
 - name: Authorize new sysadmin key for local sysadmin user
   ansible.posix.authorized_key:
     user: sysadmin
