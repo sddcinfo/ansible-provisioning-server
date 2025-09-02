@@ -83,26 +83,54 @@ class ProxmoxTemplateManager:
         self.cloud_image_file = "ubuntu-24.04-cloud.img"
     
     def load_config(self, config_file):
-        """Load configuration from YAML file."""
-        if config_file is None:
-            # Try multiple possible locations
-            possible_paths = [
-                Path.home() / 'proxmox-config' / 'templates.yaml',
-                Path(__file__).parent.parent / 'config' / 'templates.yaml',
-                Path.home() / '.config' / 'proxmox-templates.yaml'
-            ]
-            
-            for path in possible_paths:
-                if path.exists():
-                    config_file = path
-                    logger.info(f"Using config file: {config_file}")
-                    break
-            else:
-                raise FileNotFoundError("No template configuration file found. Expected locations:\n" + 
-                                      "\n".join(str(p) for p in possible_paths))
+        """Load configuration from existing project files."""
+        if config_file is not None:
+            # Use provided config file
+            with open(config_file, 'r') as f:
+                return yaml.safe_load(f)
         
-        with open(config_file, 'r') as f:
-            return yaml.safe_load(f)
+        # Use self-contained configuration from existing project files
+        logger.info("Using self-contained configuration from project files")
+        
+        # Load nodes.json to get node information
+        nodes_file = Path(__file__).parent.parent / 'nodes.json'
+        primary_node_ip = "10.10.1.21"  # Default fallback
+        
+        if nodes_file.exists():
+            with open(nodes_file, 'r') as f:
+                nodes_data = json.load(f)
+                # Get first node's IP as Proxmox host
+                if 'nodes' in nodes_data and nodes_data['nodes']:
+                    primary_node_ip = nodes_data['nodes'][0].get('os_ip', primary_node_ip)
+        
+        # Return self-contained configuration
+        return {
+            'templates': {
+                'base': {
+                    'id': 9000,
+                    'name': 'ubuntu-base-template',
+                    'description': 'Ubuntu 24.04 Base Template - qemu-agent + cloud-init',
+                    'memory': 2048,
+                    'cores': 2
+                }
+            },
+            'cloud_image': {
+                'url': 'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img',
+                'japan_mirror': 'https://ftp.riken.jp/Linux/ubuntu-releases',
+                'japan_cloud_url': 'http://cloud-images.ubuntu.com.edgecastcdn.net/noble/current/noble-server-cloudimg-amd64.img',
+                'cached_path': '/mnt/rbd-iso/template/images/ubuntu-24.04-cloudimg-cached.img'
+            },
+            'ssh': {
+                'key_path': '/home/sysadmin/.ssh/sysadmin_automation_key',
+                'public_key_path': '/home/sysadmin/.ssh/sysadmin_automation_key.pub',
+                'user': 'sysadmin'
+            },
+            'proxmox': {
+                'host': primary_node_ip,
+                'storage': 'local-lvm',
+                'bridge': 'vmbr0'
+            }
+        }
     
     def run_ssh_command(self, command: str, timeout: int = 300) -> Tuple[int, str, str]:
         """Execute SSH command on Proxmox host."""

@@ -394,15 +394,7 @@ The provisioning server includes a template management system for creating Proxm
 
 ### Initial Setup
 
-Before creating templates, set up the configuration:
-
-```bash
-# Setup shared configuration (creates ~/proxmox-config/templates.yaml)
-./scripts/bootstrap-config.sh
-
-# Customize the configuration as needed
-nano ~/proxmox-config/templates.yaml
-```
+The template manager is now self-contained and uses existing project configuration automatically. No additional setup required!
 
 ### Creating Templates
 
@@ -425,8 +417,11 @@ python3 scripts/template-manager.py --remove-all --yes
 
 ### Template Configuration
 
-Templates are configured in `~/proxmox-config/templates.yaml` (created by bootstrap script):
-- Template ID 9000: Ubuntu 24.04 base template with cloud-init
+Templates use self-contained configuration:
+- **Template ID 9000**: Ubuntu 24.04 base template with cloud-init and qemu-agent
+- **Host Detection**: Automatically uses first node from nodes.json as Proxmox host
+- **SSH Keys**: Uses existing sysadmin_automation_key for access
+- **Custom Config**: Optional ~/proxmox-config/templates.yaml can override defaults
 
 #### Cluster Formation Issues
 ```bash
