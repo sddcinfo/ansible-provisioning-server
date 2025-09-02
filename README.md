@@ -308,7 +308,7 @@ The provisioning server exposes several API endpoints to facilitate the automate
 ### Answer File Validation
 ```bash  
 # Validate Proxmox answer file syntax
-./verify_proxmox_config.sh node1
+./scripts/verify_proxmox_config.sh node1
 ```
 
 ### SSH Connectivity Test
