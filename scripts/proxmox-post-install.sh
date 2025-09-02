@@ -178,7 +178,6 @@ install_packages() {
         chrony \
         zfsutils-linux \
         ceph-common \
-        fail2ban \
         libguestfs-tools \
         pve-edk2-firmware \
         proxmox-backup-client
@@ -444,27 +443,7 @@ EOF
     log "Firewall rules configured"
 fi
 
-# Configure fail2ban for security hardening
-log "Configuring fail2ban..."
-cat > /etc/fail2ban/filter.d/proxmox.conf <<EOF
-[Definition]
-failregex = pvedaemon[.*authentication failure; rhost=<HOST> user=.* msg=.*
-ignoreregex =
-EOF
-
-cat > /etc/fail2ban/jail.d/proxmox.conf <<EOF
-[proxmox]
-enabled = true
-port = 8006
-filter = proxmox
-logpath = /var/log/daemon.log
-maxretry = 3
-bantime = 3600
-findtime = 600
-EOF
-
-systemctl enable --now fail2ban
-log "fail2ban configured and started"
+# fail2ban removed - can interfere with cluster communication
 
 # 9. Install Monitoring
 log "Step 9: Setting up monitoring (optional)..."
