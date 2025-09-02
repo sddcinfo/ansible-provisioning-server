@@ -64,15 +64,6 @@
     - expensive
     - iso_download
 
-- name: "Use original Proxmox ISO for PXE extraction (not unattended ISO)"
-  copy:
-    src: "{{ playbook_dir }}/../iso_builder/input/proxmox-ve_9.0-1.iso"
-    dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
-    remote_src: yes
-  when: 
-    - not sentinel_file_stat.stat.exists
-    - current_os == 'proxmox9'
-
 - name: "Ensure {{ os_config.name }} ISO mount point exists"
   ansible.builtin.file:
     path: "{{ os_config.iso_mount_point }}"
