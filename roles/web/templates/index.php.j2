@@ -408,9 +408,10 @@ function handle_reboot_request(): void {
         return;
     }
     
-    // Execute redfish script via secure wrapper for reboot
+    // Execute redfish script directly for reboot
     $command = sprintf(
-        'sudo /usr/local/bin/redfish-web-wrapper.sh %s power-reboot --json 2>&1',
+        'python3 %s %s power-reboot --json 2>&1',
+        escapeshellarg(__DIR__ . '/redfish.py'),
         escapeshellarg($hostname)
     );
     
@@ -466,9 +467,10 @@ function handle_boot_to_bios_request(): void {
         return;
     }
     
-    // Execute redfish script via secure wrapper
+    // Execute redfish script directly
     $command = sprintf(
-        'sudo /usr/local/bin/redfish-web-wrapper.sh %s set-boot-to-bios --json 2>&1',
+        'python3 %s %s set-boot-to-bios --json 2>&1',
+        escapeshellarg(__DIR__ . '/redfish.py'),
         escapeshellarg($hostname)
     );
     

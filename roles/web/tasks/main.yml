@@ -476,6 +476,18 @@
     - templates
     - web_files_only
 
+- name: Deploy console_direct.php for BMC console access
+  template:
+    src: console_direct.php.j2
+    dest: "{{ nginx_web_root }}/console_direct.php"
+    owner: www-data
+    group: www-data
+    mode: "0644"
+  tags:
+    - web_config
+    - templates
+    - web_files_only
+
 # SSH key APIs removed - SSH keys are now managed via answer file during installation
 # and Proxmox automatically manages cluster SSH keys
 
@@ -523,6 +535,18 @@
     - templates
     - foundation
     - permissions
+
+- name: Copy redfish credentials to web directory
+  copy:
+    src: /home/sysadmin/.redfish_credentials
+    dest: /var/www/html/.redfish_credentials
+    owner: www-data
+    group: www-data
+    mode: "0600"
+  tags:
+    - web_config
+    - credentials
+    - web_files_only
 
 - name: Deploy redfish script for web interface
   template:

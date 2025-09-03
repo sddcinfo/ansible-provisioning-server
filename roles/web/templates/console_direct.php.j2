@@ -1,0 +1,130 @@
+<?php
+// Direct BMC Console Launcher - Single click to console
+require_once __DIR__ . '/lib/nodes.php';
+
+function get_redfish_credentials() {
+    $credentials_file = __DIR__ . '/.redfish_credentials';
+    if (!file_exists($credentials_file)) {
+        error_log("Credentials file not found at $credentials_file");
+        return ['admin', 'VMware1!']; // fallback
+    }
+    
+    $content = trim(file_get_contents($credentials_file));
+    if (preg_match('/REDFISH_AUTH="([^"]+)"/', $content, $matches)) {
+        $auth_string = $matches[1];
+        $parts = explode(':', $auth_string, 2);
+        return count($parts) == 2 ? $parts : ['admin', 'VMware1!'];
+    }
+    
+    return ['admin', 'VMware1!']; // fallback
+}
+
+$node_param = $_GET['node'] ?? null;
+
+if (!$node_param) {
+    die('Node parameter required.');
+}
+
+$node_index = intval($node_param) - 1;
+$nodes_data = get_nodes_data();
+
+if (!isset($nodes_data[$node_index])) {
+    die('Invalid node index.');
+}
+
+$node = $nodes_data[$node_index];
+$console_host = $node['hostname'] . '.sddc.info';
+list($username, $password) = get_redfish_credentials();
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Opening Console...</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #1a1a1a; color: #ecf0f1; text-align: center; padding: 50px; }
+        .container { max-width: 400px; margin: 0 auto; background: #2c3e50; padding: 30px; border-radius: 10px; }
+        .status { color: #3498db; font-size: 18px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Opening Console</h2>
+        <div class="status" id="status">Launching BMC console...</div>
+    </div>
+
+    <script>
+        const consoleHost = '<?php echo $console_host; ?>';
+        let bmcTab = null;
+
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+
+        // Immediately start the process
+        window.onload = function() {
+            updateStatus('Opening BMC...');
+            
+            // Step 1: Open BMC
+            bmcTab = window.open(
+                `https://${consoleHost}/`,
+                'bmcMainPage_<?php echo $node_index; ?>',
+                'width=1000,height=700'
+            );
+            
+            if (!bmcTab) {
+                updateStatus('Popup blocked! Please allow popups.');
+                return;
+            }
+            
+            // Step 2: Authenticate
+            setTimeout(() => {
+                updateStatus('Authenticating...');
+                
+                const loginForm = document.createElement('form');
+                loginForm.method = 'POST';
+                loginForm.action = `https://${consoleHost}/cgi/login.cgi`;
+                loginForm.target = 'bmcMainPage_<?php echo $node_index; ?>';
+                loginForm.style.display = 'none';
+                
+                const nameInput = document.createElement('input');
+                nameInput.type = 'hidden';
+                nameInput.name = 'name';
+                nameInput.value = '<?php echo htmlspecialchars($username, ENT_QUOTES); ?>';
+                loginForm.appendChild(nameInput);
+                
+                const pwdInput = document.createElement('input');
+                pwdInput.type = 'hidden';
+                pwdInput.name = 'pwd';
+                pwdInput.value = '<?php echo htmlspecialchars($password, ENT_QUOTES); ?>';
+                loginForm.appendChild(pwdInput);
+                
+                document.body.appendChild(loginForm);
+                loginForm.submit();
+                document.body.removeChild(loginForm);
+                
+                // Step 3: Open console
+                setTimeout(() => {
+                    updateStatus('Opening console...');
+                    
+                    const consoleWindow = window.open(
+                        `https://${consoleHost}/cgi/url_redirect.cgi?url_name=man_ikvm_html5_bootstrap`,
+                        'bmcConsole_<?php echo $node_index; ?>',
+                        'width=1200,height=800'
+                    );
+                    
+                    if (consoleWindow) {
+                        updateStatus('Console opened! You can close this window.');
+                        // Auto-close this launcher window after a delay
+                        setTimeout(() => {
+                            window.close();
+                        }, 3000);
+                    } else {
+                        updateStatus('Console popup blocked. Check the BMC tab.');
+                    }
+                }, 4000);
+            }, 2000);
+        };
+    </script>
+</body>
+</html>

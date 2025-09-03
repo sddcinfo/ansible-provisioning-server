@@ -9,7 +9,7 @@ import base64
 
 # --- Configuration ---
 NODES_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'nodes.json')
-CREDENTIALS_FILE = os.path.expanduser("~/.redfish_credentials")
+CREDENTIALS_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), '.redfish_credentials')
 
 def get_node_ip(node_name):
     """Finds the IP address for a given node hostname."""
