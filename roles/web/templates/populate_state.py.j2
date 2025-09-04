@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""
+Populate state.json with entries from nodes.json
+This script pre-populates the provisioning state file with node entries
+so they appear in the web interface before any hardware boots.
+"""
+
+import json
+import os
+from datetime import datetime
+
+def main():
+    # File paths
+    nodes_file = '/var/www/html/nodes.json'
+    state_file = '/var/www/html/state.json'
+    
+    # Check if nodes.json exists
+    if not os.path.exists(nodes_file):
+        print(f"Error: {nodes_file} not found")
+        return 1
+    
+    # Read nodes.json
+    try:
+        with open(nodes_file, 'r') as f:
+            nodes_data = json.load(f)
+    except Exception as e:
+        print(f"Error reading {nodes_file}: {e}")
+        return 1
+    
+    # Extract nodes array
+    if 'nodes' not in nodes_data:
+        print(f"Error: No 'nodes' array found in {nodes_file}")
+        return 1
+    
+    nodes = nodes_data['nodes']
+    
+    # Read existing state.json if it exists
+    existing_state = {}
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r') as f:
+                existing_state = json.load(f)
+        except Exception as e:
+            print(f"Warning: Could not read existing {state_file}: {e}")
+            existing_state = {}
+    
+    # Build new state entries
+    new_entries = 0
+    updated_entries = 0
+    timestamp = datetime.now().isoformat()
+    
+    for node in nodes:
+        # Process OS MAC addresses (these are what get provisioned)
+        if 'os_mac' in node:
+            mac = node['os_mac'].lower()
+            
+            if mac in existing_state:
+                print(f"Entry already exists for {mac} ({node.get('os_hostname', 'unknown')})")
+                updated_entries += 1
+                # Update timestamp but preserve existing status and os_type
+                existing_state[mac]['timestamp'] = timestamp
+            else:
+                # Create new entry with NEW status
+                existing_state[mac] = {
+                    'status': 'NEW',
+                    'os_type': 'ubuntu2404',  # Default OS type
+                    'timestamp': timestamp
+                }
+                print(f"Added new entry for {mac} ({node.get('os_hostname', 'unknown')})")
+                new_entries += 1
+        
+        # Also process legacy 'mac' field if present
+        if 'mac' in node and node['mac'] != node.get('os_mac', ''):
+            mac = node['mac'].lower()
+            
+            if mac in existing_state:
+                print(f"Legacy entry already exists for {mac}")
+                updated_entries += 1
+                existing_state[mac]['timestamp'] = timestamp
+            else:
+                existing_state[mac] = {
+                    'status': 'NEW',
+                    'os_type': 'ubuntu2404',
+                    'timestamp': timestamp
+                }
+                print(f"Added legacy entry for {mac}")
+                new_entries += 1
+    
+    # Write updated state.json
+    try:
+        with open(state_file, 'w') as f:
+            json.dump(existing_state, f, indent=2)
+        
+        # Set proper permissions (readable by www-data)
+        os.chmod(state_file, 0o644)
+        
+        print(f"\nSummary:")
+        print(f"- New entries created: {new_entries}")
+        print(f"- Existing entries updated: {updated_entries}")
+        print(f"- Total entries in state.json: {len(existing_state)}")
+        print(f"- State file updated: {state_file}")
+        
+    except Exception as e:
+        print(f"Error writing {state_file}: {e}")
+        return 1
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())

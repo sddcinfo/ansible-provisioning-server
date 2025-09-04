@@ -61,7 +61,7 @@ provisioning_bridge: "br-prov"
 
 # Default credentials and SSH key
 sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
-sysadmin_pub_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBPbeRtQyzxsbG8ZeU876mWnA0zVuNrTBAYFOl8YqjH6 root@mgmt"
+sysadmin_pub_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICoKMMr8jyuPS+aTSjePg7kGCujbIDwC9XyjmTHKPwJo root@mgmt"
 
 # Server configuration
 server_ip: "{{ provisioning_ip }}"

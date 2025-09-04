@@ -476,17 +476,6 @@
     - templates
     - web_files_only
 
-- name: Deploy console_direct.php for BMC console access
-  template:
-    src: console_direct.php.j2
-    dest: "{{ nginx_web_root }}/console_direct.php"
-    owner: www-data
-    group: www-data
-    mode: "0644"
-  tags:
-    - web_config
-    - templates
-    - web_files_only
 
 # SSH key APIs removed - SSH keys are now managed via answer file during installation
 # and Proxmox automatically manages cluster SSH keys

@@ -548,6 +548,7 @@ function handle_status_request(): void {
             <table class="table table-bordered table-striped table-hover">
                 <thead class="table-dark">
                     <tr>
+                        <th>Node</th>
                         <th>MAC Address</th>
                         <th>OS Type</th>
                         <th>Status</th>
@@ -557,10 +558,15 @@ function handle_status_request(): void {
                 </thead>
                 <tbody>
                     <?php if (empty($db)): ?>
-                        <tr><td colspan="5" class="text-center">No systems have been provisioned yet.</td></tr>
+                        <tr><td colspan="6" class="text-center">No systems have been provisioned yet.</td></tr>
                     <?php else: ?>
                         <?php foreach ($db as $mac => $data): ?>
+                            <?php
+                                $node = get_node_by_mac($mac);
+                                $node_name = $node ? ($node['os_hostname'] ?? $node['hostname'] ?? 'Unknown') : 'Unknown';
+                            ?>
                             <tr>
+                                <td><span class="badge bg-secondary"><?php echo htmlspecialchars($node_name); ?></span></td>
                                 <td><?php echo htmlspecialchars($mac); ?></td>
                                 <td>
                                     <select class="form-select form-select-sm" onchange="setOsType('<?php echo $mac; ?>', this.value)">
@@ -586,6 +592,9 @@ function handle_status_request(): void {
                                     <?php endif; ?>
                                     <button class="btn btn-warning btn-sm" onclick="bootToBios('<?php echo $mac; ?>', this)" title="Set server to boot into BIOS setup on next restart">
                                         Boot to BIOS
+                                    </button>
+                                    <button class="btn btn-success btn-sm" onclick="openConsole('<?php echo $mac; ?>')" title="Open BMC console (1 click)">
+                                        Console
                                     </button>
                                     <button class="btn btn-info btn-sm" onclick="rebootServer('<?php echo $mac; ?>', this)" title="Gracefully restart the server">
                                         Reboot
@@ -741,6 +750,112 @@ function handle_status_request(): void {
                 button.innerHTML = originalText;
                 button.disabled = false;
             }
+        }
+        
+        function openConsole(mac) {
+            console.log(`Console: Starting integrated console for MAC ${mac}`);
+            
+            // Get node info from the current row
+            const nodeRow = event.target.closest('tr');
+            const nodeNameCell = nodeRow.querySelector('td:first-child .badge');
+            const nodeName = nodeNameCell ? nodeNameCell.textContent.trim() : 'unknown';
+            
+            // Use the correct console hostname pattern: console-nodename.sddc.info
+            const consoleHost = `console-${nodeName}.sddc.info`;
+            // Create unique window identifiers using node name and MAC
+            const windowSuffix = `${nodeName}_${btoa(mac).replace(/[^a-zA-Z0-9]/g, '').substring(0, 8)}`;
+            
+            console.log(`Console: Target host: ${consoleHost}`);
+            
+            // Step 1: Open BMC main page directly (this will be our session holder)
+            const bmcMainWindow = window.open(
+                `https://${consoleHost}/`,
+                `bmcMain_${windowSuffix}`,
+                'width=1000,height=700,menubar=yes,toolbar=yes,status=yes,scrollbars=yes,resizable=yes'
+            );
+            
+            if (!bmcMainWindow) {
+                alert('Popup blocked! Please allow popups for console access.');
+                return;
+            }
+            
+            console.log('Console: BMC main window opened');
+            
+            // Step 2: Authenticate via form submission after BMC page loads
+            setTimeout(() => {
+                console.log('Console: Submitting authentication...');
+                
+                // Read credentials from filesystem - no hardcoded fallbacks
+                <?php
+                    $credentials_file = __DIR__ . "/.redfish_credentials";
+                    $bmcUsername = '';
+                    $bmcPassword = '';
+                    
+                    if (file_exists($credentials_file)) {
+                        $content = trim(file_get_contents($credentials_file));
+                        if (preg_match("/REDFISH_AUTH=\"([^\"]+)\"/", $content, $matches)) {
+                            $auth_string = $matches[1];
+                            $parts = explode(":", $auth_string, 2);
+                            $bmcUsername = $parts[0] ?? '';
+                            $bmcPassword = $parts[1] ?? '';
+                        }
+                    }
+                    
+                    if (empty($bmcUsername) || empty($bmcPassword)) {
+                        echo "console.error('BMC credentials not found in .redfish_credentials file');";
+                        echo "showAlert('error', 'BMC credentials not configured. Cannot open console.');";
+                        echo "return;";
+                    }
+                ?>
+                
+                const bmcUsername = '<?php echo htmlspecialchars($bmcUsername, ENT_QUOTES); ?>';
+                const bmcPassword = '<?php echo htmlspecialchars($bmcPassword, ENT_QUOTES); ?>';
+                
+                // Create authentication form
+                const loginForm = document.createElement('form');
+                loginForm.method = 'POST';
+                loginForm.action = `https://${consoleHost}/cgi/login.cgi`;
+                loginForm.target = `bmcMain_${windowSuffix}`;
+                loginForm.style.display = 'none';
+                
+                const nameInput = document.createElement('input');
+                nameInput.type = 'hidden';
+                nameInput.name = 'name';
+                nameInput.value = bmcUsername;
+                loginForm.appendChild(nameInput);
+                
+                const pwdInput = document.createElement('input');
+                pwdInput.type = 'hidden';
+                pwdInput.name = 'pwd';
+                pwdInput.value = bmcPassword;
+                loginForm.appendChild(pwdInput);
+                
+                document.body.appendChild(loginForm);
+                loginForm.submit();
+                document.body.removeChild(loginForm);
+                
+                console.log('Console: Authentication form submitted');
+                
+                // Step 3: Open console window after authentication delay
+                setTimeout(() => {
+                    console.log('Console: Opening console window...');
+                    
+                    const consoleWindow = window.open(
+                        `https://${consoleHost}/cgi/url_redirect.cgi?url_name=man_ikvm_html5_bootstrap`,
+                        `bmcConsole_${windowSuffix}`,
+                        'width=1200,height=800,menubar=no,toolbar=no,status=no,scrollbars=yes,resizable=yes'
+                    );
+                    
+                    if (consoleWindow) {
+                        console.log('Console: Success! Console window opened.');
+                        showAlert('success', `Console opened for ${nodeName}. Keep BMC main page open!`);
+                    } else {
+                        console.log('Console: Console window was blocked');
+                        showAlert('warning', 'Console popup blocked. Please allow popups and try again.');
+                    }
+                }, 4000);
+                
+            }, 2000);
         }
         
         function showAlert(type, message) {

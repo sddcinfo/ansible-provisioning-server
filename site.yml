@@ -109,3 +109,68 @@
             msg: "[OK] Quick validation passed: Services active, DNS resolving, web responding"
       tags:
         - quick
+
+    - name: Deploy and run state population helper script
+      block:
+        - name: Deploy state population helper script
+          template:
+            src: roles/web/templates/populate_state.py.j2
+            dest: "{{ nginx_web_root }}/scripts/populate_state.py"
+            owner: www-data
+            group: www-data
+            mode: "0755"
+            
+        - name: Run state population script
+          command: python3 {{ nginx_web_root }}/scripts/populate_state.py
+          register: populate_result
+          changed_when: "'New entries created:' in populate_result.stdout and not populate_result.stdout.split('New entries created: ')[1].split('\n')[0].strip().startswith('0')"
+          
+        - name: Display state population results
+          debug:
+            msg: "{{ populate_result.stdout_lines }}"
+            
+        - name: Verify web interface shows populated entries
+          uri:
+            url: "http://127.0.0.1/?action=status"
+            method: GET
+            status_code: 200
+            timeout: 10
+          register: web_verification
+          
+        - name: Parse nodes.json for verification
+          slurp:
+            src: "{{ nginx_web_root }}/nodes.json"
+          register: nodes_file_content
+          
+        - name: Count expected entries from nodes.json
+          set_fact:
+            expected_mac_count: "{{ (nodes_file_content.content | b64decode | from_json).nodes | map(attribute='os_mac') | list | length }}"
+            
+        - name: Verify web interface contains expected MAC addresses
+          uri:
+            url: "http://127.0.0.1/?action=status"
+            method: GET
+            status_code: 200
+            return_content: yes
+          register: status_page_content
+          failed_when: false
+          
+        - name: Check each node MAC address appears in web interface
+          assert:
+            that:
+              - "item in status_page_content.content"
+            fail_msg: "MAC address {{ item }} from nodes.json not found in web interface"
+            success_msg: "MAC address {{ item }} found in web interface"
+          loop: "{{ (nodes_file_content.content | b64decode | from_json).nodes | map(attribute='os_mac') | list }}"
+          
+        - name: State population and verification complete
+          debug:
+            msg: 
+              - "[OK] State population completed successfully"
+              - "Expected MAC addresses: {{ expected_mac_count }}"
+              - "All MAC addresses verified in web interface"
+              - "Web interface ready for provisioning operations"
+      tags:
+        - state_population
+        - validation
+        - web_files_only
