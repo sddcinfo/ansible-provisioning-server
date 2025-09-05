@@ -1,0 +1,97 @@
+---
+# Test playbook to verify granular tagging improvements
+- name: Test Granular Tags
+  hosts: localhost
+  connection: local
+  become: yes
+
+  tasks:
+    # Test different tag categories
+    - name: Test web_php_files tag
+      debug:
+        msg: "Would update PHP files: index.php, pxe-boot.php, lib/*.php"
+      tags:
+        - web
+        - deploy
+        - web_php_files
+        - quick_deploy
+
+    - name: Test web_templates tag
+      debug:
+        msg: "Would update templates: ipxe_boot.php.j2, grub.cfg.php.j2"
+      tags:
+        - web
+        - deploy
+        - web_templates
+        - quick_templates
+
+    - name: Test web_nodes_json tag
+      debug:
+        msg: "Would update nodes.json with SSH keys"
+      tags:
+        - web
+        - deploy
+        - web_nodes_json
+        - quick_deploy
+
+    - name: Test web_autoinstall_ubuntu tag
+      debug:
+        msg: "Would update Ubuntu autoinstall configs"
+      tags:
+        - web
+        - deploy
+        - web_autoinstall
+        - web_autoinstall_ubuntu
+        - quick_templates
+
+    - name: Test web_autoinstall_proxmox tag
+      debug:
+        msg: "Would update Proxmox autoinstall configs"
+      tags:
+        - web
+        - deploy
+        - web_autoinstall
+        - web_autoinstall_proxmox
+        - quick_templates
+
+    - name: Test web_api tag
+      debug:
+        msg: "Would update API endpoints: register.php, status.php, proxmox-answer.php"
+      tags:
+        - web
+        - deploy
+        - web_api
+        - quick_deploy
+
+    - name: Test web_scripts tag
+      debug:
+        msg: "Would update scripts: populate_state.py, redfish_operations.py"
+      tags:
+        - web
+        - deploy
+        - web_scripts
+        - quick_scripts
+
+    - name: Test nginx_config tag
+      debug:
+        msg: "Would update Nginx configuration"
+      tags:
+        - web
+        - configure
+        - nginx_config
+
+    - name: Test php_config tag
+      debug:
+        msg: "Would update PHP-FPM configuration"
+      tags:
+        - web
+        - configure
+        - php_config
+
+    - name: Test quick_perms tag
+      debug:
+        msg: "Would fix file permissions recursively"
+      tags:
+        - web
+        - quick_perms
+        - never  # Only run when explicitly requested

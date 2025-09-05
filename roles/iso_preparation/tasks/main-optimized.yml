@@ -1,0 +1,155 @@
+---
+- name: Optimized ISO Preparation
+  block:
+    - name: Create required directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - "{{ iso_download_path }}"
+        - "{{ iso_extract_path }}"
+        - "{{ tftp_root }}/ubuntu"
+        - "{{ tftp_root }}/proxmox"
+      tags:
+        - iso_setup
+
+    - name: Define ISO downloads
+      set_fact:
+        iso_downloads:
+          - name: "Ubuntu 24.04 Live Server"
+            url: "https://releases.ubuntu.com/24.04.1/ubuntu-24.04.1-live-server-amd64.iso"
+            dest: "{{ iso_download_path }}/ubuntu-24.04.1-live-server-amd64.iso"
+            type: ubuntu
+          - name: "Ubuntu 22.04 Live Server"
+            url: "https://releases.ubuntu.com/22.04.5/ubuntu-22.04.5-live-server-amd64.iso"
+            dest: "{{ iso_download_path }}/ubuntu-22.04.5-live-server-amd64.iso"
+            type: ubuntu
+          - name: "Proxmox VE 8.3"
+            url: "https://enterprise.proxmox.com/iso/proxmox-ve_8.3-1.iso"
+            dest: "{{ iso_download_path }}/proxmox-ve_8.3-1.iso"
+            type: proxmox
+      tags:
+        - iso_download
+
+    - name: Check existing ISOs
+      stat:
+        path: "{{ item.dest }}"
+      register: iso_status
+      loop: "{{ iso_downloads }}"
+      tags:
+        - iso_download
+
+    - name: Download ISOs asynchronously
+      get_url:
+        url: "{{ item.item.url }}"
+        dest: "{{ item.item.dest }}"
+        mode: "0644"
+        timeout: 3600
+      async: 3600
+      poll: 0
+      register: iso_download_jobs
+      loop: "{{ iso_status.results }}"
+      when: not item.stat.exists
+      loop_control:
+        label: "{{ item.item.name }}"
+      tags:
+        - iso_download
+        - expensive
+
+    - name: Process ISOs while downloads continue
+      block:
+        - name: Extract existing Ubuntu ISOs
+          include_tasks: extract_ubuntu_iso.yml
+          vars:
+            iso_file: "{{ item.item.dest }}"
+            iso_name: "{{ item.item.name }}"
+          loop: "{{ iso_status.results }}"
+          when: 
+            - item.stat.exists
+            - item.item.type == 'ubuntu'
+          loop_control:
+            label: "{{ item.item.name }}"
+            
+        - name: Process existing Proxmox ISOs
+          include_tasks: process_proxmox_iso.yml
+          vars:
+            iso_file: "{{ item.item.dest }}"
+            iso_name: "{{ item.item.name }}"
+          loop: "{{ iso_status.results }}"
+          when:
+            - item.stat.exists
+            - item.item.type == 'proxmox'
+          loop_control:
+            label: "{{ item.item.name }}"
+      tags:
+        - iso_process
+
+    - name: Wait for ISO downloads to complete
+      async_status:
+        jid: "{{ item.ansible_job_id }}"
+      register: download_results
+      until: download_results.finished
+      retries: 360
+      delay: 10
+      loop: "{{ iso_download_jobs.results | selectattr('ansible_job_id', 'defined') | list }}"
+      when: iso_download_jobs.results is defined
+      loop_control:
+        label: "Waiting for download {{ item.item.item.name if item.item is defined else 'unknown' }}"
+      tags:
+        - iso_download
+        - expensive
+
+    - name: Process newly downloaded ISOs
+      block:
+        - name: Extract newly downloaded Ubuntu ISOs
+          include_tasks: extract_ubuntu_iso.yml
+          vars:
+            iso_file: "{{ item.item.item.dest }}"
+            iso_name: "{{ item.item.item.name }}"
+          loop: "{{ download_results.results | default([]) }}"
+          when:
+            - item.finished | default(false)
+            - item.item.item.type == 'ubuntu'
+          loop_control:
+            label: "{{ item.item.item.name if item.item.item is defined else 'unknown' }}"
+            
+        - name: Process newly downloaded Proxmox ISOs
+          include_tasks: process_proxmox_iso.yml
+          vars:
+            iso_file: "{{ item.item.item.dest }}"
+            iso_name: "{{ item.item.item.name }}"
+          loop: "{{ download_results.results | default([]) }}"
+          when:
+            - item.finished | default(false)
+            - item.item.item.type == 'proxmox'
+          loop_control:
+            label: "{{ item.item.item.name if item.item.item is defined else 'unknown' }}"
+      when: iso_download_jobs.results is defined
+      tags:
+        - iso_process
+
+    - name: Set permissions on extracted files
+      file:
+        path: "{{ tftp_root }}"
+        state: directory
+        recurse: yes
+        owner: tftp
+        group: tftp
+        mode: "0755"
+      tags:
+        - permissions
+
+    - name: Create boot configuration files
+      template:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - src: grub.cfg.j2
+          dest: "{{ tftp_root }}/ubuntu/grub.cfg"
+        - src: pxelinux.cfg.j2
+          dest: "{{ tftp_root }}/pxelinux.cfg/default"
+      notify: restart dnsmasq
+      tags:
+        - boot_config

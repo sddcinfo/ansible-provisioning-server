@@ -1,0 +1,161 @@
+---
+- name: Optimized Provisioning Server Setup
+  hosts: localhost
+  connection: local
+  become: yes
+  
+  pre_tasks:
+    - name: Consolidated package installation
+      block:
+        - name: Update apt cache once
+          apt:
+            update_cache: yes
+            cache_valid_time: 3600
+          tags:
+            - packages
+            - foundation
+            
+        - name: Install all required packages in single operation
+          apt:
+            name:
+              # Common packages
+              - vim
+              - git
+              - curl
+              - wget
+              - unzip
+              - zstd
+              - cpio
+              - file
+              # Network packages
+              - bridge-utils
+              - ethtool
+              - iptables
+              - iptables-persistent
+              # Service packages
+              - dnsmasq
+              - tftp-hpa
+              - nginx
+              - php8.3-fpm
+              - php8.3-json
+              - php8.3-zip
+              - php8.3-mbstring
+              - php8.3-dom
+              - python3
+              - python3-pip
+              - python3-requests
+              - python3-urllib3
+              # Docker prerequisites
+              - ca-certificates
+              - gnupg
+            state: present
+          register: package_install
+          tags:
+            - packages
+            - foundation
+            
+        - name: Set package installation fact
+          set_fact:
+            packages_changed: "{{ package_install.changed }}"
+          tags:
+            - packages
+      tags:
+        - always
+
+  roles:
+    - role: common
+      tags: 
+        - foundation
+        - services_install
+        - system_config
+        
+    - role: network_config
+      tags:
+        - network_infra
+        - foundation
+        
+    - role: netboot  
+      tags:
+        - services_install
+        - dns_dhcp
+        
+    - role: web
+      tags:
+        - services_install
+        - web_config
+        
+    - role: iso_preparation
+      tags:
+        - iso_management
+        - expensive
+      vars:
+        use_async_downloads: true
+        
+    - role: validation
+      tags:
+        - validation
+        - health_check
+      when: validation_enabled | default(true)
+
+  post_tasks:
+    - name: Consolidated service restart
+      block:
+        - name: Restart all modified services
+          systemd:
+            name: "{{ item }}"
+            state: restarted
+            daemon_reload: yes
+          loop: "{{ services_to_restart | default([]) }}"
+          when: services_to_restart is defined and services_to_restart | length > 0
+          register: services_restarted
+          
+        - name: Wait for services to stabilize
+          wait_for:
+            port: "{{ item.port }}"
+            host: 127.0.0.1
+            state: started
+            timeout: 30
+          loop:
+            - { service: 'dnsmasq', port: 53 }
+            - { service: 'nginx', port: 80 }
+          when: services_restarted.changed | default(false)
+      tags:
+        - services_restart
+        
+    - name: Final validation block
+      block:
+        - name: Run comprehensive validation
+          include_tasks: roles/validation/tasks/main.yml
+          when: run_final_validation | default(true)
+      tags:
+        - final_validation
+        - never  # Only run when explicitly requested
+
+  handlers:
+    - name: restart dnsmasq
+      systemd:
+        name: dnsmasq
+        state: restarted
+      listen: "restart network services"
+      
+    - name: restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+      listen: "restart web services"
+      
+    - name: restart php-fpm
+      systemd:
+        name: php8.3-fpm
+        state: restarted
+      listen: "restart web services"
+      
+    - name: apply netplan
+      command: netplan apply
+      listen: "reconfigure network"
+      
+    - name: restart systemd-networkd
+      systemd:
+        name: systemd-networkd
+        state: restarted
+      listen: "reconfigure network"
