@@ -75,6 +75,7 @@ SERVICE CONFIGS:
   nginx          Update Nginx configuration
   php-fpm        Update PHP-FPM configuration
   dnsmasq        Update DNSMasq configuration
+  network        Update network configuration
 
 COMPREHENSIVE UPDATES:
   web-all        Update all web files (no service configs)
@@ -161,7 +162,11 @@ case "${1:-}" in
         ;;
     dnsmasq)
         print_status "Updating DNSMasq configuration..."
-        run_playbook "dnsmasq_config"
+        run_playbook "netboot,dns_dhcp"
+        ;;
+    network)
+        print_status "Updating network configuration..."
+        run_playbook "network_infra,network_setup"
         ;;
     
     # Comprehensive updates
