@@ -166,7 +166,7 @@ case "${1:-}" in
         ;;
     network)
         print_status "Updating network configuration..."
-        run_playbook "network_infra,network_setup"
+        run_playbook "network_config_update"
         ;;
     
     # Comprehensive updates
