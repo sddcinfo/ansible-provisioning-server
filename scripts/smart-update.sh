@@ -114,51 +114,51 @@ case "${1:-}" in
     # Quick updates
     templates)
         print_status "Updating all templates..."
-        run_playbook "quick_templates"
+        run_playbook "templates,web_files_only"
         ;;
     php)
         print_status "Updating PHP application files..."
-        run_playbook "web_php_files"
+        run_playbook "web_files_only"
         ;;
     api)
         print_status "Updating API endpoints..."
-        run_playbook "web_api"
+        run_playbook "web_files_only"
         ;;
     nodes)
         print_status "Updating nodes.json..."
-        run_playbook "web_nodes_json"
+        run_playbook "web_files_only"
         ;;
     scripts)
         print_status "Updating helper scripts..."
-        run_playbook "web_scripts"
+        run_playbook "web_files_only"
         ;;
     perms)
         print_status "Fixing file permissions..."
-        run_playbook "quick_perms"
+        run_playbook "permissions"
         ;;
     
     # Autoinstall updates
     autoinstall)
         print_status "Updating all autoinstall configs..."
-        run_playbook "web_autoinstall"
+        run_playbook "autoinstall_configs,templates"
         ;;
     ubuntu)
         print_status "Updating Ubuntu autoinstall configs..."
-        run_playbook "web_autoinstall_ubuntu"
+        run_playbook "autoinstall_configs"
         ;;
     proxmox)
         print_status "Updating Proxmox autoinstall configs..."
-        run_playbook "web_autoinstall_proxmox"
+        run_playbook "autoinstall_configs"
         ;;
     
     # Service configs
     nginx)
         print_status "Updating Nginx configuration..."
-        run_playbook "nginx_config"
+        run_playbook "web_config"
         ;;
     php-fpm)
         print_status "Updating PHP-FPM configuration..."
-        run_playbook "php_config"
+        run_playbook "web_config"
         ;;
     dnsmasq)
         print_status "Updating DNSMasq configuration..."
@@ -172,15 +172,15 @@ case "${1:-}" in
     # Comprehensive updates
     web-all)
         print_status "Updating all web files (excluding service configs)..."
-        run_playbook "web,deploy" "configure"
+        run_playbook "web_files_only,templates"
         ;;
     web-deploy)
         print_status "Deploying all web files without service restart..."
-        run_playbook "web_php_files,web_templates,web_api,web_scripts,web_autoinstall,web_nodes_json"
+        run_playbook "web_files_only"
         ;;
     full-web)
         print_status "Complete web update with configurations..."
-        run_playbook "web"
+        run_playbook "web_config,web_files_only"
         ;;
     
     # Full system updates
