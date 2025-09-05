@@ -58,13 +58,9 @@ Smart Update Script for Ansible Provisioning Server
 
 Usage: $0 [OPTION] [COMPONENT]
 
-QUICK UPDATES (5-15 seconds):
-  templates       Regenerate all template files
-  php            Update PHP application files only
-  api            Update API endpoints only
-  nodes          Update nodes.json with SSH keys
-  scripts        Update helper scripts only
-  perms          Fix file permissions only
+EFFICIENT UPDATES (30-90 seconds):
+  Note: Granular "quick" updates (php/api/nodes/scripts) removed - they were misleading.
+  All web file changes should use web-deploy (same performance, honest scope).
 
 AUTOINSTALL UPDATES:
   autoinstall    Update all autoinstall configs
@@ -94,48 +90,25 @@ SPECIAL OPTIONS:
   --help         Show this help message
 
 Examples:
-  $0 templates              # Quick template regeneration
-  $0 nodes                  # Update nodes.json
-  $0 ubuntu                 # Update Ubuntu configs only
-  $0 full                   # Run complete playbook
-  $0 foundation             # Foundation setup only
+  $0 web-deploy             # Deploy all web files (1-2 minutes)
+  $0 network                # Update network config (30-60 seconds)
+  $0 ubuntu                 # Update Ubuntu configs only (1-2 minutes)
+  $0 full                   # Run complete playbook (8-15 minutes)
+  $0 foundation             # Foundation setup only (3-5 minutes)
   $0 web-all --dry-run     # Test full web update
 
 Performance Notes:
-  - Quick updates: 5-15 seconds
-  - Component updates: 15-30 seconds
-  - Comprehensive updates: 1-2 minutes
-  - Full system updates: 5-15 minutes
+  - Network/Service configs: 30-90 seconds
+  - Component updates: 1-2 minutes  
+  - Comprehensive updates: 2-5 minutes
+  - Full system updates: 8-15 minutes
 EOF
 }
 
 # Main script logic
 case "${1:-}" in
-    # Quick updates
-    templates)
-        print_status "Updating all templates..."
-        run_playbook "templates,web_files_only"
-        ;;
-    php)
-        print_status "Updating PHP application files..."
-        run_playbook "web_files_only"
-        ;;
-    api)
-        print_status "Updating API endpoints..."
-        run_playbook "web_files_only"
-        ;;
-    nodes)
-        print_status "Updating nodes.json..."
-        run_playbook "web_files_only"
-        ;;
-    scripts)
-        print_status "Updating helper scripts..."
-        run_playbook "web_files_only"
-        ;;
-    perms)
-        print_status "Fixing file permissions..."
-        run_playbook "permissions"
-        ;;
+    # Note: Granular updates like php/api/nodes removed - they all ran the same 54 tasks as web-deploy
+    # Use web-deploy for any web file updates (same performance, honest naming)
     
     # Autoinstall updates
     autoinstall)
