@@ -1,13 +1,27 @@
 ---
-# Final system validation after all components are installed
+# Final system validation after all components are installed  
+- name: Skip all validation in check mode
+  debug:
+    msg: "Validation role skipped during --check mode (services not running)"
+  when: ansible_check_mode
+  tags:
+    - validation
+    - health_check
+
 - name: Load netboot configuration variables
   include_vars: "{{ playbook_dir }}/roles/netboot/vars/main.yml"
+  when: not ansible_check_mode
   tags:
     - validation
     - health_check
 
 - name: Quick validation checks (fast operations only)
   block:
+    - name: Skip service checks in check mode
+      debug:
+        msg: "Skipping service status checks during --check mode"
+      when: ansible_check_mode
+      
     - name: Check critical services status (quick check)
       ansible.builtin.command: "systemctl is-active {{ item }}"
       register: service_status
@@ -17,12 +31,14 @@
         - php8.3-fpm
       changed_when: false
       failed_when: service_status.stdout != "active"
+      when: not ansible_check_mode
       
     - name: Quick DNS test
       ansible.builtin.command: "dig @127.0.0.1 google.com A +short +time=2"
       register: quick_dns_test
       changed_when: false
       failed_when: quick_dns_test.rc != 0 or quick_dns_test.stdout == ""
+      when: not ansible_check_mode
       
     - name: Quick web test
       ansible.builtin.uri:
@@ -31,15 +47,22 @@
         status_code: 200
         timeout: 3
       register: quick_web_test
+      when: not ansible_check_mode
       
     - name: Quick validation summary
       ansible.builtin.debug:
         msg: "Quick validation passed: All critical services active, DNS resolving, web responding"
+  when: not ansible_check_mode
   tags:
     - health_check
 
 - name: Network connectivity validation
   block:
+    - name: Skip port checks in check mode
+      debug:
+        msg: "Skipping port connectivity tests during --check mode"
+      when: ansible_check_mode
+      
     - name: Validate network connectivity on critical ports
       ansible.builtin.wait_for:
         host: "{{ dnsmasq_listen_address }}"
@@ -49,17 +72,24 @@
         - { port: 53, service: "DNS" }   
         - { port: 80, service: "HTTP" }   
       register: port_tests
+      when: not ansible_check_mode
   tags:
     - validation
     - health_check
 
 - name: TFTP validation (comprehensive)
   block:
+    - name: Skip TFTP tests in check mode
+      debug:
+        msg: "Skipping TFTP connectivity tests during --check mode"
+      when: ansible_check_mode
+      
     - name: Check if TFTP port is bound by dnsmasq
       ansible.builtin.shell: "netstat -ulnp | grep ':69 ' | grep dnsmasq || ss -ulnp | grep ':69 ' | grep dnsmasq"
       register: tftp_port_bound
       changed_when: false
       failed_when: false
+      when: not ansible_check_mode
       
     - name: Test TFTP connectivity with actual TFTP client
       ansible.builtin.shell: |
@@ -67,11 +97,12 @@
         exit 0
       register: tftp_connectivity
       changed_when: false
-      when: tftp_port_bound.rc == 0
+      when: not ansible_check_mode and tftp_port_bound.rc == 0
       
     - name: Set TFTP port test result
       set_fact:
-        tftp_port_test: "{{ {'failed': false} if tftp_port_bound.rc == 0 else {'failed': true} }}"
+        tftp_port_test: "{{ {'failed': false} if (not ansible_check_mode and tftp_port_bound.rc == 0) else {'failed': true} }}"
+      when: not ansible_check_mode
         
     - name: Validate TFTP directory is accessible
       ansible.builtin.stat:
@@ -83,7 +114,7 @@
       ansible.builtin.shell: |
         echo "quit" | tftp {{ dnsmasq_listen_address }} 69 2>&1
       register: tftp_test
-      when: tftp_port_test is not failed
+      when: not ansible_check_mode and tftp_port_test is not failed
       changed_when: false
       ignore_errors: true
   tags:
@@ -93,11 +124,17 @@
       
 - name: DNS validation (comprehensive)
   block:
+    - name: Skip DNS tests in check mode
+      debug:
+        msg: "Skipping DNS resolution tests during --check mode"
+      when: ansible_check_mode
+      
     - name: Validate IPv4 DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com A +short +time=3"
       register: dns_ipv4_test
       changed_when: false
       failed_when: dns_ipv4_test.rc != 0 or dns_ipv4_test.stdout == ""
+      when: not ansible_check_mode
   tags:
     - validation
     - health_check
@@ -105,12 +142,18 @@
       
 - name: Comprehensive DNS validation (slower)
   block:
+    - name: Skip IPv6 DNS tests in check mode
+      debug:
+        msg: "Skipping IPv6 DNS tests during --check mode"
+      when: ansible_check_mode
+      
     - name: Validate IPv6 DNS resolution works
       ansible.builtin.command: "dig @{{ dnsmasq_listen_address }} google.com AAAA +short +time=5"
       register: dns_ipv6_test
       changed_when: false
       failed_when: false  # Don't fail validation if IPv6 DNS doesn't work
       ignore_errors: yes
+      when: not ansible_check_mode
       
     - name: Test IPv6 DNS server on localhost
       ansible.builtin.command: "dig @::1 google.com AAAA +short +time=5"
@@ -118,9 +161,15 @@
       changed_when: false
       failed_when: false
       ignore_errors: yes
+      when: not ansible_check_mode
 
 - name: Web service validation (comprehensive)
   block:
+    - name: Skip web service tests in check mode
+      debug:
+        msg: "Skipping web service connectivity tests during --check mode"
+      when: ansible_check_mode
+      
     - name: Validate web service responds
       ansible.builtin.uri:
         url: "http://{{ dnsmasq_listen_address }}/"
@@ -128,29 +177,38 @@
         status_code: 200
         timeout: 5
       register: web_test
+      when: not ansible_check_mode
   tags:
     - validation
     - health_check
 
 - name: Comprehensive diagnostic checks
   block:
+    - name: Skip diagnostic checks in check mode
+      debug:
+        msg: "Skipping service diagnostic checks during --check mode"
+      when: ansible_check_mode
+      
     - name: Check dnsmasq TFTP configuration
       ansible.builtin.shell: "grep -E '^enable-tftp|^tftp-root' /etc/dnsmasq.d/provisioning.conf"
       register: tftp_config_check
       changed_when: false
       ignore_errors: true
+      when: not ansible_check_mode
       
     - name: Check what ports dnsmasq is actually listening on
       ansible.builtin.shell: "netstat -ulnp | grep dnsmasq || ss -ulnp | grep dnsmasq"
       register: dnsmasq_ports_check
       changed_when: false
       ignore_errors: true
+      when: not ansible_check_mode
       
     - name: Check dnsmasq service status and logs
       ansible.builtin.shell: "systemctl status dnsmasq --no-pager -l"
       register: dnsmasq_status_check
       changed_when: false
       ignore_errors: true
+      when: not ansible_check_mode
       
     - name: Log comprehensive system diagnostics
       ansible.builtin.debug:
@@ -158,15 +216,15 @@
           System Validation Results:
           
           DNS Status:
-          - IPv4 DNS ({{ dnsmasq_listen_address }}): {{ 'PASSED' if dns_ipv4_test.rc == 0 else 'FAILED' }}
-          - IPv6 DNS AAAA query: {{ 'PASSED' if dns_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
-          - IPv6 DNS localhost: {{ 'PASSED' if dns_localhost_ipv6_test.rc == 0 else 'FAILED/EXPECTED' }}
+          - IPv4 DNS ({{ dnsmasq_listen_address }}): {{ 'PASSED' if (dns_ipv4_test is defined and dns_ipv4_test.rc == 0) else 'SKIPPED (check mode)' if ansible_check_mode else 'FAILED' }}
+          - IPv6 DNS AAAA query: {{ 'PASSED' if (dns_ipv6_test is defined and dns_ipv6_test.rc == 0) else 'SKIPPED (check mode)' if ansible_check_mode else 'FAILED/EXPECTED' }}
+          - IPv6 DNS localhost: {{ 'PASSED' if (dns_localhost_ipv6_test is defined and dns_localhost_ipv6_test.rc == 0) else 'SKIPPED (check mode)' if ansible_check_mode else 'FAILED/EXPECTED' }}
           
           TFTP Status:
-          - Port 69 bound by dnsmasq: {{ 'Yes' if tftp_port_bound.rc == 0 else 'No' }}
-          - Configuration: {{ 'OK' if tftp_config_check.rc == 0 else 'Missing' }}
+          - Port 69 bound by dnsmasq: {{ 'Yes' if (tftp_port_bound is defined and tftp_port_bound.rc == 0) else 'SKIPPED (check mode)' if ansible_check_mode else 'No' }}
+          - Configuration: {{ 'OK' if (tftp_config_check is defined and tftp_config_check.rc == 0) else 'SKIPPED (check mode)' if ansible_check_mode else 'Missing' }}
           
-          Service Status: All critical services running
+          Service Status: {{ 'All critical services running' if not ansible_check_mode else 'Service checks skipped (check mode)' }}
           
     - name: Log validation success
       ansible.builtin.debug:

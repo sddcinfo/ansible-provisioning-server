@@ -155,10 +155,10 @@
           
         - name: Apply netplan configuration directly
           command: netplan apply
-          when: netplan_config_deployed.changed
+          when: netplan_config_deployed is defined and netplan_config_deployed.changed
           register: netplan_apply_direct
           
-      when: netplan_config_deployed.changed
+      when: netplan_config_deployed is defined and netplan_config_deployed.changed
       
     - name: Wait for network interfaces to stabilize after netplan apply
       pause:

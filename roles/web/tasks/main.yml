@@ -609,6 +609,11 @@
 
 - name: Final web service validation
   block:
+    - name: Skip HTTP tests in check mode
+      debug:
+        msg: "Skipping HTTP tests during --check mode (services not actually running)"
+      when: ansible_check_mode
+      
     - name: Test HTTP response after configuration
       uri:
         url: "http://{{ server_ip }}/"
@@ -617,12 +622,13 @@
         timeout: 10
       register: final_web_test
       ignore_errors: true
+      when: not ansible_check_mode
       
     - name: Log web service test result
       debug:
         msg: |
           Web service test:
-          - Status: {{ 'SUCCESS' if (final_web_test.status | default(0)) == 200 else 'FAILED' }}
+          - Status: {{ 'SUCCESS' if (final_web_test.status | default(0)) == 200 else 'SKIPPED (check mode)' if ansible_check_mode else 'FAILED' }}
           - HTTP Status: {{ final_web_test.status | default('N/A') }}
           - Content Type: {{ final_web_test.content_type | default('N/A') }}
           
@@ -635,6 +641,6 @@
           3. nginx error logs: tail -f /var/log/nginx/error.log
           4. PHP-FPM logs: tail -f /var/log/php8.3-fpm.log
           5. File permissions: ls -la /var/www/html/index.php
-      when: (final_web_test.status | default(0)) != 200
+      when: not ansible_check_mode and (final_web_test.status | default(0)) != 200
   tags:
     - validation
