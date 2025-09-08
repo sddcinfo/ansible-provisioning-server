@@ -5,6 +5,15 @@
   become: yes
   
   pre_tasks:
+    - name: Verify redfish credentials file exists
+      stat:
+        path: /home/sysadmin/.redfish_credentials
+      register: redfish_creds_check
+      failed_when: not redfish_creds_check.stat.exists
+      tags:
+        - validation
+        - always
+      
     - name: Consolidated package installation
       block:
         - name: Update apt cache once
@@ -97,6 +106,28 @@
       when: validation_enabled | default(true)
 
   post_tasks:
+    - name: Deploy and run state population script
+      block:
+        - name: Deploy state population helper script
+          template:
+            src: roles/web/templates/populate_state.py.j2
+            dest: "{{ nginx_web_root }}/scripts/populate_state.py"
+            owner: www-data
+            group: www-data
+            mode: "0755"
+            
+        - name: Run state population script
+          command: python3 {{ nginx_web_root }}/scripts/populate_state.py
+          register: populate_result
+          changed_when: "'New entries created:' in populate_result.stdout and not populate_result.stdout.split('New entries created: ')[1].split('\n')[0].strip().startswith('0')"
+          
+        - name: Display state population results
+          debug:
+            msg: "{{ populate_result.stdout_lines }}"
+      tags:
+        - state_population
+        - web_config
+        
     - name: Consolidated service restart
       block:
         - name: Restart all modified services
