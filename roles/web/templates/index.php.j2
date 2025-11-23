@@ -42,9 +42,9 @@ $os_configs = [
         'default_config' => 'ubuntu2404_default'
     ],
     'proxmox9' => [
-        'name' => 'Proxmox VE 9',
+        'name' => 'Proxmox VE 9.1',
         'iso_base_url' => '{{ os_base_urls.proxmox9 }}',
-        'iso_name' => 'proxmox-ve_9.0-1.iso',
+        'iso_name' => '{{ supported_operating_systems.proxmox9.iso_name }}',
         'kernel_path' => 'boot/linux26',
         'initrd_path' => 'boot/initrd.img',
         'kernel_params' => '{{ supported_operating_systems.proxmox9.kernel_params }}',

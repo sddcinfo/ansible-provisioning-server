@@ -1,12 +1,12 @@
 # Bare-Metal Provisioning Server
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Proxmox](https://img.shields.io/badge/Proxmox-9.x-orange.svg)](https://www.proxmox.com/)
+[![Proxmox](https://img.shields.io/badge/Proxmox-9.1-orange.svg)](https://www.proxmox.com/)
 [![Ubuntu](https://img.shields.io/badge/ubuntu-24.04%20LTS%20only-orange.svg)](https://ubuntu.com/)
 
-Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9 clusters.
+Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9.1 clusters.
 
-A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE 9 clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation via the Proxmox API.
+A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE 9.1 clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation via the Proxmox API.
 
 ## Table of Contents
 
@@ -40,7 +40,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 - **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
 - **Web Dashboard**: Real-time provisioning status monitoring and management
 - **Hardware Management**: Redfish API integration for server power and boot control
-- **Multi-OS Support**: Ubuntu 24.04 and Proxmox VE 9 automated installation
+- **Multi-OS Support**: Ubuntu 24.04 and Proxmox VE 9.1 automated installation
 
 ### Enterprise Capabilities  
 - **Security**: Hardened input validation, path sanitization, and encrypted credential management

@@ -62,17 +62,53 @@
     path: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
   register: iso_exists
   
-- name: "Download {{ os_config.name }} ISO (expensive operation)"
+- name: "Download {{ os_config.name }} ISO from primary mirror (expensive operation)"
   ansible.builtin.get_url:
     url: "{{ os_config.iso_url }}"
     dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
     mode: '0644'
     timeout: 3600
     force: no  # Don't re-download if file exists
+    checksum: "{{ 'sha256:' + os_config.iso_sha256 if os_config.iso_sha256 is defined else omit }}"
   register: download_iso
-  when: 
+  when:
     - not sentinel_file_stat.stat.exists
     - not iso_exists.stat.exists or force_iso_download | default(false)
+  ignore_errors: "{{ os_config.iso_url_fallback is defined }}"
+  tags:
+    - expensive
+    - iso_download
+
+- name: "Download {{ os_config.name }} ISO from fallback mirrors"
+  ansible.builtin.get_url:
+    url: "{{ item }}"
+    dest: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+    mode: '0644'
+    timeout: 3600
+    force: no
+    checksum: "{{ 'sha256:' + os_config.iso_sha256 if os_config.iso_sha256 is defined else omit }}"
+  loop: "{{ os_config.iso_url_fallback | default([]) }}"
+  register: download_iso_fallback
+  when:
+    - not sentinel_file_stat.stat.exists
+    - not iso_exists.stat.exists or force_iso_download | default(false)
+    - download_iso is failed
+    - os_config.iso_url_fallback is defined
+  ignore_errors: yes
+  tags:
+    - expensive
+    - iso_download
+
+- name: "Verify ISO was downloaded successfully"
+  ansible.builtin.stat:
+    path: "{{ os_config.iso_download_dir }}/{{ os_config.iso_name }}"
+  register: iso_download_verify
+  failed_when:
+    - not iso_download_verify.stat.exists
+    - not sentinel_file_stat.stat.exists
+  when:
+    - not sentinel_file_stat.stat.exists
+    - download_iso is changed or (download_iso_fallback is defined and download_iso_fallback is changed)
   tags:
     - expensive
     - iso_download

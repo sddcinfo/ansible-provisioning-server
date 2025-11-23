@@ -32,9 +32,14 @@ supported_operating_systems:
       - "boot.catalog"
     
   proxmox9:
-    name: "Proxmox VE 9"
-    iso_url: "https://enterprise.proxmox.com/iso/proxmox-ve_9.0-1.iso"
-    iso_name: "proxmox-ve_9.0-1.iso"
+    name: "Proxmox VE 9.1"
+    # Primary: Singapore CDN (best for Japan), Fallback: NA CDN, Direct enterprise
+    iso_url: "https://sg.cdn.proxmox.com/iso/proxmox-ve_9.1-1.iso"
+    iso_url_fallback:
+      - "https://na.cdn.proxmox.com/iso/proxmox-ve_9.1-1.iso"
+      - "https://enterprise.proxmox.com/iso/proxmox-ve_9.1-1.iso"
+    iso_name: "proxmox-ve_9.1-1.iso"
+    iso_sha256: "6d8f5afc78c0c66812d7272cde7c8b98be7eb54401ceb045400db05eb5ae6d22"
     iso_download_dir: "/tmp"
     iso_mount_point: "{{ playbook_dir }}/../../iso_builder/proxmox_iso"
     provisioning_dir: "/var/www/html/provisioning/proxmox9"
@@ -50,7 +55,7 @@ supported_operating_systems:
       - "efi"
       - "isolinux"
     config_files:
-      - "proxmox-ve_9.0-1.iso"
+      - "proxmox-ve_9.1-1.iso"
       - "VERSION.txt"
       - "checksum.txt"
     disk_devices: ["sda", "nvme0n1", "vda", "hda"]
