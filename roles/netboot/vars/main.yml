@@ -38,4 +38,3 @@ dnsmasq_dhcp_range: "10.10.1.100,10.10.1.200,255.255.255.0,12h"
 dnsmasq_dhcp_router: "10.10.1.1"
 dnsmasq_dhcp_dns_server: "10.10.1.1"
 tftp_root: /var/lib/tftpboot
-ipxe_boot_url: "http://10.10.1.1/index.php?mac=${net0/mac}"

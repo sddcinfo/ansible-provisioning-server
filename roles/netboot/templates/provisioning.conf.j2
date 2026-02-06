@@ -66,10 +66,7 @@ tftp-root={{ tftp_root }}
 tftp-secure
 tftp-lowercase
 
-# === PXE/iPXE Chainloading Logic ===
-dhcp-match=set:ipxe,175
-dhcp-userclass=set:ipxe,iPXE
+# === PXE Secure Boot (SHIM+GRUB) ===
 dhcp-match=set:efi-x86_64,option:client-arch,7
 dhcp-match=set:efi-x86_64,option:client-arch,9
-dhcp-boot=tag:!ipxe,tag:efi-x86_64,ipxe.efi
-dhcp-boot=tag:ipxe,{{ ipxe_boot_url }}
+dhcp-boot=tag:efi-x86_64,shimx64.efi

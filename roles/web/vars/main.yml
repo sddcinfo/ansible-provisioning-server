@@ -8,6 +8,7 @@ server_ip: "{{ provisioning_ip | default('10.10.1.1') }}"
 os_base_urls:
   ubuntu2404: "http://{{ server_ip }}/provisioning/ubuntu24.04"
   proxmox9: "http://{{ server_ip }}/provisioning/proxmox9"
+  rescue: "http://{{ server_ip }}/provisioning/ubuntu-rescue"
 
 # Legacy variable for backward compatibility
 iso_base_url: "{{ os_base_urls.ubuntu2404 }}"

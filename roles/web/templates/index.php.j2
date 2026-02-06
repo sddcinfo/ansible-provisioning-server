@@ -50,6 +50,21 @@ $os_configs = [
         'kernel_params' => '{{ supported_operating_systems.proxmox9.kernel_params }}',
         'config_type' => 'answer',
         'default_config' => 'proxmox9_default'
+    ],
+    'incusos' => [
+        'name' => 'Incus OS',
+        'boot_method' => 'rescue_install',
+        'config_type' => 'none',
+        'default_config' => ''
+    ],
+    'rescue' => [
+        'name' => 'Ubuntu Rescue',
+        'iso_base_url' => '{{ os_base_urls.rescue }}',
+        'kernel_path' => 'vmlinuz',
+        'initrd_path' => 'initrd',
+        'kernel_params' => 'boot=casper netboot=nfs nfsroot={{ server_ip }}:/srv/nfs/ubuntu-rescue:soft,timeo=30,retrans=2 ip=dhcp console=tty0 console=ttyS0,115200n8',
+        'config_type' => 'none',
+        'default_config' => ''
     ]
 ];
 
@@ -157,6 +172,12 @@ function delete_entry(string $mac): bool {
 function handle_boot_request(): void {
     global $os_configs;
     $mac = strtolower($_GET['mac'] ?? '');
+    $format = $_GET['format'] ?? 'ipxe';
+
+    // GRUB sends MAC as xx:xx:xx:xx:xx:xx via $net_default_mac
+    // Normalize any format variations
+    $mac = str_replace('-', ':', $mac);
+
     if (!is_valid_mac($mac)) {
         header("HTTP/1.1 400 Bad Request");
         echo "Invalid or missing MAC address.";
@@ -165,29 +186,77 @@ function handle_boot_request(): void {
     header("Content-Type: text/plain");
     $status = get_status($mac);
     $os_type = get_os_type($mac);
-    
-    if ($status === 'DONE') {
+
+    if ($format === 'grub') {
+        handle_grub_boot_request($mac, $status, $os_type);
+        return;
+    }
+
+    // iPXE format (legacy)
+    if ($status === 'DONE' && $os_type !== 'rescue') {
         echo "#!ipxe\n";
         echo "echo Installation is DONE for {$mac}. Booting from local disk.\n";
         echo "exit\n";
+    } elseif ($status === 'RESCUE' && $os_type === 'rescue') {
+        // Re-serve rescue boot script for nodes in RESCUE state
+        $os_config = $os_configs[$os_type];
+        $node = get_node_by_mac($mac);
+        $hostname = $node ? ($node['os_hostname'] ?? 'unknown') : 'unknown';
+        echo "#!ipxe\n";
+        echo "echo Re-serving Ubuntu Rescue for {$mac} ({$hostname})...\n";
+        echo "imgfree\n";
+        $kernel_params = $os_config['kernel_params'];
+        $kernel_params .= " rescue_hostname={$hostname} rescue_server=" . SERVER_IP;
+        echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+        echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        echo "boot || goto error\n";
+        echo ":error\n";
+        echo "echo Critical boot error. Rebooting in 10s.\n";
+        echo "sleep 10\n";
+        echo "reboot\n";
+        return;
     } else {
-        if (!prepare_session($mac, $os_type)) {
-            echo "#!ipxe\n";
-            echo "echo ERROR: Could not prepare installation session. Check server logs.\n";
-            echo "reboot\n";
-            error_log("Failed to prepare session for MAC: {$mac}, OS: {$os_type}");
-            return;
+        if ($os_type !== 'incusos' && $os_type !== 'rescue') {
+            if (!prepare_session($mac, $os_type)) {
+                echo "#!ipxe\n";
+                echo "echo ERROR: Could not prepare installation session. Check server logs.\n";
+                echo "reboot\n";
+                error_log("Failed to prepare session for MAC: {$mac}, OS: {$os_type}");
+                return;
+            }
         }
-        set_status($mac, 'INSTALLING');
-        
+        if ($os_type === 'rescue') {
+            set_status($mac, 'RESCUE');
+        } else {
+            set_status($mac, 'INSTALLING');
+        }
+
         $os_config = $os_configs[$os_type];
         $seed_url = "http://" . SERVER_IP . "/sessions/" . $mac . "/";
-        
+
         echo "#!ipxe\n";
         echo "echo Starting {$os_config['name']} installation for {$mac}...\n";
         echo "imgfree\n";
-        
-        if ($os_type === 'ubuntu2404') {
+
+        if ($os_type === 'rescue') {
+            // Ubuntu rescue: kernel + initrd boot with rescue params
+            $node = get_node_by_mac($mac);
+            $hostname = $node ? ($node['os_hostname'] ?? 'unknown') : 'unknown';
+            $kernel_params = $os_config['kernel_params'];
+            $kernel_params .= " rescue_hostname={$hostname} rescue_server=" . SERVER_IP;
+            echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
+        } elseif ($os_type === 'incusos') {
+            // Incus OS: boot into rescue with install-os action
+            $node = get_node_by_mac($mac);
+            $hostname = $node ? ($node['os_hostname'] ?? 'unknown') : 'unknown';
+            $rescue_config = $os_configs['rescue'];
+            $kernel_params = $rescue_config['kernel_params'];
+            $kernel_params .= " rescue_hostname={$hostname} rescue_server=" . SERVER_IP . " rescue_action=install-os";
+            echo "echo Booting rescue for Incus OS install on {$hostname}...\n";
+            echo "kernel " . $rescue_config['iso_base_url'] . "/" . $rescue_config['kernel_path'] . " {$kernel_params}\n";
+            echo "initrd " . $rescue_config['iso_base_url'] . "/" . $rescue_config['initrd_path'] . "\n";
+        } elseif ($os_type === 'ubuntu2404') {
             $kernel_params = $os_config['kernel_params'] . " url=" . $os_config['iso_base_url'] . "/" . $os_config['iso_name'];
             $kernel_params .= " ds=nocloud;seedfrom=" . $seed_url;
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
@@ -198,12 +267,90 @@ function handle_boot_request(): void {
             echo "kernel " . $os_config['iso_base_url'] . "/" . $os_config['kernel_path'] . " {$kernel_params}\n";
             echo "initrd " . $os_config['iso_base_url'] . "/" . $os_config['initrd_path'] . "\n";
         }
-        
+
         echo "boot || goto error\n";
         echo ":error\n";
         echo "echo Critical boot error. Please check server logs. Rebooting in 10s.\n";
         echo "sleep 10\n";
         echo "reboot\n";
+    }
+}
+
+function handle_grub_boot_request(string $mac, string $status, string $os_type): void {
+    global $os_configs;
+    $node = get_node_by_mac($mac);
+    $hostname = $node ? ($node['os_hostname'] ?? 'unknown') : 'unknown';
+    $os_config = $os_configs[$os_type] ?? $os_configs['rescue'];
+    $server = SERVER_IP;
+
+    // DONE state: boot from local disk (except rescue which always re-serves)
+    if ($status === 'DONE' && $os_type !== 'rescue') {
+        echo "# Installation DONE for {$mac} - boot from local disk\n";
+        echo "set timeout=3\n";
+        echo "menuentry \"Boot from local disk\" {\n";
+        echo "    exit\n";
+        echo "}\n";
+        return;
+    }
+
+    // For non-rescue OS types that need session preparation
+    if ($status !== 'RESCUE' && $os_type !== 'incusos' && $os_type !== 'rescue') {
+        if (!prepare_session($mac, $os_type)) {
+            echo "# ERROR: Could not prepare installation session\n";
+            echo "set timeout=10\n";
+            echo "menuentry \"ERROR: Session preparation failed - rebooting\" {\n";
+            echo "    reboot\n";
+            echo "}\n";
+            error_log("Failed to prepare session for MAC: {$mac}, OS: {$os_type}");
+            return;
+        }
+    }
+
+    // Set status
+    if ($os_type === 'rescue') {
+        set_status($mac, 'RESCUE');
+    } elseif ($status !== 'RESCUE') {
+        set_status($mac, 'INSTALLING');
+    }
+
+    echo "set timeout=3\n";
+
+    if ($os_type === 'rescue' || ($status === 'RESCUE' && $os_type === 'rescue')) {
+        // Ubuntu Rescue
+        $kernel_params = $os_config['kernel_params'];
+        $kernel_params .= " rescue_hostname={$hostname} rescue_server={$server}";
+        echo "menuentry \"Ubuntu Rescue\" {\n";
+        echo "    linux (http,{$server})/provisioning/ubuntu-rescue/vmlinuz {$kernel_params}\n";
+        echo "    initrd (http,{$server})/provisioning/ubuntu-rescue/initrd\n";
+        echo "}\n";
+
+    } elseif ($os_type === 'incusos') {
+        // Incus OS: Boot into rescue with install-os action
+        $rescue_config = $os_configs['rescue'];
+        $kernel_params = $rescue_config['kernel_params'];
+        $kernel_params .= " rescue_hostname={$hostname} rescue_server={$server} rescue_action=install-os";
+        echo "menuentry \"Incus OS Install (via rescue)\" {\n";
+        echo "    linux (http,{$server})/provisioning/ubuntu-rescue/vmlinuz {$kernel_params}\n";
+        echo "    initrd (http,{$server})/provisioning/ubuntu-rescue/initrd\n";
+        echo "}\n";
+        set_status($mac, 'INSTALLING');
+
+    } elseif ($os_type === 'ubuntu2404') {
+        $seed_url = "http://{$server}/sessions/{$mac}/";
+        $kernel_params = $os_config['kernel_params'];
+        $kernel_params .= " url=" . $os_config['iso_base_url'] . "/" . $os_config['iso_name'];
+        $kernel_params .= " ds=nocloud;seedfrom={$seed_url}";
+        echo "menuentry \"Ubuntu 24.04 Install\" {\n";
+        echo "    linux (http,{$server})/provisioning/ubuntu24.04/casper/vmlinuz {$kernel_params}\n";
+        echo "    initrd (http,{$server})/provisioning/ubuntu24.04/casper/initrd\n";
+        echo "}\n";
+
+    } elseif ($os_type === 'proxmox9') {
+        $kernel_params = "ro ramdisk_size=16777216 rw quiet splash=silent proxmox-start-auto-installer";
+        echo "menuentry \"Proxmox VE 9.1 Install\" {\n";
+        echo "    linux (http,{$server})/provisioning/proxmox9/boot/linux26 {$kernel_params}\n";
+        echo "    initrd (http,{$server})/provisioning/proxmox9/boot/initrd.img\n";
+        echo "}\n";
     }
 }
 
@@ -224,7 +371,7 @@ function handle_callback_request(): void {
     }
     
     // Validate status against allowed values
-    $allowed_statuses = ['NEW', 'INSTALLING', 'DONE', 'FAILED', 'ERROR'];
+    $allowed_statuses = ['NEW', 'INSTALLING', 'DONE', 'FAILED', 'ERROR', 'RESCUE'];
     if (empty($status) || !in_array($status, $allowed_statuses, true)) {
         header("HTTP/1.1 400 Bad Request");
         echo "ERROR: Invalid status parameter.";
@@ -553,6 +700,7 @@ function handle_status_request(): void {
         .status-INSTALLING { background-color: #007bff !important; }
         .status-FAILED { background-color: #dc3545 !important; }
         .status-NEW { background-color: #ffc107 !important; color: #212529 !important; }
+        .status-RESCUE { background-color: #17a2b8 !important; }
     </style>
 </head>
 <body>

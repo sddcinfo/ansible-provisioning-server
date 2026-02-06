@@ -3,10 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Proxmox](https://img.shields.io/badge/Proxmox-9.1-orange.svg)](https://www.proxmox.com/)
 [![Ubuntu](https://img.shields.io/badge/ubuntu-24.04%20LTS%20only-orange.svg)](https://ubuntu.com/)
+[![Incus OS](https://img.shields.io/badge/Incus%20OS-supported-blue.svg)](https://linuxcontainers.org/incus/)
 
-Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers and Proxmox VE 9.1 clusters.
+Enterprise-grade bare-metal provisioning infrastructure for Ubuntu servers, Proxmox VE 9.1 clusters, and Incus OS nodes.
 
-A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers and Proxmox VE 9.1 clusters on bare-metal hardware using iPXE, cloud-init, and automated cluster formation via the Proxmox API.
+A comprehensive automation solution that deploys and manages a provisioning infrastructure for zero-touch deployment of Ubuntu servers, Proxmox VE 9.1 clusters, and Incus OS nodes on bare-metal hardware using iPXE, cloud-init, and automated cluster formation.
 
 ## Table of Contents
 
@@ -17,6 +18,7 @@ A comprehensive automation solution that deploys and manages a provisioning infr
 - [Quick Start](#quick-start)
 - [Ubuntu Server Provisioning](#ubuntu-server-provisioning)
 - [Proxmox VE Cluster Provisioning](#proxmox-ve-cluster-provisioning)
+- [Incus OS Provisioning](#incus-os-provisioning)
 - [Configuration](#configuration)
 - [Web Management Interface](#web-management-interface)
 - [SSH Key Management](#ssh-key-management)
@@ -40,7 +42,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 - **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
 - **Web Dashboard**: Real-time provisioning status monitoring and management
 - **Hardware Management**: Redfish API integration for server power and boot control
-- **Multi-OS Support**: Ubuntu 24.04 and Proxmox VE 9.1 automated installation
+- **Multi-OS Support**: Ubuntu 24.04, Proxmox VE 9.1, and Incus OS automated installation
 
 ### Enterprise Capabilities  
 - **Security**: Hardened input validation, path sanitization, and encrypted credential management
@@ -233,6 +235,116 @@ pvecm add 10.10.1.21 --use_ssh
 - **Primary Link**: Management network (10.10.1.x)
 - **Secondary Link**: Ceph network (10.10.2.x) for redundancy and performance
 - **Migration Network**: Ceph network (10Gbit for fast VM migrations)
+
+## Incus OS Provisioning
+
+### Supported Hardware
+
+- Supermicro X10SDV-6C-TLN4F (SYS-E200-8D) with Xeon D-1528
+- Target disk: Non-NVMe SATA/SAS (e.g., 59GB SSD at `/dev/sda`)
+- Staging disk: NVMe (e.g., `/dev/nvme0n1`, used temporarily during install)
+
+### Disk Layout
+
+The installer image is DD'd to an NVMe drive (staging), which boots and installs Incus OS to the SATA SSD (target). After installation, the target disk contains:
+
+| Partition | Size | Purpose |
+|-----------|------|---------|
+| p1 (ESP) | 2 GB | EFI System Partition (systemd-boot + UKI) |
+| p2 | 100 MB | Seed data (consumed on first boot) |
+| p3-p8 | ~2.2 GB | A/B root partitions (erofs, verity) |
+| p9 | 4 GB | Swap (LUKS, TPM-sealed) |
+| p10 | 25 GB | System data (LUKS, TPM-sealed) |
+| p11 | Remaining | Local data (ZFS pool for Incus) |
+
+### Installation
+
+Single command to install Incus OS on a node:
+
+```bash
+# Full automated install (boots rescue, clears TPM, stages image, installs, waits for API)
+./scripts/smcbmc-cli -n console-node1 rescue install-os
+
+# Skip rescue boot if already in rescue
+./scripts/smcbmc-cli -n console-node1 rescue install-os --skip-rescue-boot
+
+# Skip TPM clear if already clean
+./scripts/smcbmc-cli -n console-node1 rescue install-os --skip-tpm-clear
+
+# Skip waiting for API (returns after power cycle)
+./scripts/smcbmc-cli -n console-node1 rescue install-os --skip-wait
+```
+
+### Verification
+
+```bash
+# Check Incus API status
+./scripts/smcbmc-cli -n console-node1 incusos status
+
+# Full verification (API, auth, storage, networks)
+./scripts/smcbmc-cli -n console-node1 incusos verify
+
+# Add as Incus remote
+./scripts/smcbmc-cli -n console-node1 incusos add-remote
+
+# Check all nodes
+./scripts/smcbmc-cli --all incusos status
+```
+
+### Image Management
+
+```bash
+# Download latest image to provisioning server
+./scripts/smcbmc-cli incusos download-image
+
+# Download specific version
+./scripts/smcbmc-cli incusos download-image --version 202602040632
+```
+
+### smcbmc-cli Command Reference
+
+```
+rescue boot              Boot node into PXE rescue environment
+rescue status            Check if rescue is running
+rescue ssh <cmd>         Run command on rescue node
+rescue install-os        Full Incus OS installation workflow
+rescue tpm-clear         Clear TPM (BEFORE install only)
+rescue tpm-status        Check TPM status
+rescue disk-info         Disk diagnostics
+rescue wipe-disks        Wipe all disks (destructive)
+rescue bios-get          Get BIOS config XML
+rescue bios-set          Apply BIOS config XML
+rescue bios-compare      Compare BIOS across nodes
+rescue bmc-reset         Reset BMC
+
+incusos status           Check Incus API (/1.0 endpoint)
+incusos verify           Full verification (API, storage, networks)
+incusos add-remote       Add node as Incus remote
+incusos download-image   Download image to provisioning server
+
+power status|on|off|cycle|reset
+boot get|set-next|set-persistent|ipmi-override
+sensors list
+sol connect|capture
+console screenshot|info
+virtual-media mount|unmount|status
+inventory system|network|storage|memory|all
+firmware version|product-key
+raw redfish|ipmi|sum
+```
+
+### Critical Operational Rules
+
+1. **Disk ID format**: Incus OS uses `scsi-3<wwn>` for SATA disks (NOT `wwn-0x`, NOT `ata-`). The install script auto-detects this.
+2. **loader.conf**: Must set `secure-boot-enroll off` when Secure Boot is disabled. The install script patches this automatically.
+3. **TPM**: Clear BEFORE install, NEVER after first boot. First boot seals LUKS keys to TPM -- clearing TPM destroys them permanently.
+4. **Version 202602031842**: This version was PULLED due to a cert verification bug (hangs at "IncusOS is starting"). The download-image command warns about this.
+5. **UKI**: NEVER modify the UKI with objcopy -- it corrupts the PE binary and UEFI firmware rejects it.
+6. **Staging != Target**: The installer image goes to NVMe (staging), the final OS goes to SATA SSD (target). The install script handles this automatically.
+7. **Seed tar**: Must be plain tar (not gzip), raw DD'd to partition 2 of the staging disk.
+8. **Image format**: `.img.gz` -- decompressed during DD via pipe (`curl | gunzip | dd`).
+9. **First boot**: Takes 3-5 minutes for LUKS+ZFS setup before port 8443 opens.
+10. **Client cert**: Pre-seeded in `incus.yaml` to allow API access without manual trust.
 
 ## Configuration
 
@@ -438,6 +550,8 @@ tail -f /var/log/proxmox-cluster-formation.log
 ## File Structure
 
 ### Scripts
+- `scripts/smcbmc-cli` - Supermicro BMC management CLI (power, boot, rescue, incusos, sensors, SOL, etc.)
+- `scripts/rescue-scripts/install-incusos.sh` - Incus OS installation script (runs on rescue node)
 - `scripts/coordinated-proxmox-reprovision.py` - Complete automated reprovision workflow with monitoring and cluster formation
 - `scripts/enhanced-reprovision-monitor.py` - Monitors reprovision progress and triggers automatic cluster formation  
 - `scripts/template-manager.py` - Manages Proxmox VM templates

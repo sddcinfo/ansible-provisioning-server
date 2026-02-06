@@ -31,6 +31,12 @@ supported_operating_systems:
       - "md5sum.txt"
       - "boot.catalog"
     
+  incusos:
+    name: "Incus OS"
+    image_version: "202602040632"
+    provisioning_dir: "/var/www/html/provisioning/incusos"
+    config_type: "none"
+
   proxmox9:
     name: "Proxmox VE 9.1"
     # Primary: Singapore CDN (best for Japan), Fallback: NA CDN, Direct enterprise
@@ -82,3 +88,5 @@ default_autoinstall_nodes:
 os_base_urls:
   ubuntu2404: "http://{{ provisioning_ip }}/provisioning/ubuntu24.04"
   proxmox9: "http://{{ provisioning_ip }}/provisioning/proxmox9"
+  incusos: "http://{{ provisioning_ip }}/provisioning/incusos"
+  rescue: "http://{{ provisioning_ip }}/provisioning/ubuntu-rescue"

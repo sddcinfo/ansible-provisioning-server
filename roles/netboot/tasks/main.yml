@@ -279,36 +279,73 @@
   tags:
     - netboot
 
-- name: Check if iPXE bootloaders exist
-  stat:
-    path: "{{ item.dest }}"
-  loop:
-    - { url: "http://boot.ipxe.org/ipxe.efi", dest: "/var/lib/tftpboot/ipxe.efi" }
-  register: ipxe_files
+- name: Install Secure Boot PXE packages (SHIM + GRUB signed)
+  apt:
+    name:
+      - shim-signed
+      - grub-efi-amd64-signed
+    state: present
   tags:
     - services_install
-    - validation
     - foundation
-    - expensive
+    - packages
 
-- name: Download iPXE bootloaders (expensive operation)
-  get_url:
-    url: "{{ item.item.url }}"
-    dest: "{{ item.item.dest }}"
+- name: Create GRUB config directory in TFTP root
+  file:
+    path: /var/lib/tftpboot/grub
+    state: directory
+    owner: dnsmasq
+    group: nogroup
+    mode: "0755"
+  tags:
+    - netboot
+
+- name: Deploy Microsoft-signed SHIM to TFTP
+  copy:
+    src: "{{ item }}"
+    dest: /var/lib/tftpboot/shimx64.efi
+    remote_src: yes
     owner: dnsmasq
     group: nogroup
     mode: '0644'
-    timeout: 60
-    force: no  # Don't re-download if file exists
-  loop: "{{ ipxe_files.results }}"
-  when: not item.stat.exists and download_ipxe_bootloaders | default(true)
-  register: ipxe_download
-  until: ipxe_download is succeeded
-  retries: 3
-  delay: 5
+  with_first_found:
+    - /usr/lib/shim/shimx64.efi.signed.latest
+    - /usr/lib/shim/shimx64.efi.signed
   tags:
-    - services_install
-    - expensive
+    - netboot
+    - foundation
+
+- name: Deploy Canonical-signed GRUB to TFTP
+  copy:
+    src: /usr/lib/grub/x86_64-efi-signed/grubnetx64.efi.signed
+    dest: /var/lib/tftpboot/grubx64.efi
+    remote_src: yes
+    owner: dnsmasq
+    group: nogroup
+    mode: '0644'
+  tags:
+    - netboot
+    - foundation
+
+- name: Deploy GRUB PXE config
+  copy:
+    dest: /var/lib/tftpboot/grub/grub.cfg
+    owner: dnsmasq
+    group: nogroup
+    mode: '0644'
+    content: |
+      # PXE Provisioning - Secure Boot compatible
+      # This config fetches a dynamic boot config from the provisioning server
+      set timeout=5
+      set default=0
+
+      insmod http
+      insmod net
+
+      # Fetch dynamic boot config from provisioning server based on MAC
+      configfile (http,{{ provisioning_ip | default('10.10.1.1') }})/index.php?mac=$net_default_mac&format=grub
+  tags:
+    - netboot
     - foundation
 
 - name: Force correct permissions on all TFTP files after download
