@@ -38,7 +38,7 @@ The Bare-Metal Provisioning Server automates the deployment of a complete provis
 
 ### Core Infrastructure Services
 - **Network Services**: Integrated DHCP, DNS, and TFTP server using dnsmasq
-- **Boot Management**: iPXE-based network booting with EFI support
+- **Boot Management**: UEFI Secure Boot compatible PXE chain (SHIM + GRUB + iPXE fallback)
 - **Cloud-Init Integration**: Automated Ubuntu server configuration via autoinstall
 - **Web Dashboard**: Real-time provisioning status monitoring and management
 - **Hardware Management**: Redfish API integration for server power and boot control
@@ -75,9 +75,37 @@ Internet -> WAN (enp1s0) -> NAT -> Provisioning Network (10.10.1.0/24)
 - **Base OS**: Ubuntu 24.04 LTS
 - **Web Server**: Nginx + PHP-FPM
 - **Network Services**: dnsmasq (DHCP/DNS/TFTP)
-- **Boot Loader**: iPXE with EFI support
+- **Boot Chain**: SHIM (MS-signed) -> GRUB (Canonical-signed) -> HTTP kernel/initrd
+- **iPXE Fallback**: iPXE clients detected via user-class and served dynamic boot scripts
 - **Configuration Management**: cloud-init/autoinstall
 - **Monitoring**: Node Exporter + Health checks
+
+### PXE Boot Chain (Secure Boot Compatible)
+
+The provisioning server supports two boot paths, both compatible with UEFI Secure Boot:
+
+**Primary path (native UEFI firmware):**
+```
+UEFI firmware -> TFTP shimx64.efi (Microsoft-signed)
+             -> TFTP grubx64.efi (Canonical-signed, verified by SHIM)
+             -> TFTP grub.cfg (static MAC-mapped config)
+             -> HTTP kernel + initrd (from provisioning PHP app)
+             -> NFS root filesystem
+```
+
+**Secondary path (iPXE clients):**
+```
+iPXE (user-class detected) -> TFTP autoexec.ipxe
+                           -> HTTP chain to PHP provisioning app
+                           -> Dynamic boot script per MAC/OS type
+```
+
+No custom Secure Boot keys or MOK enrollment required -- the entire primary chain uses standard Microsoft/Canonical signatures already trusted by UEFI firmware.
+
+Key design decisions:
+- **GRUB, not iPXE, loads the kernel**: iPXE cannot properly pass initrd to kernel in EFI mode on SuperMicro X11 firmware. GRUB uses the EFI LoadFile2 protocol correctly.
+- **Static grub.cfg, not dynamic**: GRUB's `configfile (http,...)` fails on SuperMicro X11 firmware. The static config maps MAC addresses to hostnames and fetches kernel/initrd via HTTP.
+- **iPXE user-class detection**: Without `dhcp-userclass=set:ipxe,iPXE` in dnsmasq, iPXE receives shimx64.efi as its boot file and loops endlessly.
 
 ## Prerequisites
 
@@ -145,11 +173,13 @@ ansible-playbook -i inventory site.yml
 Nodes are configured via the `nodes.json` file with MAC address to IP mapping.
 
 ### Installation Process
-1. Node boots via PXE/UEFI
-2. iPXE loads and contacts provisioning server
-3. Autoinstall configuration is generated dynamically
-4. Ubuntu installs with cloud-init configuration
-5. Post-install hooks configure services
+1. Node PXE boots via UEFI -- dnsmasq serves shimx64.efi
+2. SHIM verifies and loads GRUB (grubx64.efi)
+3. GRUB loads static grub.cfg, identifies node by MAC address
+4. GRUB fetches kernel + initrd via HTTP from provisioning server
+5. Kernel boots into rescue/installer environment
+6. For Ubuntu: autoinstall configuration generated dynamically via cloud-init
+7. Post-install hooks configure services
 
 ## Proxmox VE Cluster Provisioning
 
@@ -336,7 +366,7 @@ raw redfish|ipmi|sum
 ### Critical Operational Rules
 
 1. **Disk ID format**: Incus OS uses `scsi-3<wwn>` for SATA disks (NOT `wwn-0x`, NOT `ata-`). The install script auto-detects this.
-2. **loader.conf**: Must set `secure-boot-enroll off` when Secure Boot is disabled. The install script patches this automatically.
+2. **loader.conf**: Must set `secure-boot-enroll off` when Secure Boot is disabled (prevents systemd-boot from auto-enrolling IncusOS keys). The install script patches this based on Secure Boot state.
 3. **TPM**: Clear BEFORE install, NEVER after first boot. First boot seals LUKS keys to TPM -- clearing TPM destroys them permanently.
 4. **Version 202602031842**: This version was PULLED due to a cert verification bug (hangs at "IncusOS is starting"). The download-image command warns about this.
 5. **UKI**: NEVER modify the UKI with objcopy -- it corrupts the PE binary and UEFI firmware rejects it.
@@ -480,8 +510,14 @@ tail -f /var/log/cloud-init.log
 # Check TFTP service
 sudo systemctl status dnsmasq
 
-# Test TFTP connectivity
-tftp 10.10.1.1 -c get ipxe.efi
+# Test TFTP connectivity (SHIM is the first-stage boot file)
+tftp 10.10.1.1 -c get shimx64.efi
+
+# Verify boot chain files exist
+ls -la /var/lib/tftpboot/{shimx64.efi,grubx64.efi,grub.cfg,autoexec.ipxe}
+
+# Check dnsmasq DHCP/PXE logs
+sudo journalctl -u dnsmasq | grep -i "dhcp\|tftp\|pxe"
 ```
 
 #### Proxmox Installation Issues

@@ -327,41 +327,13 @@
     - netboot
     - foundation
 
-- name: Deploy GRUB PXE config (static MAC-mapped, Secure Boot compatible)
-  copy:
+- name: Deploy GRUB PXE config (multi-OS, Secure Boot compatible)
+  template:
+    src: grub.cfg.j2
     dest: /var/lib/tftpboot/grub.cfg
     owner: dnsmasq
     group: nogroup
     mode: '0644'
-    content: |
-      # PXE Provisioning - Secure Boot compatible (static MAC-mapped config)
-      # GRUB's EFI network stack cannot reliably fetch dynamic configs on all firmware.
-      # This static config maps MAC addresses to hostnames and boots rescue via HTTP.
-      set timeout=5
-      set default=0
-
-      serial --unit=0 --speed=115200
-      terminal_output console serial
-      terminal_input console serial
-
-      set rescue_hostname=unknown
-      {% for host in dnsmasq_dhcp_reservations | selectattr('hostname', 'match', '^node') %}
-      {% if loop.first %}
-      if [ "$net_default_mac" = "{{ host.mac }}" ]; then
-      {% else %}
-      elif [ "$net_default_mac" = "{{ host.mac }}" ]; then
-      {% endif %}
-          set rescue_hostname={{ host.hostname }}
-      {% endfor %}
-      fi
-
-      menuentry "Ubuntu Rescue ($rescue_hostname)" {
-          echo "Booting rescue for $rescue_hostname (MAC: $net_default_mac)"
-          echo "Loading kernel via HTTP..."
-          linux (http,{{ provisioning_ip | default('10.10.1.1') }})/provisioning/ubuntu-rescue/vmlinuz boot=casper netboot=nfs nfsroot={{ provisioning_ip | default('10.10.1.1') }}:/srv/nfs/ubuntu-rescue ip=dhcp console=tty0 console=ttyS0,115200n8 rescue_hostname=$rescue_hostname rescue_server={{ provisioning_ip | default('10.10.1.1') }}
-          echo "Loading initrd via HTTP..."
-          initrd (http,{{ provisioning_ip | default('10.10.1.1') }})/provisioning/ubuntu-rescue/initrd
-      }
   tags:
     - netboot
     - foundation
