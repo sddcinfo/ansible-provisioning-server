@@ -66,7 +66,17 @@ tftp-root={{ tftp_root }}
 tftp-secure
 tftp-lowercase
 
-# === PXE Secure Boot (SHIM+GRUB) ===
+# === PXE Boot Configuration ===
+# Detect EFI x86_64 clients (arch 7 = x64 UEFI, arch 9 = x64 UEFI HTTP)
 dhcp-match=set:efi-x86_64,option:client-arch,7
 dhcp-match=set:efi-x86_64,option:client-arch,9
-dhcp-boot=tag:efi-x86_64,shimx64.efi
+
+# Detect iPXE clients to break the chainload loop
+# iPXE sends user-class "iPXE" - without this, iPXE gets shimx64.efi
+# back as boot file and loops endlessly
+dhcp-userclass=set:ipxe,iPXE
+
+# EFI firmware (non-iPXE): serve SHIM which chains to signed GRUB
+# iPXE clients: serve autoexec.ipxe which fetches dynamic boot script via HTTP
+dhcp-boot=tag:efi-x86_64,tag:!ipxe,shimx64.efi
+dhcp-boot=tag:ipxe,autoexec.ipxe

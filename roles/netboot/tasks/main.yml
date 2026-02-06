@@ -327,23 +327,77 @@
     - netboot
     - foundation
 
-- name: Deploy GRUB PXE config
+- name: Deploy GRUB PXE config (static MAC-mapped, Secure Boot compatible)
   copy:
-    dest: /var/lib/tftpboot/grub/grub.cfg
+    dest: /var/lib/tftpboot/grub.cfg
     owner: dnsmasq
     group: nogroup
     mode: '0644'
     content: |
-      # PXE Provisioning - Secure Boot compatible
-      # This config fetches a dynamic boot config from the provisioning server
+      # PXE Provisioning - Secure Boot compatible (static MAC-mapped config)
+      # GRUB's EFI network stack cannot reliably fetch dynamic configs on all firmware.
+      # This static config maps MAC addresses to hostnames and boots rescue via HTTP.
       set timeout=5
       set default=0
 
-      insmod http
-      insmod net
+      serial --unit=0 --speed=115200
+      terminal_output console serial
+      terminal_input console serial
 
-      # Fetch dynamic boot config from provisioning server based on MAC
-      configfile (http,{{ provisioning_ip | default('10.10.1.1') }})/index.php?mac=$net_default_mac&format=grub
+      set rescue_hostname=unknown
+      {% for host in dnsmasq_dhcp_reservations | selectattr('hostname', 'match', '^node') %}
+      {% if loop.first %}
+      if [ "$net_default_mac" = "{{ host.mac }}" ]; then
+      {% else %}
+      elif [ "$net_default_mac" = "{{ host.mac }}" ]; then
+      {% endif %}
+          set rescue_hostname={{ host.hostname }}
+      {% endfor %}
+      fi
+
+      menuentry "Ubuntu Rescue ($rescue_hostname)" {
+          echo "Booting rescue for $rescue_hostname (MAC: $net_default_mac)"
+          echo "Loading kernel via HTTP..."
+          linux (http,{{ provisioning_ip | default('10.10.1.1') }})/provisioning/ubuntu-rescue/vmlinuz boot=casper netboot=nfs nfsroot={{ provisioning_ip | default('10.10.1.1') }}:/srv/nfs/ubuntu-rescue ip=dhcp console=tty0 console=ttyS0,115200n8 rescue_hostname=$rescue_hostname rescue_server={{ provisioning_ip | default('10.10.1.1') }}
+          echo "Loading initrd via HTTP..."
+          initrd (http,{{ provisioning_ip | default('10.10.1.1') }})/provisioning/ubuntu-rescue/initrd
+      }
+  tags:
+    - netboot
+    - foundation
+
+- name: Symlink grub.cfg to grub/ subdirectory
+  file:
+    src: /var/lib/tftpboot/grub.cfg
+    dest: /var/lib/tftpboot/grub/grub.cfg
+    state: link
+    force: yes
+  tags:
+    - netboot
+    - foundation
+
+- name: Deploy iPXE bootstrap script (autoexec.ipxe)
+  copy:
+    dest: /var/lib/tftpboot/autoexec.ipxe
+    owner: dnsmasq
+    group: nogroup
+    mode: '0644'
+    content: |
+      #!ipxe
+      # SDDC Provisioning Bootstrap
+      # iPXE fetches this after DHCP breakout (user-class detection)
+      # Then chains to the PHP provisioning app for dynamic boot config
+      dhcp
+      chain http://{{ provisioning_ip | default('10.10.1.1') }}/?mac=${net0/mac}&format=ipxe || goto retry
+
+      :retry
+      echo Boot script fetch failed. Retrying in 5 seconds...
+      sleep 5
+      chain http://{{ provisioning_ip | default('10.10.1.1') }}/?mac=${net0/mac}&format=ipxe || goto shell
+
+      :shell
+      echo All boot attempts failed. Dropping to iPXE shell.
+      shell
   tags:
     - netboot
     - foundation
