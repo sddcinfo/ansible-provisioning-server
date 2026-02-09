@@ -204,8 +204,11 @@ def main():
     print("Access Information:")
     print(f"   Web GUI:     https://{primary_ip}:8006")
     print(f"   SSH Access:  ssh root@{primary_ip}")
-    root_password = os.environ.get('PROXMOX_ROOT_PASSWORD', 'proxmox123')
-    print(f"   Root Password: {root_password}")
+    root_password = os.environ.get('PROXMOX_ROOT_PASSWORD')
+    if root_password:
+        print("   Root Password: [set]")
+    else:
+        print("   Root Password: [NOT SET]")
     if check_ceph_installed(primary_ip):
         print(f"   Ceph Dashboard: https://{primary_ip}:8443 (if enabled)")
     print()

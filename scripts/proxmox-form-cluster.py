@@ -20,7 +20,9 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration
-ROOT_PASSWORD = os.environ.get('PROXMOX_ROOT_PASSWORD', 'proxmox123')
+ROOT_PASSWORD = os.environ.get('PROXMOX_ROOT_PASSWORD')
+if ROOT_PASSWORD is None:
+    sys.exit("Error: set PROXMOX_ROOT_PASSWORD env var")
 CLUSTER_NAME = os.environ.get('CLUSTER_NAME', 'sddc-cluster')
 LOG_FILE = "/tmp/proxmox-cluster-formation.log"
 

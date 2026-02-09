@@ -29,7 +29,7 @@ default_autoinstall_node: "{{ default_autoinstall_nodes.ubuntu2404 }}"
 
 # Default credentials
 sysadmin_password: "$6$rounds=4096$i.am.a.salt$H6l0k3v9E.4444Bw.b5a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4/WjM9a4"
-root_password: "proxmox123"
-installer_password: "install123"
+root_password: "CHANGEME_SET_VIA_EXTRA_VARS"
+installer_password: "CHANGEME_SET_VIA_EXTRA_VARS"
 domain: "sddc.info"
 timezone: "UTC"
