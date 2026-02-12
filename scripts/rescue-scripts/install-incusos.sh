@@ -4,11 +4,12 @@
 # This runs on a rescue node via SSH. It:
 # 1. Auto-detects staging disk (first NVMe) and target disk (smallest non-NVMe)
 # 2. Downloads and writes the installer image to the staging disk
-# 3. Patches loader.conf (secure-boot-enroll off)
-# 4. Writes seed tar to staging partition 2
+# 3. Patches loader.conf (secure-boot-enroll off -- keys enrolled manually in BIOS)
+# 4. Writes seed tar to staging partition 2 (detects Secure Boot state dynamically)
 # 5. Zeros target disk first 10MB for clean install
+# 6. Sets EFI BootOrder via efibootmgr so NVMe staging boots next
 #
-# Does NOT reboot -- the caller (smcbmc-cli) handles IPMI boot + power cycle.
+# Does NOT reboot -- the caller handles power cycle.
 #
 # Usage: install-incusos.sh <server_ip>
 # Environment: INCUSOS_IMAGE_URL (optional, overrides default)
@@ -51,24 +52,44 @@ detect_target_disk() {
 }
 
 get_target_disk_id() {
-    # Get scsi-3<wwn> disk ID for Incus OS installer seed
-    # CRITICAL: Must be scsi-3 format, NOT wwn-0x or ata-
+    # Get stable disk ID for Incus OS installer seed
+    # IMPORTANT: IncusOS installer uses minimal udev that only creates wwn-* links,
+    # NOT ata-* or scsi-* links.  We MUST prefer wwn-* to match the installer env.
+    # Preference order: wwn-*, scsi-3*, scsi-*, ata-*
     local target="$1"
     local disk_name
     disk_name=$(basename "$target")
     local disk_id
-    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "scsi-3" | grep "${disk_name}$" | awk '{print $9}' | head -1)
+
+    # Try wwn- first (REQUIRED: IncusOS installer only has wwn-* in /dev/disk/by-id/)
+    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "wwn-" | grep "/${disk_name}$" | awk '{print $9}' | head -1)
     if [ -n "$disk_id" ]; then
         echo "$disk_id"
         return
     fi
-    # Fallback: try any scsi- link
-    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "scsi-" | grep "${disk_name}$" | awk '{print $9}' | head -1)
+
+    # Try scsi-3 (SCSI/SAS disks)
+    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "scsi-3" | grep "/${disk_name}$" | awk '{print $9}' | head -1)
     if [ -n "$disk_id" ]; then
         echo "$disk_id"
         return
     fi
-    echo "ERROR: Cannot find scsi disk ID for ${target}" >&2
+
+    # Try scsi- link
+    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "scsi-" | grep "/${disk_name}$" | awk '{print $9}' | head -1)
+    if [ -n "$disk_id" ]; then
+        echo "$disk_id"
+        return
+    fi
+
+    # Try ata- link (fallback, NOT available in IncusOS installer)
+    disk_id=$(ls -la /dev/disk/by-id/ 2>/dev/null | grep "ata-" | grep "/${disk_name}$" | awk '{print $9}' | head -1)
+    if [ -n "$disk_id" ]; then
+        echo "$disk_id"
+        return
+    fi
+
+    echo "ERROR: Cannot find disk ID for ${target}" >&2
     echo "Available by-id links:" >&2
     ls -la /dev/disk/by-id/ 2>&1 | grep "${disk_name}" >&2 || true
     exit 1
@@ -91,6 +112,10 @@ echo ">>> Step 1: Writing installer image to ${STAGING_DISK}..."
 echo "    Downloading and decompressing (this takes several minutes)..."
 curl -sfL "$IMAGE_URL" | gunzip | dd of="$STAGING_DISK" bs=4M conv=fsync status=progress 2>&1
 sync
+# Re-read partition table after writing image
+echo "    Re-reading partition table..."
+partprobe "$STAGING_DISK" 2>/dev/null || blockdev --rereadpt "$STAGING_DISK" 2>/dev/null || true
+sleep 2
 echo "    Done."
 echo ""
 
@@ -117,12 +142,22 @@ echo ""
 # --- Step 3: Write seed tar to staging partition 2 ---
 echo ">>> Step 3: Writing seed configuration..."
 
+# Detect Secure Boot state from EFI variable (last byte: 01=enabled, 00=disabled)
+SB_BYTE=$(od -An -t x1 -j4 -N1 /sys/firmware/efi/efivars/SecureBoot-* 2>/dev/null | tr -d ' ')
+if [ "$SB_BYTE" = "01" ]; then
+    MISSING_SB="false"
+    echo "    Secure Boot: ENABLED (missing_secure_boot=false)"
+else
+    MISSING_SB="true"
+    echo "    Secure Boot: DISABLED (missing_secure_boot=true)"
+fi
+
 SEED_DIR=$(mktemp -d)
 
 # install.yaml
 cat > "${SEED_DIR}/install.yaml" << EOF
 security:
-  missing_secure_boot: true
+  missing_secure_boot: ${MISSING_SB}
 target:
   id: ${TARGET_DISK_ID}
 force_reboot: true
@@ -166,20 +201,64 @@ echo "    Seed tar written to ${STAGING_SEED}"
 echo "    Done."
 echo ""
 
-# --- Step 4: Zero target disk first 10MB ---
-echo ">>> Step 4: Zeroing first 10MB of target disk ${TARGET_DISK}..."
+# --- Step 4: Wipe target disk (both GPT headers + partition signatures) ---
+echo ">>> Step 4: Wiping target disk ${TARGET_DISK}..."
+# Zero first 10MB (primary GPT header + partition entries)
 dd if=/dev/zero of="$TARGET_DISK" bs=1M count=10 conv=fsync 2>&1
+# Zero last 10MB (backup GPT header at end of disk -- IncusOS installer detects this!)
+TARGET_SIZE=$(blockdev --getsize64 "$TARGET_DISK")
+SEEK_BYTES=$((TARGET_SIZE - 10485760))
+dd if=/dev/zero of="$TARGET_DISK" bs=1 count=10485760 seek="$SEEK_BYTES" conv=fsync 2>&1
+# Also use wipefs to remove any filesystem/partition signatures
+wipefs -a "$TARGET_DISK" 2>/dev/null || true
 sync
+echo "    Target disk fully wiped (GPT primary + backup + signatures)."
+echo ""
+
+# --- Step 5: Set EFI BootOrder so staging NVMe boots next ---
+echo ">>> Step 5: Setting EFI boot order (NVMe staging first)..."
+if ! command -v efibootmgr >/dev/null 2>&1; then
+    echo "    Installing efibootmgr..."
+    apt-get install -y efibootmgr 2>/dev/null | tail -1
+fi
+
+if command -v efibootmgr >/dev/null 2>&1; then
+    echo "    Current EFI boot entries:"
+    efibootmgr -v 2>&1 | grep -E '^Boot[0-9A-Fa-f]{4}' | head -10
+    echo ""
+
+    # Find a non-PXE, non-Shell boot entry (disk/NVMe/UEFI OS)
+    DISK_NUM=$(efibootmgr -v 2>/dev/null \
+        | grep -E '^Boot[0-9A-Fa-f]{4}' \
+        | grep -ivE 'PXE|Network|IPv4|IPv6|EFI Shell|Built-in' \
+        | head -1 \
+        | grep -o 'Boot[0-9A-Fa-f]*' | sed 's/Boot//')
+
+    if [ -n "$DISK_NUM" ]; then
+        # Set as BootNext for immediate next reboot
+        efibootmgr -n "$DISK_NUM" 2>&1
+        # Reorder BootOrder: disk first, then everything else
+        CUR_ORDER=$(efibootmgr 2>/dev/null | grep '^BootOrder:' | sed 's/BootOrder: //')
+        NEW_ORDER=$(printf '%s\n%s' "$DISK_NUM" "$(echo "$CUR_ORDER" | tr ',' '\n' | grep -v "$DISK_NUM")" | tr '\n' ',' | sed 's/,$//')
+        efibootmgr -o "$NEW_ORDER" 2>&1
+        echo "    BootNext=$DISK_NUM, BootOrder=$NEW_ORDER"
+    else
+        echo "    WARNING: No disk boot entry found in EFI. Listing all entries:"
+        efibootmgr -v 2>&1
+    fi
+else
+    echo "    ERROR: Cannot install efibootmgr. IPMI override needed as fallback."
+fi
 echo "    Done."
 echo ""
 
 echo "=== Installation staging complete ==="
 echo ""
-echo "Next steps (handled by smcbmc-cli):"
-echo "  1. Set IPMI boot override to HDD"
-echo "  2. Power cycle"
-echo "  3. Installer boots from ${STAGING_DISK}, installs to ${TARGET_DISK}"
-echo "  4. First boot creates LUKS+ZFS, starts Incus API on port 8443"
+echo "Next steps:"
+echo "  1. Power cycle (EFI BootOrder already set to boot NVMe first)"
+echo "  2. Installer boots from ${STAGING_DISK}, installs to ${TARGET_DISK}"
+echo "  3. Installer reboots, IncusOS first boot creates LUKS+ZFS"
+echo "  4. Incus API starts on port 8443 (takes 3-5 minutes)"
 echo ""
 echo "IMPORTANT WARNINGS:"
 echo "  - Version 202602031842 was PULLED -- verify image is 202602040632 or later"

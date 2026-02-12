@@ -1,22 +1,26 @@
 # PXE Provisioning - Secure Boot compatible (SHIM + GRUB chain)
 # shimx64.efi (Microsoft-signed) -> grubx64.efi (Canonical-signed) -> this config
 #
-# GRUB cannot reliably fetch dynamic configs via HTTP on SuperMicro X11 firmware.
-# This static config maps MAC addresses to hostnames and provides menu entries
-# for all supported OS types. Rescue is the default (most common PXE boot).
-#
-# iPXE EFI limitation: iPXE cannot pass initrd to kernel correctly in EFI mode
-# on this firmware, so ALL OS types must boot through the GRUB chain.
+# Per-node boot mode control: set mode_nodeN=local|rescue
+# Default: all nodes boot from local disk (mode=local)
+# Runtime: sddc rescue boot flips mode to "rescue", reverts after boot
+# Ansible re-run resets all modes to "local" (source of truth)
 
-set timeout=5
-set default=0
+set timeout=3
 
 serial --unit=0 --speed=115200
 terminal_output console serial
 terminal_input console serial
 
-# --- MAC-to-hostname mapping ---
+# Per-node boot mode: "local" (default) or "rescue"
+# Runtime control: sddc rescue boot / grub.py set_node_mode()
+{% for host in dnsmasq_dhcp_reservations | selectattr('hostname', 'match', '^node') %}
+set mode_{{ host.hostname }}=local
+{% endfor %}
+
+# Identify node by management NIC MAC and apply mode
 set rescue_hostname=unknown
+set mymode=local
 {% for host in dnsmasq_dhcp_reservations | selectattr('hostname', 'match', '^node') %}
 {% if loop.first %}
 if [ "$net_default_mac" = "{{ host.mac }}" ]; then
@@ -24,26 +28,49 @@ if [ "$net_default_mac" = "{{ host.mac }}" ]; then
 elif [ "$net_default_mac" = "{{ host.mac }}" ]; then
 {% endif %}
     set rescue_hostname={{ host.hostname }}
+    set mymode=$mode_{{ host.hostname }}
 {% endfor %}
 fi
 
-# --- Menu Entries ---
+# Count menu entries to set default index for "Boot from local disk"
+# Entry 0: Ubuntu Rescue
+{% set entry_count = [1] %}
+{% if supported_operating_systems is defined and supported_operating_systems.incusos is defined %}
+{% if entry_count.append(entry_count.pop() + 1) %}{% endif %}
+{% endif %}
+{% if supported_operating_systems is defined and supported_operating_systems.ubuntu2404 is defined %}
+{% if entry_count.append(entry_count.pop() + 1) %}{% endif %}
+{% endif %}
+{% if supported_operating_systems is defined and supported_operating_systems.proxmox9 is defined %}
+{% if entry_count.append(entry_count.pop() + 1) %}{% endif %}
+{% endif %}
+# Entry {{ entry_count[0] }}: Boot from local disk
+
+if [ "$mymode" = "rescue" ]; then
+    set default=0
+else
+    set default={{ entry_count[0] }}
+fi
 
 menuentry "Ubuntu Rescue ($rescue_hostname)" {
     echo "Booting rescue for $rescue_hostname (MAC: $net_default_mac)"
-    echo "Loading kernel via HTTP..."
-    linux (http,{{ provisioning_ip }})/provisioning/ubuntu-rescue/vmlinuz boot=casper netboot=nfs nfsroot={{ provisioning_ip }}:/srv/nfs/ubuntu-rescue:soft,timeo=30,retrans=2 ip=dhcp console=tty0 console=ttyS0,115200n8 rescue_hostname=$rescue_hostname rescue_server={{ provisioning_ip }}
-    echo "Loading initrd via HTTP..."
+    echo "Downloading rescue ISO via HTTP into RAM..."
+    linux (http,{{ provisioning_ip }})/provisioning/ubuntu-rescue/vmlinuz boot=casper url=http://{{ provisioning_ip }}/images/ubuntu-rescue.iso toram ip=dhcp console=tty0 console=ttyS1,115200n8 rescue_hostname=$rescue_hostname rescue_server={{ provisioning_ip }}
     initrd (http,{{ provisioning_ip }})/provisioning/ubuntu-rescue/initrd
 }
 
-menuentry "Incus OS Install via Rescue ($rescue_hostname)" {
-    echo "Booting rescue for Incus OS install on $rescue_hostname"
-    linux (http,{{ provisioning_ip }})/provisioning/ubuntu-rescue/vmlinuz boot=casper netboot=nfs nfsroot={{ provisioning_ip }}:/srv/nfs/ubuntu-rescue:soft,timeo=30,retrans=2 ip=dhcp console=tty0 console=ttyS0,115200n8 rescue_hostname=$rescue_hostname rescue_server={{ provisioning_ip }} rescue_action=install-os
-    initrd (http,{{ provisioning_ip }})/provisioning/ubuntu-rescue/initrd
+{% if supported_operating_systems is defined and supported_operating_systems.incusos is defined %}
+menuentry "IncusOS Install ($rescue_hostname)" {
+    echo "IncusOS install is managed via sddc CLI, not GRUB menu."
+    echo "Use: sddc -n $rescue_hostname incusos provision"
+    echo "Or:  sddc -n $rescue_hostname incusos install (if already in rescue)"
+    echo ""
+    echo "Press any key to return to menu..."
+    sleep 10
 }
+{% endif %}
 
-{% if supported_operating_systems.ubuntu2404 is defined %}
+{% if supported_operating_systems is defined and supported_operating_systems.ubuntu2404 is defined %}
 menuentry "Ubuntu 24.04 LTS Install ($rescue_hostname)" {
     echo "Installing Ubuntu 24.04 on $rescue_hostname"
     linux (http,{{ provisioning_ip }})/provisioning/ubuntu24.04/{{ supported_operating_systems.ubuntu2404.boot_files.kernel }} {{ supported_operating_systems.ubuntu2404.kernel_params }} url={{ os_base_urls.ubuntu2404 }}/{{ supported_operating_systems.ubuntu2404.iso_name }} ds=nocloud\;seedfrom=http://{{ provisioning_ip }}/sessions/$net_default_mac/
@@ -51,7 +78,7 @@ menuentry "Ubuntu 24.04 LTS Install ($rescue_hostname)" {
 }
 {% endif %}
 
-{% if supported_operating_systems.proxmox9 is defined %}
+{% if supported_operating_systems is defined and supported_operating_systems.proxmox9 is defined %}
 menuentry "Proxmox VE 9.1 Install ($rescue_hostname)" {
     echo "Installing Proxmox VE 9.1 on $rescue_hostname"
     linux (http,{{ provisioning_ip }})/provisioning/proxmox9/{{ supported_operating_systems.proxmox9.boot_files.kernel }} {{ supported_operating_systems.proxmox9.kernel_params }}
@@ -60,6 +87,6 @@ menuentry "Proxmox VE 9.1 Install ($rescue_hostname)" {
 {% endif %}
 
 menuentry "Boot from local disk" {
-    echo "Exiting PXE, booting from local disk..."
-    exit
+    echo "Rebooting to local disk..."
+    reboot
 }

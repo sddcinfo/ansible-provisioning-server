@@ -315,11 +315,10 @@
     - netboot
     - foundation
 
-- name: Deploy Canonical-signed GRUB to TFTP
+- name: Deploy custom MOK-signed GRUB to TFTP (efidisk excluded + secureboot bypass)
   copy:
-    src: /usr/lib/grub/x86_64-efi-signed/grubnetx64.efi.signed
+    src: custom-grub/grubx64-no-efidisk-signed.efi
     dest: /var/lib/tftpboot/grubx64.efi
-    remote_src: yes
     owner: dnsmasq
     group: nogroup
     mode: '0644'
@@ -344,6 +343,28 @@
     dest: /var/lib/tftpboot/grub/grub.cfg
     state: link
     force: yes
+  tags:
+    - netboot
+    - foundation
+
+- name: Ensure HTTP grub config directory exists
+  file:
+    path: /var/www/html/grub
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: '0755'
+  tags:
+    - netboot
+    - foundation
+
+- name: Deploy GRUB config to HTTP server (for custom GRUB HTTP fetch)
+  template:
+    src: grub.cfg.j2
+    dest: /var/www/html/grub/grub.cfg
+    owner: www-data
+    group: www-data
+    mode: '0644'
   tags:
     - netboot
     - foundation
